@@ -17,6 +17,23 @@ function formatDurationForInput(secs) {
   return `${m}m`;
 }
 
+// Read-only display for the project ETA badge, day-aware, unlike
+// formatDurationForInput above (which round-trips into an editable field and
+// deliberately stays in the same h/m shape a person would type).
+function formatDurationDisplay(secs) {
+  if (!secs) return null;
+  const HOUR = 3600, DAY = 86400;
+  if (secs >= DAY) {
+    const d = Math.floor(secs / DAY);
+    const h = Math.floor((secs % DAY) / HOUR);
+    return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  }
+  const h = Math.floor(secs / HOUR);
+  const m = Math.floor((secs % HOUR) / 60);
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
+}
+
 function formatMaterialForInput(grams) {
   if (grams == null) return '';
   if (grams < 1000) return `${Math.round(grams)}g`;
@@ -902,6 +919,7 @@ export default function Projects() {
   const [detailProject, setDetailProject] = useState(null);
   const [parts, setParts]                 = useState([]);
   const [gcodesMap, setGcodesMap]         = useState({});
+  const [detailEta, setDetailEta]         = useState(null);
 
   // New project form
   const [showNewForm, setShowNewForm]     = useState(false);
@@ -1039,6 +1057,13 @@ export default function Projects() {
     setDetailProject(proj);
     setParts(partsData);
     setGcodesMap(gcMap);
+
+    // Rough estimate, not user-mutable: a background-style fetch that fails
+    // quietly rather than toasting, same as every other read-on-load in this app.
+    fetch(`/api/projects/${projectId}/eta`)
+      .then(r => r.json())
+      .then(setDetailEta)
+      .catch(() => setDetailEta(null));
   }, []);
 
   useEffect(() => {
@@ -1266,7 +1291,7 @@ export default function Projects() {
   }
 
   function goBack() {
-    setSelectedId(null); setDetailProject(null); setParts([]); setGcodesMap({});
+    setSelectedId(null); setDetailProject(null); setParts([]); setGcodesMap({}); setDetailEta(null);
     setOpenPanels(new Set());
   }
 
@@ -1632,6 +1657,19 @@ export default function Projects() {
           </>
         )}
         <StatusDropdown project={detailProject} onTransition={handleStatusTransition} />
+        {detailEta && detailEta.remaining_seconds != null && (
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>
+            {detailEta.remaining_seconds > 0
+              ? <>~{formatDurationDisplay(detailEta.remaining_seconds)} remaining</>
+              : 'nothing left to print'}
+            {detailEta.incomplete && (
+              <span
+                style={{ color: '#64748b' }}
+                title="Some remaining G-code files have no estimated print time set, so this is a lower bound"
+              > (at least)</span>
+            )}
+          </span>
+        )}
       </div>
 
       {/* Project-level filament defaults */}

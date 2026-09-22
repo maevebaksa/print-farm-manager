@@ -487,6 +487,20 @@ Returns all projects ordered by `created_at DESC`.
 
 Returns a single project. `404` if not found.
 
+### `GET /api/projects/:id/eta`
+
+Rough estimated time remaining for the project's whole queue, not just whatever is currently printing. `404` if the project doesn't exist.
+
+```json
+{ "remaining_seconds": 5400, "incomplete": false, "eligible_printer_count": 2 }
+```
+
+- `remaining_seconds`: real telemetry (`printers.job_time_remaining`) for whatever is printing right now on this project, plus the estimated time for everything not yet started or in flight, spread across `eligible_printer_count`. `null` if there is remaining work but no G-code in the project has `est_print_secs` set anywhere, so no estimate is possible at all. `0` once nothing remains.
+- `incomplete`: `true` if some remaining part has no `est_print_secs` on any of its G-codes, meaning `remaining_seconds` (when non-null) undercounts rather than being wrong outright.
+- `eligible_printer_count`: how many active printers have a model matching at least one of this project's G-codes. This is a coarse capacity figure, not a live schedule: it doesn't account for material/color/group eligibility or whether those printers are currently busy with something else.
+
+This is deliberately a rough estimate, not a scheduling simulation. See `server/project-eta.js`. The Dashboard's Active Projects panel includes the same numbers per project as `estimated_remaining_secs` / `estimated_remaining_incomplete` in `GET /api/dashboard` (see below), computed by the same shared function.
+
 ### `POST /api/projects`
 
 Required: `name`. Optional: `description`.
@@ -813,6 +827,7 @@ Single endpoint that returns all data required by the TV dashboard in one call. 
 - `elapsed_secs` — total wall-clock print time in seconds: sum of `finished_at − started_at` for all `finished` jobs in the project, plus `now − started_at` for any currently `printing` job.
 - `material_used_grams` — total material consumed in grams: sum of `gcode.material_grams / gcode.parts_per_plate * job.parts_per_plate` across all `finished` jobs that have a linked gcode with `material_grams` set. `null` if no jobs have gcode material data.
 - `model_breakdown` — array of per-printer-model summaries for all finished jobs: `{ printer_model, jobs_count, parts_printed, material_grams, elapsed_secs }`, ordered by `parts_printed DESC`.
+- `estimated_remaining_secs` / `estimated_remaining_incomplete`: same rough remaining-time estimate as `GET /api/projects/:id/eta` above (see that entry for what these mean and what they deliberately don't model), computed by the same shared `server/project-eta.js` function.
 
 `recent_activity` is the 12 most recent `finished` or `failed` jobs, each with `part_name` and `printer_name` joined in. (Retained in the payload for compatibility; the dashboard UI no longer renders this list — see [web-app.md](web-app.md).)
 

@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { estimateProjectRemaining } = require('../project-eta');
 
 // Completed job statuses — 'done' is a legacy alias retained for backward compat with older data.
 const DONE_STATUSES = "('finished', 'done')";
@@ -101,8 +102,13 @@ module.exports = (db) => {
       const elapsed_secs = Math.round((finishedMs + printingMs) / 1000);
       const material_used_grams = materialUsedStmt.get(proj.id).grams || null;
       const model_breakdown = modelBreakdownStmt.all(proj.id);
+      const eta = estimateProjectRemaining(db, proj.id);
 
-      return { ...proj, parts, elapsed_secs, material_used_grams, model_breakdown };
+      return {
+        ...proj, parts, elapsed_secs, material_used_grams, model_breakdown,
+        estimated_remaining_secs: eta.remaining_seconds,
+        estimated_remaining_incomplete: eta.incomplete,
+      };
     });
 
     // ── Recent activity: last 12 finished/failed jobs ─────────────────────────
