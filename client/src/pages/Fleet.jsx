@@ -10,6 +10,14 @@ import ColorSwatch from '../components/ColorSwatch';
 import usePinnedPrinters from '../usePinnedPrinters';
 import { useAuth } from '../AuthContext';
 
+// Widest a single model's chip is allowed to grow (as a percentage of the
+// viewport) before wrapping its own printers onto another row within the
+// same chip, rather than stretching the chip itself wider. A vw-based cap
+// rather than a fixed column count so it scales with the window automatically
+// (see the per-model layout below): roughly 2 full-width chips side by side
+// on any screen size, since 2 * CHIP_MAX_VW + gaps stays under 100vw.
+const CHIP_MAX_VW = 42;
+
 const STATUS_COLORS = {
   PRINTING:   { bg: '#1e3a5f', text: '#60a5fa', label: 'Printing' },
   UPLOADING:  { bg: '#3b2c69', text: '#a78bfa', label: 'Uploading' },
@@ -959,36 +967,60 @@ export default function Fleet() {
         </div>
       )}
 
-      {Object.entries(grouped).map(([model, group]) => (
-        <div key={model} style={{ marginBottom: 24 }}>
-          <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
-            {MODEL_LABELS[model] || model} <span style={{ fontWeight: 400, color: '#475569' }}>({group.length})</span>
-          </h2>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: 10,
-          }}>
-            {group.map((printer) => (
-              <PrinterCard
-                key={printer.id}
-                printer={printer}
-                selected={selectedForReady.has(printer.id)}
-                onToggleSelect={toggleSelect}
-                onSetReady={setReady}
-                onBadPrint={badPrint}
-                onUploadFailed={uploadFailed}
-                onDecommission={decommission}
-                onLinkJob={openLinkJobModal}
-                onOpenDetail={(id) => navigate(`/printers/${id}`)}
-                colorHexMap={colorHexMap}
-                pinned={pinnedIds.has(printer.id)}
-                onTogglePin={togglePin}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+      {/* Each model gets its own self-contained chip rather than a full-width
+          row per model (same fix as the Dashboard's FleetStatusGrid). A
+          fleet with many single- or two-printer models packs several chips
+          per line instead of showing mostly-empty full-width rows.
+          Chip width is a CSS min() of three things, not a fixed pixel cap:
+          exactly as wide as this group's cards need (so a 1-2 printer group
+          stays small), never wider than CHIP_MAX_VW of the viewport (so a
+          large group wraps onto more rows within its own chip instead of
+          stretching arbitrarily wide, and (the actual point) that cap
+          scales with the window: more columns fit per chip on a wide
+          monitor, fewer on a laptop, with no JS resize listener needed), and
+          never wider than the container itself (100%, so a chip still
+          shrinks correctly on a narrow/mobile viewport, same as the
+          uncapped grid always did). */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
+        {Object.entries(grouped).map(([model, group]) => {
+          const naturalWidth = `${group.length * 230 - 10}px`;
+          // max(220px, ...) floors the vw cap at one card wide: on a narrow/
+          // mobile viewport CHIP_MAX_VW can resolve below 220px, which would
+          // otherwise squeeze a card's own minmax(220px, 1fr) column below its
+          // own minimum and overflow the chip instead of wrapping to 1-per-row.
+          const chipWidth = `max(220px, min(100%, ${naturalWidth}, ${CHIP_MAX_VW}vw))`;
+          return (
+            <div key={model} style={{ width: chipWidth }}>
+              <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+                {MODEL_LABELS[model] || model} <span style={{ fontWeight: 400, color: '#475569' }}>({group.length})</span>
+              </h2>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 10,
+              }}>
+                {group.map((printer) => (
+                  <PrinterCard
+                    key={printer.id}
+                    printer={printer}
+                    selected={selectedForReady.has(printer.id)}
+                    onToggleSelect={toggleSelect}
+                    onSetReady={setReady}
+                    onBadPrint={badPrint}
+                    onUploadFailed={uploadFailed}
+                    onDecommission={decommission}
+                    onLinkJob={openLinkJobModal}
+                    onOpenDetail={(id) => navigate(`/printers/${id}`)}
+                    colorHexMap={colorHexMap}
+                    pinned={pinnedIds.has(printer.id)}
+                    onTogglePin={togglePin}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
