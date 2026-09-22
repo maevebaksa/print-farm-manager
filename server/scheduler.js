@@ -15,6 +15,12 @@ const GCODE_DIR = path.join(__dirname, 'gcode');
 // Comfortably exceeds the 15s poll interval plus typical print-start (bed-heating) latency.
 const STALE_JOB_GRACE_MS = 90000;
 
+// Default for the upload_retry_window_min setting (routes/settings.js), used when the
+// row is missing entirely (should only happen on a DB older than this feature, before
+// db.js's startup seed runs). See _executeUpload's retry-window comment for what this
+// governs.
+const DEFAULT_UPLOAD_RETRY_WINDOW_MIN = 15;
+
 class JobScheduler extends EventEmitter {
   constructor(db, poller) {
     super();
@@ -71,6 +77,34 @@ class JobScheduler extends EventEmitter {
         this._handlePrinterStopped(printer);
       }
     });
+
+    // Every poll cycle (every 15s, whether or not any printer's status actually
+    // changed), give printers with a pending upload retry another chance: see
+    // _retryPendingUploads and the retry-window comment in _executeUpload. A
+    // transition-only trigger (statusChange/printerIdle above) would never fire
+    // again for a printer that stays IDLE the whole time an upload keeps failing.
+    this.poller.on('pollComplete', () => {
+      this._retryPendingUploads();
+    });
+  }
+
+  // Re-sweep every printer that has a job parked in 'uploading' with
+  // upload_first_failed_at set: its immediate retries (in _executeUpload) already
+  // failed once, but it is still within the configurable retry window, so it was
+  // deliberately left un-held instead of stopping the operator. Routed through
+  // scheduleForPrinter, the same entry point as every other dispatch trigger, so
+  // this defers to the tail of an in-progress sweep rather than racing it.
+  _retryPendingUploads() {
+    const pending = this.db.prepare(`
+      SELECT DISTINCT p.* FROM printers p
+      JOIN jobs j ON j.printer_id = p.id
+      WHERE j.status = 'uploading' AND j.upload_first_failed_at IS NOT NULL
+        AND p.is_held = 0 AND p.is_active = 1
+    `).all();
+
+    for (const printer of pending) {
+      this.scheduleForPrinter(printer);
+    }
   }
 
   // Sweep all currently idle non-held active printers. Dispatches in waves that keep
@@ -201,6 +235,13 @@ class JobScheduler extends EventEmitter {
   // failed and operator confirmation is needed before anything changes. The batch
   // must not block on it indefinitely.
   // Gives up after 10 minutes — large files on slow networks can take several minutes to transfer.
+  //
+  // A job left as 'uploading', not held, with upload_first_failed_at set also counts
+  // as settled for THIS wave: it means _executeUpload already ran its attempts and
+  // deliberately parked the job for a later scheduler sweep (see the retry-window
+  // comment there and _retryPendingUploads). Without this, a wave would otherwise
+  // poll the full 10-minute timeout waiting for a state change that only a future,
+  // separate sweep can produce.
   _waitForBatch(jobIds, pollIntervalMs = 3000, timeoutMs = 600000) {
     return new Promise((resolve) => {
       const start = Date.now();
@@ -208,14 +249,15 @@ class JobScheduler extends EventEmitter {
 
       const check = () => {
         const rows = this.db.prepare(`
-          SELECT j.status, p.is_held
+          SELECT j.status, j.upload_first_failed_at, p.is_held
           FROM jobs j JOIN printers p ON p.id = j.printer_id
           WHERE j.id IN (${placeholders})
         `).all(...jobIds);
 
         const allSettled = rows.every(r =>
           r.status === 'printing' || r.status === 'failed' || r.status === 'cancelled' ||
-          (r.status === 'uploading' && r.is_held === 1)
+          (r.status === 'uploading' && r.is_held === 1) ||
+          (r.status === 'uploading' && r.is_held === 0 && r.upload_first_failed_at != null)
         );
 
         if (allSettled || Date.now() - start > timeoutMs) {
@@ -262,9 +304,21 @@ class JobScheduler extends EventEmitter {
     // printer stopped the job on its own). Hold the printer so the operator can confirm
     // the outcome rather than leaving it permanently locked out of dispatch.
     const activeJob = this.db.prepare(
-      "SELECT id, status, created_at, started_at FROM jobs WHERE printer_id = ? AND status IN ('uploading', 'printing') LIMIT 1"
+      "SELECT id, status, created_at, started_at, gcode_id, upload_first_failed_at FROM jobs WHERE printer_id = ? AND status IN ('uploading', 'printing') LIMIT 1"
     ).get(printer.id);
     if (activeJob) {
+      // A pending upload retry: this exact job already exhausted its immediate
+      // in-call retries once (_executeUpload) and was deliberately left 'uploading'
+      // instead of held, because it is still inside the configurable retry window.
+      // This is not a stale orphan: it is known, tracked, waiting-for-the-next-sweep
+      // state, so route it straight to a retry instead of falling into the
+      // stale-job-age check below, which exists for actually-orphaned jobs and would
+      // otherwise auto-fail this one for the same "too old" reason the window is
+      // meant to tolerate.
+      if (activeJob.status === 'uploading' && activeJob.upload_first_failed_at != null) {
+        return this._reservationForRetry(printer, activeJob);
+      }
+
       // A 'printing' job is only legitimate while the printer is actively printing or
       // paused. Any other status (IDLE, STOPPED, FINISHED, ERROR, etc.) usually means the
       // job is stale — the print ended outside our view. Auto-fail it so the operator can
@@ -496,6 +550,42 @@ class JobScheduler extends EventEmitter {
     }
   }
 
+  // Build a reservation for retrying an already-dispatched job's upload (see the
+  // pending-retry branch in _reserveJob), reusing the exact same jobId rather than
+  // creating a new one: the dispatch lock this job already represents is still
+  // valid, nothing about the part/candidate selection needs to happen again.
+  _reservationForRetry(printer, activeJob) {
+    let driver;
+    try {
+      driver = getDriver(printer.type);
+    } catch (err) {
+      this.db.prepare('UPDATE printers SET is_held = 1 WHERE id = ?').run(printer.id);
+      console.error(`[scheduler] ${printer.name} has unknown type "${printer.type}", held, pending retry abandoned: ${err.message}`);
+      return null;
+    }
+
+    const gcode = this.db.prepare('SELECT filename, filepath, ams_slot FROM gcodes WHERE id = ?').get(activeJob.gcode_id);
+    if (!gcode) {
+      // The gcode record was deleted while this job sat waiting for a retry.
+      // Nothing left to retry, same outcome as a permanently missing file below.
+      this.db.prepare('UPDATE printers SET is_held = 1 WHERE id = ?').run(printer.id);
+      notifications.add(`${printer.name}: the G-code for a pending upload retry was deleted. Printer held for operator review.`);
+      console.warn(`[scheduler] ${printer.name} pending retry job ${activeJob.id} has no gcode (id ${activeJob.gcode_id} deleted), held`);
+      return null;
+    }
+
+    const gcodeFilename = gcode.filepath.split(/[\\/]/).pop();
+    const gcodeFullPath = path.join(GCODE_DIR, gcodeFilename);
+    if (!fs.existsSync(gcodeFullPath)) {
+      this.db.prepare('UPDATE printers SET is_held = 1 WHERE id = ?').run(printer.id);
+      notifications.add(`G-code file missing for "${gcode.filename}", re-upload the file. ${printer.name} has been held.`);
+      console.warn(`[scheduler] ${printer.name} pending retry job ${activeJob.id}: G-code file missing on disk, held`);
+      return null;
+    }
+
+    return { jobId: activeJob.id, candidate: { filename: gcode.filename, ams_slot: gcode.ams_slot }, driver, gcodeFullPath };
+  }
+
   // Perform the actual upload for an already-reserved job (see _reserveJob). This is
   // the only async part of dispatch: real network I/O to the printer.
   async _executeUpload(printer, reservation) {
@@ -547,16 +637,41 @@ class JobScheduler extends EventEmitter {
         return jobId;
       }
 
-      // Upload failed and printer is not printing. Hold the printer and leave the job
-      // as 'uploading' — the operator must confirm the outcome via Fleet UI.
-      // Job Running: confirms the print is actually running (changes job to printing).
-      // Upload Failed: marks the job failed and decommissions.
-      // Never auto-fail here — the operator decides.
+      // Still failing and not printing. Rather than holding after this one exhausted
+      // attempt, keep retrying on later scheduler sweeps (poller.js's pollComplete
+      // event, every 15s, see _retryPendingUploads) for a configurable window: this
+      // covers a printer that is briefly rebooting or a network blip that outlasts
+      // the quick backoff above. upload_first_failed_at is set once, on the very
+      // first exhausted attempt, and never overwritten after that: later sweeps
+      // measure elapsed time from that original failure, not from whichever sweep
+      // happens to be running.
+      const existing = this.db.prepare('SELECT upload_first_failed_at FROM jobs WHERE id = ?').get(jobId);
+      const firstFailedAt = existing.upload_first_failed_at ?? Date.now();
+      if (existing.upload_first_failed_at == null) {
+        this.db.prepare('UPDATE jobs SET upload_first_failed_at = ? WHERE id = ?').run(firstFailedAt, jobId);
+      }
+
+      const windowSetting = this.db.prepare("SELECT value FROM settings WHERE key = 'upload_retry_window_min'").get();
+      const windowMin = windowSetting ? (parseInt(windowSetting.value, 10) || DEFAULT_UPLOAD_RETRY_WINDOW_MIN) : DEFAULT_UPLOAD_RETRY_WINDOW_MIN;
+      const elapsedMs = Date.now() - firstFailedAt;
+
+      if (elapsedMs < windowMin * 60000) {
+        console.warn(
+          `[scheduler] ${printer.name} upload failed after ${MAX_RETRIES + 1} attempts (${lastErr.message}), ` +
+          `still within the ${windowMin}min retry window (${Math.round(elapsedMs / 1000)}s elapsed), retrying on a later sweep instead of holding`
+        );
+        return null;
+      }
+
+      // Window exhausted. Hold the printer and leave the job as 'uploading' (see the
+      // unchanged behavior above this branch for what happens next: Job Running
+      // confirms the print is actually running, Upload Failed marks the job failed
+      // and decommissions. Never auto-fail here, the operator decides).
       this.db.prepare('UPDATE printers SET is_held = 1 WHERE id = ?').run(printer.id);
       notifications.add(
-        `Upload to ${printer.name} failed after ${MAX_RETRIES + 1} attempts — check the printer and confirm the outcome in Fleet.`
+        `Upload to ${printer.name} kept failing for ${windowMin} minutes, check the printer and confirm the outcome in Fleet.`
       );
-      console.error(`[scheduler] ${printer.name} upload failed after ${MAX_RETRIES + 1} attempts — held, job ${jobId} left as uploading for operator confirmation`);
+      console.error(`[scheduler] ${printer.name} upload failed repeatedly for ${windowMin}min, held, job ${jobId} left as uploading for operator confirmation`);
       return null;
     }
 

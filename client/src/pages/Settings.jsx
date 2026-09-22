@@ -377,6 +377,11 @@ export default function Settings() {
   const [colorTolerance, setColorTolerance] = useState('');
   const [colorToleranceError, setColorToleranceError] = useState(null);
 
+  // Upload retry window: how long the scheduler keeps retrying a failing upload on
+  // later sweeps before holding the printer for operator confirmation (server/scheduler.js).
+  const [retryWindow, setRetryWindow] = useState('');
+  const [retryWindowError, setRetryWindowError] = useState(null);
+
   // Farm name — shown in the sidebar; picked up on next page load
   const [farmName, setFarmName] = useState('');
   const [farmNameError, setFarmNameError] = useState(null);
@@ -397,6 +402,7 @@ export default function Settings() {
         if (data.farm_name) setFarmName(data.farm_name);
         setAutoSsoRedirect(data.auto_sso_redirect === '1');
         setColorTolerance(data.color_tolerance ?? '0');
+        setRetryWindow(data.upload_retry_window_min ?? '15');
       })
       .catch(() => {});
     if (user?.role === 'admin') {
@@ -452,6 +458,22 @@ export default function Settings() {
       showToast('Saved');
     } catch (err) {
       setColorToleranceError(err.message);
+    }
+  }
+
+  async function handleSaveRetryWindow() {
+    setRetryWindowError(null);
+    try {
+      const res = await fetch('/api/settings/upload_retry_window_min', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: retryWindow }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      showToast('Saved');
+    } catch (err) {
+      setRetryWindowError(err.message);
     }
   }
 
@@ -1603,6 +1625,44 @@ export default function Settings() {
           </div>
           {colorToleranceError && (
             <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{colorToleranceError}</div>
+          )}
+        </div>
+
+        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #2d3748' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>Upload retry window</div>
+          <p style={{ color: '#64748b', fontSize: 13, marginBottom: 12 }}>
+            When a file upload to a printer fails, the scheduler retries a few times immediately,
+            then keeps trying again on later sweeps (about every 15 seconds) for this many minutes
+            before finally holding the printer for operator confirmation. Covers a printer that is
+            briefly rebooting or a network blip that outlasts the immediate retries.
+          </p>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
+                Minutes (1-180)
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={180}
+                value={retryWindow}
+                onChange={e => setRetryWindow(e.target.value)}
+                style={{ ...inputStyle, width: 80 }}
+              />
+            </div>
+            <button
+              onClick={handleSaveRetryWindow}
+              style={{
+                background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6,
+                padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                alignSelf: 'flex-end',
+              }}
+            >
+              Save
+            </button>
+          </div>
+          {retryWindowError && (
+            <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{retryWindowError}</div>
           )}
         </div>
       </section>

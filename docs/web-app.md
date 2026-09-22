@@ -295,6 +295,8 @@ Responsive grid of decommissioned printers — printers that have been pulled fr
 
 **Dispatch Settings section:** the `dispatch_batch_size` concurrency target (`PUT /api/settings/dispatch_batch_size`), plus a **Color tolerance** sub-section (`color_tolerance`, `PUT /api/settings/color_tolerance`): a number input (0-450) with suggested values (`<datalist>`, matching the Group field's autocomplete pattern) explaining what a given number roughly means ("Off", "Very close", "Same color family", "Loose match"). `0` (default) keeps color matching exact-only. See `docs/filaments.md` for how this reads `filament_colors.hex_color` and `server/scheduler.js` for the matching rule itself.
 
+A third **Upload retry window** sub-section (`upload_retry_window_min`, `PUT /api/settings/upload_retry_window_min`): a number input (1-180 minutes, default 15) for how long the scheduler keeps retrying a failing upload on later sweeps before holding the printer for operator confirmation. See `jobs.upload_first_failed_at` in [docs/database.md](database.md) and the scheduler note in [docs/api.md](api.md).
+
 **Farm Backup section:** Export and Restore buttons — see [api.md](api.md) for the backup endpoints.
 
 **Polling info section:** displays the 15-second interval and explains concurrent polling behavior.

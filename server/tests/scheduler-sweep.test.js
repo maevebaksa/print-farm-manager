@@ -358,6 +358,21 @@ describe('start(): printerIdle defers to an in-progress sweep instead of bypassi
   });
 });
 
+describe('start(): pollComplete re-sweeps pending upload retries', () => {
+  test('every poll cycle calls _retryPendingUploads, not just on a status transition', () => {
+    const scheduler = makeScheduler();
+    const poller = new EventEmitter();
+    scheduler.poller = poller;
+    scheduler._retryPendingUploads = jest.fn();
+
+    scheduler.start();
+    poller.emit('pollComplete');
+    poller.emit('pollComplete');
+
+    expect(scheduler._retryPendingUploads).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ── Fill-to-target concurrency ────────────────────────────────────────────────
 // The actual bug: dispatch_batch_size is supposed to be how many printers are
 // uploading/printing AT ONCE, not how many are merely considered per pass. A
@@ -535,7 +550,8 @@ describe('_sweepInBatches: ceiling interaction through the real wave loop', () =
         part_id INTEGER NOT NULL, printer_id INTEGER NOT NULL,
         gcode_id INTEGER, parts_per_plate INTEGER NOT NULL,
         status TEXT DEFAULT 'queued',
-        started_at INTEGER, finished_at INTEGER, created_at INTEGER NOT NULL
+        started_at INTEGER, finished_at INTEGER, created_at INTEGER NOT NULL,
+        upload_first_failed_at INTEGER
       );
     `);
     return db;

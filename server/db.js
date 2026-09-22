@@ -120,6 +120,14 @@ try { db.exec('ALTER TABLE projects ADD COLUMN allowed_groups TEXT'); } catch (_
 try { db.exec('ALTER TABLE printer_events ADD COLUMN user_id INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE printer_events ADD COLUMN user_name TEXT'); } catch (_) {}
 
+// When an upload's immediate retries (see scheduler.js's _executeUpload) are all
+// exhausted but the printer still looks alive, the job is left 'uploading' rather
+// than held right away: this timestamp marks when that first happened, so later
+// scheduler sweeps (poller.js's pollComplete, every 15s) know how long they have
+// been retrying and when the configurable upload_retry_window_min setting has
+// finally run out. NULL for a job that has never failed an upload attempt.
+try { db.exec('ALTER TABLE jobs ADD COLUMN upload_first_failed_at INTEGER'); } catch (_) {}
+
 // Printer models — source of truth for which models this farm supports.
 // New installs start empty; operator adds models in Settings.
 // Existing installs auto-seed from models already referenced in the live DB.
@@ -329,6 +337,9 @@ try {
 // Seed defaults (INSERT OR IGNORE so existing values are never overwritten)
 try {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('dispatch_batch_size', '10')").run();
+} catch (_) {}
+try {
+  db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('upload_retry_window_min', '15')").run();
 } catch (_) {}
 
 // Make jobs.gcode_id nullable so gcodes can be deleted after jobs have run

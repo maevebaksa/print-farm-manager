@@ -106,15 +106,16 @@ beforeEach(() => {
       required_color    TEXT
     );
     CREATE TABLE jobs (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      part_id          INTEGER NOT NULL REFERENCES parts(id),
-      printer_id       INTEGER NOT NULL REFERENCES printers(id),
-      gcode_id         INTEGER REFERENCES gcodes(id),
-      parts_per_plate  INTEGER NOT NULL,
-      status           TEXT DEFAULT 'queued',
-      started_at       INTEGER,
-      finished_at      INTEGER,
-      created_at       INTEGER NOT NULL
+      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+      part_id                INTEGER NOT NULL REFERENCES parts(id),
+      printer_id             INTEGER NOT NULL REFERENCES printers(id),
+      gcode_id               INTEGER REFERENCES gcodes(id),
+      parts_per_plate        INTEGER NOT NULL,
+      status                 TEXT DEFAULT 'queued',
+      started_at             INTEGER,
+      finished_at            INTEGER,
+      created_at             INTEGER NOT NULL,
+      upload_first_failed_at INTEGER
     );
     CREATE TABLE printer_events (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,6 +207,11 @@ beforeEach(() => {
   db.prepare(`INSERT INTO settings (key, value) VALUES ('farm_name', 'Test Farm')`).run();
   db.prepare(`INSERT INTO settings (key, value) VALUES ('dispatch_batch_size', '5')`).run();
 
+  db.prepare(`
+    INSERT INTO jobs (part_id, printer_id, gcode_id, parts_per_plate, status, created_at, upload_first_failed_at)
+    VALUES (1, 1, 1, 4, 'uploading', ?, 1700000000000)
+  `).run(now);
+
   // server/routes/backup.js declares its Express router at module scope, like every
   // route file in this codebase. Node's require() cache means a second require() in the
   // same process would reuse that router with a stale db closure from a previous test's
@@ -260,6 +266,9 @@ describe('Backup export/restore — column round-trip regression', () => {
       user_id: 7,
       user_name: 'Joel',
     });
+    expect(res.body.jobs[0]).toMatchObject({
+      upload_first_failed_at: 1700000000000,
+    });
   });
 
   test('restore preserves every migrated column, not just the base schema', async () => {
@@ -274,6 +283,7 @@ describe('Backup export/restore — column round-trip regression', () => {
       db.prepare("UPDATE projects SET required_material = NULL, required_color = NULL, allowed_groups = NULL").run();
       db.prepare("UPDATE parts SET print_time_seconds = NULL, material_grams = NULL").run();
       db.prepare("UPDATE gcodes SET ams_slot = NULL, material_grams = NULL, allowed_groups = NULL, required_material = NULL, required_color = NULL").run();
+      db.prepare("UPDATE jobs SET upload_first_failed_at = NULL").run();
 
       const restoreRes = await request(app)
         .post('/api/backup/restore')
@@ -321,6 +331,9 @@ describe('Backup export/restore — column round-trip regression', () => {
       const event = db.prepare("SELECT * FROM printer_events WHERE printer_id = 1 AND event_type = 'decommission'").get();
       expect(event.user_id).toBe(7);
       expect(event.user_name).toBe('Joel');
+
+      const job = db.prepare('SELECT * FROM jobs WHERE id = 1').get();
+      expect(job.upload_first_failed_at).toBe(1700000000000);
     } finally {
       fs.unlinkSync(backupFile);
     }

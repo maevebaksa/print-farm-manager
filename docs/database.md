@@ -182,11 +182,14 @@ CREATE TABLE IF NOT EXISTS jobs (
                    -- queued | uploading | printing | finished | failed | cancelled
   started_at       INTEGER,
   finished_at      INTEGER,
-  created_at       INTEGER NOT NULL
+  created_at       INTEGER NOT NULL,
+  upload_first_failed_at INTEGER  -- migration; see below
 );
 ```
 
 `parts_per_plate` is snapshotted at dispatch time so changing the G-code record after dispatch doesn't retroactively affect in-flight jobs.
+
+`upload_first_failed_at` is set the first time a job's upload exhausts its immediate in-call retries in `scheduler.js`'s `_executeUpload`, and never overwritten after that. While it is set and the job is still `uploading` (printer not held), the operator-configurable `upload_retry_window_min` setting (default 15, see [docs/api.md](api.md)) governs how much longer the scheduler keeps retrying the same job on later sweeps (`_retryPendingUploads`, triggered by `poller.js`'s `pollComplete` event every ~15s) before finally holding the printer for operator confirmation. `NULL` for a job whose upload never failed, or that has not been dispatched yet.
 
 ### printer_events
 

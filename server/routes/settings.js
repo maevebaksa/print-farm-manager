@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance']);
+const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min']);
 // RGB Euclidean distance (server/color-distance.js) ranges 0 (identical) to
 // ~441.7 (black vs white): anything past ~450 would treat literally any two
 // colors as interchangeable, which is never a useful tolerance.
@@ -54,6 +54,13 @@ module.exports = (db) => {
       const n = parseInt(value, 10);
       if (isNaN(n) || n < 0 || n > MAX_COLOR_TOLERANCE) {
         return res.status(400).json({ error: `color_tolerance must be an integer between 0 and ${MAX_COLOR_TOLERANCE}` });
+      }
+    }
+
+    if (key === 'upload_retry_window_min') {
+      const n = parseInt(value, 10);
+      if (isNaN(n) || n < 1 || n > 180) {
+        return res.status(400).json({ error: 'upload_retry_window_min must be an integer between 1 and 180' });
       }
     }
 
