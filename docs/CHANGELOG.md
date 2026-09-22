@@ -2,6 +2,20 @@
 
 ---
 
+## 2026-09-22: fix Webcams page showing a raw hex code instead of a color swatch
+
+Reported: the Webcams page's per-lane "what's loaded" lines showed text like `Lane 0: PLA · #FDFF00`, the hex code printed as a literal string, with no actual colored swatch. Earlier this session's swatch work (see the 2026-09-XX filament color entries below) only reached Fleet.jsx and PrinterDetail.jsx; Webcams.jsx was never touched, so its lane rows kept rendering plain text.
+
+Root cause was also a data-shape mismatch worth calling out: a lane's `color` field is not a Filament Library color name like `printer.loaded_color` is elsewhere in the app. It is a raw hex string reported directly by the klipper-filament-sync plugin (`server/drivers/klipper.js`'s `getLaneData`, confirmed by reading the driver's own comments and the plugin's data shape), so it needs no name-to-hex lookup at all, unlike the page's own legacy `loaded_material`/`loaded_color` fallback (for a printer with no lane plugin), which does.
+
+### Changes
+- `client/src/pages/Webcams.jsx`: `WebcamCard` now renders a `ColorSwatch` next to each lane line (hex used directly) and the legacy fallback line (looked up through `colorHexMap`, same as Fleet/PrinterDetail); the page now fetches `/api/filaments/colors` once on mount for that lookup.
+- `docs/web-app.md`: Webcams Page section now documents the swatch and the two different color sources.
+
+No automated test: this repo has no client-side test framework (confirmed elsewhere this session), so client-only JSX/CSS changes are verified with `npm run build` plus manual review, same as every other client change so far. Could not be checked live in a browser this session: `better-sqlite3`'s native binding fails to load locally on this machine (no Visual Studio Build Tools), so the real server cannot start here either, the same limitation disclosed on every DB-touching test this session. The underlying rendering mechanism (`background: <hex>` via `ColorSwatch.jsx`) was checked directly against the exact hex values from the reported screenshot and renders correctly; the data path (`l.color` already being hex, not a name) was confirmed by reading the driver source.
+
+---
+
 ## 2026-09-22: estimated completion time for a project's whole queue
 
 Requested as part of a batch of quality-of-life items: estimated completion time for a whole project/queue, not just the current print. The scheduler already tracks each individual printer's time remaining (`printers.job_time_remaining`), but nothing rolled that up into "how long until this whole project is done".
