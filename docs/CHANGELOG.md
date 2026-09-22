@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-09-22: typo-tolerant command palette search
+
+Requested: make the command palette's search tolerant of typos. It previously filtered printers, projects, and parts by a plain case-insensitive substring match, so a single mistyped character (`swichwire` for `Switchwire-0`) returned nothing.
+
+New `fuzzyScore(label, query)` in `CommandPalette.jsx`: an exact substring match still always scores best (0), so a correctly-typed query is never reordered relative to the old behavior. Failing that, a small dependency-free edit-distance (Levenshtein) check slides a query-length window across the label looking for the closest typo'd match, tolerant of a missing, extra, wrong, or transposed character, with the tolerance scaling by query length (disabled entirely for 3-character-or-shorter queries, where almost anything is "close"). Results are now sorted best-match-first rather than left in fetch order, so a fuzzy match doesn't crowd out an exact one further down the list.
+
+Deliberately not a new dependency: a fuzzy-search library would need Joel's sign-off per this repo's rules, and the algorithm needed here (small candidate lists, short query strings) is simple enough that a from-scratch implementation is a better fit than pulling one in.
+
+### Changes
+- `client/src/components/CommandPalette.jsx`: new `editDistance`/`typoTolerance`/`fuzzyScore` helpers; `results` now scores and sorts instead of filtering by `.includes()` alone.
+- `docs/web-app.md`: Command Palette section documents the matching behavior.
+
+No automated test: this repo has no client-side test framework. Verified the matching algorithm directly with `node -e` against realistic typo cases (missing/wrong/transposed characters, an exact match, a too-short query, a no-match case) before shipping, since the pure-function logic runs fine outside the browser.
+
+---
+
+## 2026-09-22: pack small model groups side by side on the Fleet page
+
+Reported: the Fleet page still felt too tall and needed scrolling, even after the Dashboard's `FleetStatusGrid` got the same fix earlier this session. Each model group (MK4S, Voron 2.4, Switchwire, ...) rendered as its own full-width row with a CSS grid inside, so a farm with many single- or two-printer "models" (this farm's printers are largely individually distinct machines) showed a long stack of rows that were each mostly empty to the right of one or two cards.
+
+Wrapped the per-model sections in a `flexWrap` container, same fix already applied to the Dashboard grid: each model's block is now its own chip sized to fit its own card count, rather than stretching to the full page width, so small chips pack several to a line. First pass capped a chip at a fixed 4 cards wide; changed after a follow-up request to size it off the viewport instead, so the cap actually scales with the window rather than being a flat number: a chip's width is now `max(220px, min(100%, N * 230px - 10px, CHIP_MAX_VW vw))`, a live CSS expression the browser re-evaluates on resize rather than a pixel value computed once. `CHIP_MAX_VW` (42) means a large model wraps its extra printers onto more rows within its own chip once it hits roughly two-fifths of the viewport, more columns fit on a wide monitor, fewer on a laptop, with no JS resize listener needed. The `max(220px, ...)` floor exists because the vw term alone can resolve below one card's minimum width on a narrow/mobile viewport, which would otherwise squeeze a card's grid column below its own minimum instead of correctly wrapping to one per row.
+
+### Changes
+- `client/src/pages/Fleet.jsx`: new `CHIP_MAX_VW` constant; the per-model grouped section is now a `flexWrap` row of viewport-capped chips instead of one full-width block per model. The Pinned section above it is unchanged (a flat cross-model list, not "many small groups").
+- `docs/web-app.md`: Fleet Page section updated to describe the chip layout.
+
+No automated test: this repo has no client-side test framework, and this is a pure CSS/layout change with no server-side counterpart. Verified `npm run build` succeeds and checked the exact CSS expression (rendered directly with a range of group sizes) behaves as intended; could not exercise the real Fleet page in a live browser, since this machine's `better-sqlite3` native binding fails to load and the server cannot start locally (the same limitation disclosed on every test this session).
+
+---
+
 ## 2026-09-22: uploader role, and optional approval for new uploader accounts
 
 Requested: a new `uploader` role that cannot mark printers as idle, made the default role; plus, in a follow-up request, an admin-toggleable requirement that a new uploader account wait for an operator or admin to approve it before it can sign in.
