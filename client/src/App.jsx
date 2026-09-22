@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import Fleet from './pages/Fleet';
 import Webcams from './pages/Webcams';
-import Printers from './pages/Printers';
 import PrinterDetail from './pages/PrinterDetail';
 import Projects from './pages/Projects';
 import Jobs from './pages/Jobs';
@@ -20,7 +19,6 @@ function navItems(role) {
     { to: '/',               label: 'Dashboard' },
     { to: '/fleet',          label: 'Fleet' },
     { to: '/webcams',        label: 'Webcams' },
-    { to: '/printers',       label: 'Printers',      end: true },
     { to: '/projects',       label: 'Projects' },
     { to: '/jobs',           label: 'Jobs' },
     { to: '/decommissioned', label: 'Decommissioned' },
@@ -171,7 +169,10 @@ export default function App() {
             <Route path="/"                element={<Dashboard />} />
             <Route path="/fleet"           element={<Fleet />} />
             <Route path="/webcams"         element={<Webcams />} />
-            <Route path="/printers"        element={<Printers />} />
+            {/* Printers.jsx (a standalone directory page) was merged into Fleet: bulk
+                material/color/group editing is now Fleet's "Bulk Edit" toggle. Redirect
+                rather than 404 so an old bookmark or link still lands somewhere useful. */}
+            <Route path="/printers"        element={<Navigate to="/fleet" replace />} />
             <Route path="/printers/:id"    element={<PrinterDetail />} />
             <Route path="/projects"        element={<Projects />} />
             <Route path="/jobs"            element={<Jobs />} />

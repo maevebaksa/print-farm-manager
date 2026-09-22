@@ -6,9 +6,8 @@ The React single-page application served by Vite. In development, Vite runs on p
 
 - **Login page**: email/password sign-in, a "Sign in with SSO" button when OIDC is configured, and a one-time "create the admin account" form on a fresh install
 - **Dashboard**: TV-optimized command center: fleet utilization, stat cards, printer grid (hover a printer for a camera preview), active project progress, and a needs-attention panel
-- **Fleet page**: live grid of all active printers with status, filterable and searchable
+- **Fleet page**: live grid of all active printers with status, filterable and searchable, plus bulk material/color/group editing (the old standalone Printers page was merged into this one)
 - **Webcams page**: a plain snapshot gallery, one still image per printer refreshed every 30 seconds, deliberately without the fleet status grid's color-coded highlighting
-- **Printers page**: searchable directory of all printers (active and decommissioned); click any row to open the detail view
 - **Printer detail view**: per-machine event timeline, inline note form, printer header, a camera card (OctoPrint/Klipper) that opens on a snapshot and streams live only once "Watch Live" is clicked, and a popup for cataloging any print sent straight to the printer outside the farm
 - **Settings page** — CSV import UI for the printer registry, with flagged-row resolution
 - **Projects page** — project/part/G-code management and production tracking
@@ -26,9 +25,8 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/pages/Login.jsx` | Sign-in form, SSO button, first-run bootstrap form, automatic SSO redirect, `/backup-login` fallback |
 | `client/src/pages/Account.jsx` | Self-service API key management |
 | `client/src/pages/Users.jsx` | Admin-only account management |
-| `client/src/pages/Fleet.jsx` | Live printer grid, pinned-printers section |
+| `client/src/pages/Fleet.jsx` | Live printer grid, pinned-printers section, bulk material/color/group editing (absorbed the old Printers.jsx) |
 | `client/src/pages/Webcams.jsx` | Plain snapshot gallery, one still image per printer, no status highlighting |
-| `client/src/pages/Printers.jsx` | Searchable all-printers directory |
 | `client/src/pages/PrinterDetail.jsx` | Per-printer event timeline, note form, camera card, catalog-print popup |
 | `client/src/pages/Decommissioned.jsx` | Decommissioned printer list with notes and recommission |
 | `client/src/pages/Settings.jsx` | CSV import, flagged-row resolution, printer models, farm name, admin-only single sign-on redirect toggle |
@@ -63,19 +61,18 @@ The React single-page application served by Vite. In development, Vite runs on p
 │  Dashboard        │                       │
 │  Fleet            │                       │
 │  Webcams          │                       │
-│  Printers         │                       │
 │  Projects         │                       │
 │  Jobs             │                       │
 │  Decommissioned   │                       │
 │  Settings         │                       │
-│  Users (admin)    │                       │
+│  Users (admin/op) │                       │
 │  Account          │                       │
 │  ─────────────    │                       │
 │  Sign out         │                       │
 └───────────────────┴───────────────────────┘
 ```
 
-`Users` only appears in the nav for `admin` accounts; the route itself is conditionally registered on `user.role`, so an `operator` navigating to `/users` directly gets no match rather than the Users UI.
+`Users` appears in the nav for `admin` and `operator` accounts (an operator only sees the Pending Approval section there, see the Users Page section and [docs/auth.md](auth.md)); the route itself is conditionally registered on `user.role`, so an `uploader` navigating to `/users` directly gets no match rather than the Users UI.
 
 **Responsive breakpoint at 600px:** the sidebar is hidden and replaced by a horizontal top nav bar (with the same Sign out button). All page content is still fully accessible on mobile.
 
@@ -167,6 +164,8 @@ Live printer grid that polls `GET /api/printers` every 15 seconds (matching the 
 - A ☆/★ button on each card pins/unpins it (`usePinnedPrinters.js`, `localStorage`, per-browser). Any pinned printers get their own **★ Pinned** section above the model-grouped ones, respecting the active status filter/search the same way; a pinned printer still also appears in its normal model group below, this is a shortcut, not a move
 - Empty state message when no printers are registered
 
+**Bulk Edit:** the standalone Printers page (`client/src/pages/Printers.jsx`) was merged into Fleet; this is what replaces its bulk-edit bar. Toggling the **Bulk Edit** button (header, next to Sweep for Jobs) switches every card's click behavior to select/deselect it (a checkbox also appears in the header row) instead of opening its detail view or the awaiting-confirmation selection — a distinct mode, not layered on top of that other selection, so a card never means two different things to the same click at once. With one or more selected, a bar appears to set **Material** and **Color** (dropdowns from the filament library) and **Group** (free-text with a `<datalist>` autocomplete from the persisted group registry, `GET /api/groups`). "Apply to selected" loops `PUT /api/printers/:id` for each selected printer; only non-empty fields are sent, so empty fields are left unchanged, and each changed field is recorded as an `info_changed` event on the printer. Common use: funnel small prints to low-spool machines by bulk-assigning them a group, then targeting that group from the G-code's `allowed_groups` (or the project's, see the Projects page). The old Printers page's per-model collapse/expand toggle was not carried over: the chip layout above (small chips packed side by side) already keeps the page compact without it, and its "Show decommissioned" checkbox was dropped too, since the dedicated Decommissioned page already covers that (with recommission and note-editing Fleet has no reason to duplicate). Search now also matches `model`, not just name/IP/group, matching what the old Printers page searched.
+
 **Status color scheme (aligned to Prusa UI):**
 
 | Status | Background | Text |
@@ -205,38 +204,17 @@ If the printer recovers and transitions back to `PRINTING` on its own, the sched
 
 When a held printer shows the partial-plate `Good: N / M` input, the count is carried into the *succeeded* path as `confirmed_qty`: `complete-and-decommission` applies it exactly like Set Ready (a delta against the full plate `_handleFinished` already booked, or the credited amount on a missed-finish), the only difference being the machine is decommissioned instead of re-queued. If the reduced count drops the part below its target, the part — and its project if it had just completed — reopens and re-enters the queue for the next available printer.
 
-## Printers Page
-
-`client/src/pages/Printers.jsx`
-
-Searchable directory of every active printer registered in the farm, grouped by model. Each model is a collapsible section with a header showing the count and compact status-summary pills (e.g. `5 printing · 2 idle · 1 offline`). Designed to scale to hundreds of printers.
-
-**Toolbar:**
-- Search box — filters by name, model, group, or IP (case-insensitive)
-- **Expand all / Collapse all** buttons
-- **Show decommissioned** checkbox — hidden by default; when enabled, decommissioned printers appear in a dimmed "Decommissioned" group at the bottom
-
-**Collapse state** is persisted to `localStorage` (`printers.collapsedGroups`, `printers.showDecommissioned`) so the operator's view sticks across reloads.
-
-**Search behavior:** when a query is active, collapse state is overridden — groups with matches expand, groups with zero matches are hidden, and a "N of M match" hint appears above the list.
-
-**Columns within a group:** Name, Group, IP, Status badge. (Model is implied by the group header.)
-
-**Bulk edit:** selecting one or more printers (row checkboxes / select-all) reveals a bulk-edit bar. It can set **Material** and **Color** (dropdowns from the filament library) and **Group** (free-text input with a `<datalist>` autocomplete, now sourced from the persisted group registry, `GET /api/groups`, rather than derived from currently-loaded printers, so a registered group still autocompletes even if no printer currently carries it; typing a new name still works and registers it). "Apply to selected" loops `PUT /api/printers/:id` for each selected printer; only non-empty fields are sent, so empty fields are left unchanged. Each changed field is recorded as an `info_changed` event on the printer. Common use: funnel small prints to low-spool machines by bulk-assigning them a group, then targeting that group from the G-code's `allowed_groups` (or the project's, see the Projects page).
-
-Click any row to navigate to `/printers/:id` (the Printer Detail view).
-
 ## Printer Detail View
 
 `client/src/pages/PrinterDetail.jsx`
 
-Per-machine history and annotation screen. Reached by clicking a printer card in the Fleet page, clicking a row in the Printers page, or via the "View History" button in the Decommissioned page.
+Per-machine history and annotation screen. Reached by clicking a printer card in the Fleet page, or via the "View History" button in the Decommissioned page.
 
 **Header card:** printer name, live status badge (or DECOMMISSIONED), model, IP, connector type, decommissioned timestamp if applicable. When a material/color is loaded, it shows a small colored swatch next to the text if that color has a hex code in the Filament Library, same `ColorSwatch.jsx`/`filamentColorHex.js` as the Fleet page.
 
 **Rename:** a **Rename** button next to the printer name swaps the header into an inline edit form. Save sends `PUT /api/printers/:id` with the new `name`; the server's UNIQUE-name 409 is surfaced inline. Escape or the Cancel button closes the form without saving.
 
-**Edit Details form:** includes a Group field with a `<datalist>` autocomplete sourced from `GET /api/groups`, same free-text-plus-suggestions behavior as the Printers page bulk-edit and the Settings Add Printer form. A **Test Connection** button under the IP/hostname field posts whatever is currently typed there (plus API key and serial number) to `POST /api/printers/test-connection` and shows the result (`Connected`, or the specific failure reason) inline, without saving anything first.
+**Edit Details form:** includes a Group field with a `<datalist>` autocomplete sourced from `GET /api/groups`, same free-text-plus-suggestions behavior as the Fleet page's Bulk Edit and the Settings Add Printer form. A **Test Connection** button under the IP/hostname field posts whatever is currently typed there (plus API key and serial number) to `POST /api/printers/test-connection` and shows the result (`Connected`, or the specific failure reason) inline, without saving anything first.
 
 For `klipper` and `octoprint` printers, a **Camera** section (rotation, flip horizontal, flip vertical) sets the display transform `client/src/cameraTransform.js` applies wherever this printer's camera image renders, purely a client-side preference, not read from or sent to the connector. `klipper` printers additionally get a camera picker: a **Find cameras** button calls `POST /api/printers/list-cameras` against the form's current connection settings and populates a dropdown of whatever crowsnest reports, for printers with more than one configured; "Default (first enabled)" keeps the previous no-selection behavior.
 
@@ -313,7 +291,7 @@ A third **Upload retry window** sub-section (`upload_retry_window_min`, `PUT /ap
 Primary operator screen for setting up and launching print runs. Reads `?open=<projectId>` (and optionally `&part=<partId>`) from the URL once on mount, to open the detail view and expand a part's panel when arriving from `CommandPalette.jsx` (see its own section above).
 
 **List view (default):**
-- Only `active` projects show by default, ordered by dispatch priority (drag the ⠿ handle to reorder → `PUT /api/projects/reorder`). `draft`, `paused`, and `completed` projects are each hidden behind their own "Show X (count)" checkbox above the list, so a farm with a long project history doesn't bury the in-flight work; a checkbox only appears when at least one project has that status. State persists per browser (`localStorage`), same pattern as the Printers page's "Show decommissioned". If every project is filtered out, an empty-state prompts to check a box rather than showing the first-run "create your first project" message.
+- Only `active` projects show by default, ordered by dispatch priority (drag the ⠿ handle to reorder → `PUT /api/projects/reorder`). `draft`, `paused`, and `completed` projects are each hidden behind their own "Show X (count)" checkbox above the list, so a farm with a long project history doesn't bury the in-flight work; a checkbox only appears when at least one project has that status. State persists per browser (`localStorage`). If every project is filtered out, an empty-state prompts to check a box rather than showing the first-run "create your first project" message.
 - Each row shows name and status badge, click to open detail
 - "New Project" inline form: name + optional description → `POST /api/projects`
 

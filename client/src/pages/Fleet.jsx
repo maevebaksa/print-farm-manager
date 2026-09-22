@@ -68,7 +68,7 @@ function formatEta(secs) {
   return `done ${time}`;
 }
 
-function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint, onUploadFailed, onDecommission, onLinkJob, onOpenDetail, colorHexMap, pinned, onTogglePin }) {
+function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint, onUploadFailed, onDecommission, onLinkJob, onOpenDetail, colorHexMap, pinned, onTogglePin, bulkEditMode, bulkEditSelected, onToggleBulkEdit }) {
   const shownStatus = displayStatus(printer);
   const style = statusStyle(shownStatus);
   const isUploading = shownStatus === 'UPLOADING';
@@ -126,20 +126,39 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
   const eta      = isPrinting ? formatEta(printer.job_time_remaining) : null;
 
   function cardBorder() {
+    if (bulkEditMode) return bulkEditSelected ? '#3b82f6' : '#2d3748';
     if (needsOfflineConfirmation || needsUploadConfirmation) return '#92400e';
     if (needsConfirmation) return selected ? '#22c55e' : '#15803d';
     return style.bg;
   }
 
+  // Bulk-edit mode takes over the whole card's click behavior while active
+  // (it is a distinct mode, not layered on top of the existing awaiting-
+  // confirmation selection, to avoid a card meaning two different things to
+  // two different clicks at once).
+  const cardSelected = bulkEditMode ? bulkEditSelected : selected;
+  function handleCardClick() {
+    if (bulkEditMode) onToggleBulkEdit(printer.id);
+    else if (needsConfirmation && !needsUploadConfirmation) onToggleSelect(printer.id);
+    else onOpenDetail(printer.id);
+  }
+  function cardTitle() {
+    if (bulkEditMode) return bulkEditSelected ? 'Click to deselect' : 'Click to select for bulk edit';
+    if (needsConfirmation && !needsUploadConfirmation) return selected ? 'Click to deselect' : 'Click to select for batch Set Ready';
+    return 'Click to open printer details';
+  }
+
   return (
     <div
-      onClick={(needsConfirmation && !needsUploadConfirmation) ? () => onToggleSelect(printer.id) : () => onOpenDetail(printer.id)}
-      title={(needsConfirmation && !needsUploadConfirmation) ? (selected ? 'Click to deselect' : 'Click to select for batch Set Ready') : 'Click to open printer details'}
+      onClick={handleCardClick}
+      title={cardTitle()}
       style={{
-        background: (needsOfflineConfirmation || needsUploadConfirmation) ? '#2a1f0e' : needsConfirmation ? '#1c2a1c' : '#1e2433',
-        border: `${selected ? '2px' : '1px'} solid ${cardBorder()}`,
+        background: bulkEditMode
+          ? (bulkEditSelected ? '#152238' : '#1e2433')
+          : (needsOfflineConfirmation || needsUploadConfirmation) ? '#2a1f0e' : needsConfirmation ? '#1c2a1c' : '#1e2433',
+        border: `${cardSelected ? '2px' : '1px'} solid ${cardBorder()}`,
         borderRadius: 8,
-        padding: selected ? '11px 13px' : '12px 14px',
+        padding: cardSelected ? '11px 13px' : '12px 14px',
         display: 'flex',
         flexDirection: 'column',
         gap: 6,
@@ -149,6 +168,15 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
     >
       {/* Name + status badge */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+        {bulkEditMode && (
+          <input
+            type="checkbox"
+            checked={bulkEditSelected}
+            onChange={() => {}}
+            onClick={e => { e.stopPropagation(); onToggleBulkEdit(printer.id); }}
+            style={{ accentColor: '#3b82f6', cursor: 'pointer', flexShrink: 0 }}
+          />
+        )}
         <button
           onClick={e => { e.stopPropagation(); onTogglePin(printer.id); }}
           title={pinned ? 'Unpin' : 'Pin to top'}
@@ -396,10 +424,72 @@ export default function Fleet() {
   // { printerId, printerName, jobs, selectedJobId, isHeld }
   const [linkJobModal, setLinkJobModal]       = useState(null);
 
+  // Bulk edit (material / color / group across many printers at once) —
+  // merged in from the old Printers page. A separate selection set from
+  // selectedForReady above: that one only ever holds printers awaiting
+  // sign-off, for the unrelated batch Set Ready flow, and bulk edit applies
+  // to any printer regardless of status. See PrinterCard's bulkEditMode prop
+  // for how a card's click behavior switches between the two.
+  const [bulkEditMode, setBulkEditMode]       = useState(false);
+  const [bulkEditIds, setBulkEditIds]         = useState(new Set());
+  const [filamentTypes, setFilamentTypes]     = useState([]);
+  const [filamentColors, setFilamentColors]   = useState([]);
+  const [registryGroups, setRegistryGroups]   = useState([]);
+  const [bulkMaterial, setBulkMaterial]       = useState('');
+  const [bulkColor, setBulkColor]             = useState('');
+  const [bulkGroup, setBulkGroup]             = useState('');
+  const [applyingBulkEdit, setApplyingBulkEdit] = useState(false);
+
   useEffect(() => {
     fetch('/api/models').then(r => r.json()).then(setAllModels).catch(() => {});
     fetch('/api/filaments/colors').then(r => r.json()).then(colors => setColorHexMap(buildColorHexMap(colors))).catch(() => {});
+    fetch('/api/filaments/types').then(r => r.json()).then(setFilamentTypes).catch(() => {});
+    fetch('/api/groups').then(r => r.json()).then(groups => setRegistryGroups(groups.map(g => g.name))).catch(() => {});
   }, []);
+
+  function toggleBulkEditMode() {
+    setBulkEditMode(v => !v);
+    setBulkEditIds(new Set());
+    setBulkMaterial(''); setBulkColor(''); setBulkGroup('');
+  }
+
+  function toggleBulkEditSelect(id) {
+    setBulkEditIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const canApplyBulkEdit = (bulkMaterial.trim() || bulkColor.trim() || bulkGroup.trim()) && bulkEditIds.size > 0;
+
+  async function applyBulkEdit() {
+    const mat = bulkMaterial.trim();
+    const col = bulkColor.trim();
+    const grp = bulkGroup.trim();
+    if (!mat && !col && !grp) return;
+    setApplyingBulkEdit(true);
+    const body = {};
+    if (mat) body.loaded_material = mat;
+    if (col) body.loaded_color = col;
+    if (grp) body.group_name = grp;
+    const results = await Promise.all([...bulkEditIds].map(id =>
+      fetch(`/api/printers/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    ));
+    setApplyingBulkEdit(false);
+    if (results.every(r => r.ok)) {
+      showToast(`Updated ${bulkEditIds.size} printer${bulkEditIds.size === 1 ? '' : 's'}`, 'success');
+    } else {
+      showToast('Some printers failed to update — check them individually', 'error');
+    }
+    setBulkEditIds(new Set());
+    setBulkMaterial(''); setBulkColor(''); setBulkGroup('');
+    fetchPrinters();
+  }
 
   const fetchPrinters = useCallback(async () => {
     try {
@@ -660,7 +750,8 @@ export default function Fleet() {
     if (filter === 'UNKNOWN') return !KNOWN_STATUSES.has(p.status);
     if (filter !== 'ALL' && displayStatus(p) !== filter) return false;
     if (search && !p.name.toLowerCase().includes(search.toLowerCase()) &&
-        !p.ip.includes(search) && !(p.group_name || '').toLowerCase().includes(search.toLowerCase())) {
+        !p.ip.includes(search) && !(p.group_name || '').toLowerCase().includes(search.toLowerCase()) &&
+        !(p.model || '').toLowerCase().includes(search.toLowerCase())) {
       return false;
     }
     return true;
@@ -771,14 +862,88 @@ export default function Fleet() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Fleet</h1>
           <PollTimer lastPolled={lastPolled} intervalMs={15000} />
         </div>
-        <button
-          onClick={sweep}
-          title="Manually trigger job dispatch now. This normally happens automatically — use it to start jobs on idle machines without waiting for the next cycle."
-          style={{ background: '#1e2433', color: '#94a3b8', border: '1px solid #2d3748', borderRadius: 6, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}
-        >
-          Sweep for Jobs
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={toggleBulkEditMode}
+            title="Select printers to set their loaded material, color, or group all at once"
+            style={{
+              background: bulkEditMode ? '#1d4ed8' : '#1e2433',
+              color: bulkEditMode ? '#fff' : '#94a3b8',
+              border: '1px solid #2d3748', borderRadius: 6, padding: '5px 14px', fontSize: 13, cursor: 'pointer',
+            }}
+          >
+            {bulkEditMode ? 'Done' : 'Bulk Edit'}
+          </button>
+          <button
+            onClick={sweep}
+            title="Manually trigger job dispatch now. This normally happens automatically — use it to start jobs on idle machines without waiting for the next cycle."
+            style={{ background: '#1e2433', color: '#94a3b8', border: '1px solid #2d3748', borderRadius: 6, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}
+          >
+            Sweep for Jobs
+          </button>
+        </div>
       </div>
+
+      {/* Bulk edit bar — merged in from the old Printers page */}
+      {bulkEditMode && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+          background: '#131c2e', border: '1px solid #1e3a5f',
+          borderRadius: 7, padding: '8px 14px', marginBottom: 16,
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#93c5fd', flexShrink: 0 }}>
+            {bulkEditIds.size} selected
+          </span>
+          <span style={{ fontSize: 11, color: '#475569', flexShrink: 0 }}>Set:</span>
+          <select
+            value={bulkMaterial}
+            onChange={e => { setBulkMaterial(e.target.value); setBulkColor(''); }}
+            style={bulkEditInputSx}
+          >
+            <option value="">Material…</option>
+            {filamentTypes.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+          </select>
+          <select
+            value={bulkColor}
+            onChange={e => setBulkColor(e.target.value)}
+            disabled={!bulkMaterial}
+            style={bulkEditInputSx}
+          >
+            <option value="">Color…</option>
+            {filamentColors
+              .filter(c => c.type_name === bulkMaterial)
+              .map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+          </select>
+          <input
+            type="text"
+            list="fleet-bulk-group-options"
+            value={bulkGroup}
+            onChange={e => setBulkGroup(e.target.value)}
+            placeholder="Group…"
+            style={{ ...bulkEditInputSx, width: 130 }}
+          />
+          <datalist id="fleet-bulk-group-options">
+            {[...registryGroups].sort((a, b) => a.localeCompare(b)).map(g => <option key={g} value={g} />)}
+          </datalist>
+          <button
+            onClick={applyBulkEdit}
+            disabled={!canApplyBulkEdit || applyingBulkEdit}
+            style={{
+              background: canApplyBulkEdit && !applyingBulkEdit ? '#1d4ed8' : '#1e2433',
+              color: canApplyBulkEdit && !applyingBulkEdit ? '#fff' : '#475569',
+              border: 'none', borderRadius: 5,
+              padding: '6px 14px', fontSize: 12, fontWeight: 600,
+              cursor: canApplyBulkEdit && !applyingBulkEdit ? 'pointer' : 'not-allowed',
+              flexShrink: 0,
+            }}
+          >
+            {applyingBulkEdit ? 'Applying…' : 'Apply to selected'}
+          </button>
+          <span style={{ fontSize: 11, color: '#334155', fontStyle: 'italic' }}>
+            Empty fields are left unchanged. Click any card to select it.
+          </span>
+        </div>
+      )}
 
       {/* Offline-with-job banner */}
       {awaitingOfflineReview.length > 0 && (
@@ -961,6 +1126,9 @@ export default function Fleet() {
                 colorHexMap={colorHexMap}
                 pinned={true}
                 onTogglePin={togglePin}
+                bulkEditMode={bulkEditMode}
+                bulkEditSelected={bulkEditIds.has(printer.id)}
+                onToggleBulkEdit={toggleBulkEditSelect}
               />
             ))}
           </div>
@@ -1014,6 +1182,9 @@ export default function Fleet() {
                     colorHexMap={colorHexMap}
                     pinned={pinnedIds.has(printer.id)}
                     onTogglePin={togglePin}
+                    bulkEditMode={bulkEditMode}
+                    bulkEditSelected={bulkEditIds.has(printer.id)}
+                    onToggleBulkEdit={toggleBulkEditSelect}
                   />
                 ))}
               </div>
@@ -1024,3 +1195,9 @@ export default function Fleet() {
     </div>
   );
 }
+
+const bulkEditInputSx = {
+  background: '#1e2433', border: '1px solid #2d3748',
+  borderRadius: 5, color: '#e2e8f0', fontSize: 12,
+  padding: '5px 10px', outline: 'none', width: 160,
+};

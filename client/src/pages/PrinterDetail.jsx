@@ -363,15 +363,15 @@ export default function PrinterDetail() {
 
   return (
     <div style={{ maxWidth: 720 }}>
-      {/* Back link */}
+      {/* Back link — Fleet, not the old standalone Printers directory (merged into it) */}
       <button
-        onClick={() => navigate('/printers')}
+        onClick={() => navigate('/fleet')}
         style={{
           background: 'none', border: 'none', color: '#3b82f6',
           fontSize: 13, cursor: 'pointer', padding: 0, marginBottom: 18,
         }}
       >
-        ← All Printers
+        ← Fleet
       </button>
 
       {/* Printer header card */}
