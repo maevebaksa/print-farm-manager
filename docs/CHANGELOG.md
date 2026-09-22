@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-09-22: estimated completion time for a project's whole queue
+
+Requested as part of a batch of quality-of-life items: estimated completion time for a whole project/queue, not just the current print. The scheduler already tracks each individual printer's time remaining (`printers.job_time_remaining`), but nothing rolled that up into "how long until this whole project is done".
+
+New shared `server/project-eta.js` (`estimateProjectRemaining`) computes a rough estimate, deliberately not a scheduling simulation: real telemetry (`job_time_remaining`) for whatever is printing right now on the project, plus the estimated time for everything not yet started or in flight (from each part's gcode `est_print_secs`), divided across every active printer whose model matches at least one of the project's gcodes. If any remaining part has no `est_print_secs` anywhere, that part's time is excluded from the sum and the response is flagged `incomplete: true` (a known lower bound) rather than silently under-reporting. If there is remaining work but no time estimate exists at all, `remaining_seconds` is `null`, not a misleading `0`.
+
+Exposed two ways from the same function: `GET /api/projects/:id/eta` for the Projects page's detail view, and `estimated_remaining_secs` / `estimated_remaining_incomplete` per project in `GET /api/dashboard` for the TV dashboard's Active Projects panel, so both surfaces stay consistent without duplicating the SQL.
+
+### Changes
+- `server/project-eta.js`: new, `estimateProjectRemaining(db, projectId)`.
+- `server/routes/projects.js`: new `GET /:id/eta`.
+- `server/routes/dashboard.js`: each active project in the response now includes `estimated_remaining_secs`/`estimated_remaining_incomplete`.
+- `client/src/pages/Dashboard.jsx`: Active Projects cards show a "Remaining" line under "So far" when an estimate is available.
+- `client/src/pages/Projects.jsx`: detail view header shows a "~X remaining" badge next to the status dropdown.
+- `docs/api.md`, `docs/web-app.md`: documented the new endpoint, dashboard fields, and UI.
+- `server/tests/project-eta.test.js`: new, direct coverage of `estimateProjectRemaining` (remaining-qty math, active/completed exclusion, multi-gcode averaging, in-progress telemetry, missing-estimate handling, per-project isolation).
+- `server/tests/dashboard.test.js`: `printers.job_time_remaining` added to the in-memory schema (now queried unconditionally per project); new test asserting the ETA fields are actually wired through the route.
+
+---
+
 ## 2026-09-22: extend the upload retry window across later scheduler sweeps
 
 Requested as part of a batch of quality-of-life items: auto-retry a failed upload N times before holding the printer, instead of holding on the first failure. The scheduler already retried an upload 3 times with 5s/60s backoff before holding (see `_executeUpload`), so the actual gap was survival time, not attempt count: a printer that is briefly rebooting, or a network blip that outlasts about a minute of backoff, still got held immediately. Requested fix, once that was clarified: more retries over a longer window, by continuing to retry on later scheduler sweeps rather than lengthening the immediate backoff.

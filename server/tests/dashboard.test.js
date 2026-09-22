@@ -48,6 +48,7 @@ beforeAll(() => {
       status TEXT DEFAULT 'UNKNOWN',
       is_held INTEGER DEFAULT 1,
       is_active INTEGER DEFAULT 1,
+      job_time_remaining INTEGER,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE jobs (
@@ -120,5 +121,38 @@ describe('GET /api/dashboard: active project ordering', () => {
 
     const res = await request(app).get('/api/dashboard');
     expect(res.body.active_projects.map(p => p.name)).toEqual(['Active']);
+  });
+});
+
+describe('GET /api/dashboard: per-project ETA fields', () => {
+  // Runs last in this file and cleans up its own parts/gcodes afterward (not just
+  // projects): a leftover part row referencing a deleted project would violate the
+  // foreign_keys=ON pragma the next time any earlier-ordered test in this file
+  // runs `DELETE FROM projects`, and this describe block never seeded either table
+  // before now, so it is the one responsible for not leaving them dirty.
+  afterEach(() => {
+    db.exec('DELETE FROM gcodes');
+    db.exec('DELETE FROM parts');
+    db.exec('DELETE FROM projects');
+  });
+
+  test('includes estimated_remaining_secs and estimated_remaining_incomplete, from server/project-eta.js', async () => {
+    const now = Date.now();
+    const projectId = seedProject('ETA Project', { status: 'active' });
+    const partId = db.prepare(`
+      INSERT INTO parts (project_id, name, target_qty, completed_qty, status, sort_order, created_at, updated_at)
+      VALUES (?, 'Widget', 2, 0, 'open', 0, ?, ?)
+    `).run(projectId, now, now).lastInsertRowid;
+    db.prepare(`
+      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, created_at)
+      VALUES (?, 'mk4s', 'f.bgcode', 'f.bgcode', 1, 300, ?)
+    `).run(partId, now);
+
+    const res = await request(app).get('/api/dashboard');
+    expect(res.status).toBe(200);
+    const proj = res.body.active_projects.find(p => p.id === projectId);
+    // No eligible printers registered: serial time (2 * 300s) with no parallelism to divide by.
+    expect(proj.estimated_remaining_secs).toBe(600);
+    expect(proj.estimated_remaining_incomplete).toBe(false);
   });
 });

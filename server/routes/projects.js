@@ -2,6 +2,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
+const { estimateProjectRemaining } = require('../project-eta');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 
@@ -17,6 +18,20 @@ module.exports = (db, scheduler = null) => {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     res.json(project);
+  });
+
+  // GET /api/projects/:id/eta: rough estimated time remaining for this project's
+  // whole queue, not just whatever is currently printing. See server/project-eta.js
+  // for what this is (and deliberately isn't: a real scheduling simulation).
+  router.get('/:id/eta', (req, res) => {
+    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const eta = estimateProjectRemaining(db, project.id);
+    res.json({
+      remaining_seconds: eta.remaining_seconds,
+      incomplete: eta.incomplete,
+      eligible_printer_count: eta.eligible_printer_count,
+    });
   });
 
   router.post('/', (req, res) => {

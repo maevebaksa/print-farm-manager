@@ -338,6 +338,25 @@ export default function Dashboard() {
                         )}
                       </div>
                     )}
+
+                    {proj.estimated_remaining_secs != null && (
+                      <div style={{
+                        borderTop: hasStats ? 'none' : '1px solid #1a2030',
+                        marginTop: hasStats ? 4 : 10, paddingTop: hasStats ? 0 : 8,
+                        fontSize: 11,
+                      }}>
+                        <span style={{ fontWeight: 700, color: '#cbd5e1' }}>Remaining</span>
+                        <span style={{ color: '#374151' }}> · </span>
+                        <span style={{ color: '#fbbf24' }}>
+                          {proj.estimated_remaining_secs > 0 ? `~${formatDuration(proj.estimated_remaining_secs)}` : 'done'}
+                        </span>
+                        {proj.estimated_remaining_incomplete && (
+                          <span style={{ color: '#64748b' }} title="Some remaining G-code files have no estimated print time set, so this is a lower bound">
+                            {' '}(at least)
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
