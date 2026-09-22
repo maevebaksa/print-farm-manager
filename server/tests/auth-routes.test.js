@@ -10,6 +10,7 @@
 const request  = require('supertest');
 const express  = require('express');
 const Database = require('better-sqlite3');
+const auth     = require('../auth');
 
 let db;
 let app;
@@ -23,7 +24,8 @@ beforeAll(() => {
       email         TEXT NOT NULL UNIQUE,
       name          TEXT NOT NULL,
       password_hash TEXT,
-      role          TEXT NOT NULL DEFAULT 'operator',
+      role          TEXT NOT NULL DEFAULT 'uploader',
+      approved      INTEGER NOT NULL DEFAULT 1,
       oidc_subject  TEXT UNIQUE,
       created_at    INTEGER NOT NULL,
       last_login_at INTEGER
@@ -132,6 +134,17 @@ describe('POST /api/auth/login', () => {
   test('email lookup is case-insensitive', async () => {
     const res = await request(app).post('/api/auth/login').send({ email: 'ADMIN@FARM.LOCAL', password: 'password123' });
     expect(res.status).toBe(200);
+  });
+
+  test('rejects a correct password for an unapproved account, and sets no cookie', async () => {
+    db.prepare(`
+      INSERT INTO users (email, name, password_hash, role, approved, created_at)
+      VALUES ('pending@farm.local', 'Pending', ?, 'uploader', 0, ?)
+    `).run(auth.hashPassword('password123'), Date.now());
+
+    const res = await request(app).post('/api/auth/login').send({ email: 'pending@farm.local', password: 'password123' });
+    expect(res.status).toBe(403);
+    expect(res.headers['set-cookie']).toBeUndefined();
   });
 });
 

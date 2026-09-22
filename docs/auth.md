@@ -19,7 +19,22 @@ Everything else, including `GET /api/auth/me`, requires authentication.
 
 ## Roles
 
-Two roles: `admin` and `operator`. The distinction only matters for account management: an operator has full access to every farm-operation route (printers, projects, jobs, dispatch). Only `admin` can reach `/api/users/*` (creating, editing, or removing accounts). The app refuses to demote or delete the last remaining admin, so the farm can never lock itself out of account management.
+Three roles: `admin`, `operator`, and `uploader`.
+
+- `admin` and `operator` have full access to every farm-operation route (printers, projects, jobs, dispatch). Only `admin` can reach `/api/users/*` (creating, editing, or removing accounts). The app refuses to demote or delete the last remaining admin, so the farm can never lock itself out of account management.
+- `uploader` has the same access as `operator` except it cannot release a held printer back into the dispatch queue: `POST /api/printers/:id/set-ready` and `POST /api/printers/set-ready-batch` (the Fleet page's "Set Ready" / "Set Ready (N)" actions) both 403 for it (`server/auth.js`'s `blockRole('uploader')`, applied in `server/index.js`). Confirming a printer's physical print outcome is an operator judgment call; an uploader account (for a script or a person who only queues work, e.g. via `POST /api/gcodes/upload` or an API key) is not expected to make it. Everything else an uploader does (uploading G-code, managing projects/parts, viewing the fleet, marking a print failed via Bad Print) is unrestricted.
+- `uploader` is the default role: `POST /api/users` with no `role` in the body creates one, and a brand new account auto-provisioned via OIDC login (see below) is also `uploader`, on the principle that a new account should start at the least-privileged role an admin then explicitly promotes, rather than defaulting to full operator access.
+
+`server/routes/users.js`'s `VALID_ROLES` is the single source of truth for the set of accepted role strings; both `POST /api/users` and `PUT /api/users/:id` validate against it (`400` for anything else).
+
+## Account approval
+
+Admin-only setting `require_uploader_approval` (Settings page → Account Approval, `PUT /api/settings/require_uploader_approval`, `"0"`/`"1"`, off by default). When on, a brand new `uploader` account that appears on its own via OIDC auto-provisioning (see below) is created with `users.approved = 0` instead of `1`, and cannot sign in until approved:
+
+- `POST /api/auth/login` `403`s a correct password for an unapproved account (`"This account is pending approval..."`), sets no session cookie.
+- `GET /api/auth/oidc/callback` likewise refuses to start a session for an unapproved account, `403` with an explanatory page instead of the usual redirect to `/`.
+- Approving is `POST /api/users/:id/approve`, reachable by `admin` **or** `operator` (`auth.requireAnyRole(['admin', 'operator'])`, not the admin-only gate the rest of user management uses): approving a coworker's new account is meant to be an everyday action, not one that needs an admin specifically. It is idempotent (approving an already-approved account is a no-op `200`, not an error). `GET /api/users/pending` (same admin-or-operator access) lists every unapproved account for the Users page's "Pending approval" section, which every role that can reach `/users` sees, even if the rest of the page (create/edit/delete, full user list) is hidden from a non-admin (`client/src/pages/Users.jsx`).
+- Only affects OIDC auto-provisioning. An account an admin creates directly via `POST /api/users` is always `approved = 1` regardless of the setting: an admin creating the account has already made the call this workflow exists to gate. An existing account is never retroactively affected by toggling the setting later, only a newly auto-provisioned one from that point on.
 
 ## First run: bootstrap
 
@@ -48,7 +63,7 @@ If any is missing, `oidc.isConfigured()` is false: the login page hides the "Sig
 
 1. `oidc_subject` matches an existing user: sign them in.
 2. No `oidc_subject` match, but `email` matches an existing (password-based) account: link `oidc_subject` onto that account rather than creating a duplicate, then sign them in.
-3. No match at all: auto-provision a brand new account, always as `operator`. OIDC login can never hand out `admin` by itself; an admin must explicitly promote the account afterward (Users page) if it needs more access.
+3. No match at all: auto-provision a brand new account, always as `uploader` (the default, least-privileged role, see Roles above). OIDC login can never hand out `admin` by itself; an admin must explicitly promote the account afterward (Users page) if it needs more access.
 
 ## Automatic SSO redirect
 
@@ -62,6 +77,6 @@ An admin can turn on the `auto_sso_redirect` setting (Settings → Single Sign-O
 
 ## What this does not do (yet)
 
-- No per-route permission scoping beyond the admin/operator split: an operator has the same farm-operation access an admin does.
+- No general per-route permission scoping: `blockRole('uploader')` on the two set-ready routes is a single, specific carve-out, not a broader permission system. An operator has the same farm-operation access an admin does, and an uploader has the same access as an operator apart from that one carve-out.
 - No API key scoping (read-only keys, route-restricted keys): every key is full access, matching its owner's role.
 - No password reset flow (an admin resets a user's password via `PUT /api/users/:id`) and no "forgot password" email, since this app has no outbound email integration.

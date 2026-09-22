@@ -8,6 +8,7 @@ import { webUiLink } from '../webUiLink';
 import { buildColorHexMap } from '../filamentColorHex';
 import ColorSwatch from '../components/ColorSwatch';
 import usePinnedPrinters from '../usePinnedPrinters';
+import { useAuth } from '../AuthContext';
 
 const STATUS_COLORS = {
   PRINTING:   { bg: '#1e3a5f', text: '#60a5fa', label: 'Printing' },
@@ -63,6 +64,13 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
   const shownStatus = displayStatus(printer);
   const style = statusStyle(shownStatus);
   const isUploading = shownStatus === 'UPLOADING';
+
+  // The uploader role cannot release a held printer back into the dispatch
+  // queue (server/index.js blocks POST .../set-ready for it); disable rather
+  // than hide the button, so it's clear why rather than silently missing.
+  const { user } = useAuth();
+  const canSetReady = user.role !== 'uploader';
+  const setReadyTitle = 'The uploader role cannot confirm a printer is ready for new work';
 
   // Confirmed-qty input — pre-filled from the last finished job's parts_per_plate.
   // Only shown when is_held and we know how many parts were on the plate.
@@ -262,8 +270,9 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               onClick={() => onSetReady(printer.id, printer.last_parts_per_plate != null ? parseInt(confirmedQty, 10) : null)}
-              title="Confirm the print was good — credits the part count and returns this printer to the dispatch queue"
-              style={{ flex: 1, background: '#166534', color: '#4ade80', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+              disabled={!canSetReady}
+              title={canSetReady ? "Confirm the print was good — credits the part count and returns this printer to the dispatch queue" : setReadyTitle}
+              style={{ flex: 1, background: '#166534', color: '#4ade80', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, fontWeight: 600, cursor: canSetReady ? 'pointer' : 'not-allowed', opacity: canSetReady ? 1 : 0.5 }}
             >
               ✓ Set Ready
             </button>
@@ -286,7 +295,9 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               onClick={() => onSetReady(printer.id, null)}
-              style={{ flex: 1, background: '#166534', color: '#4ade80', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+              disabled={!canSetReady}
+              title={canSetReady ? undefined : setReadyTitle}
+              style={{ flex: 1, background: '#166534', color: '#4ade80', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, fontWeight: 600, cursor: canSetReady ? 'pointer' : 'not-allowed', opacity: canSetReady ? 1 : 0.5 }}
             >
               ✓ Job OK
             </button>
@@ -308,14 +319,23 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
               : 'Upload failed after retries — check the printer. Is it actually printing?'}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => (printer.status === 'FINISHED' || printer.status === 'IDLE')
-                ? onSetReady(printer.id, null)
-                : onLinkJob(printer.id, true)}
-              style={{ flex: 1, background: '#166534', color: '#4ade80', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
-            >
-              {(printer.status === 'FINISHED' || printer.status === 'IDLE') ? '✓ Set Ready' : '✓ Job Running'}
-            </button>
+            {(() => {
+              // Only the FINISHED/IDLE branch hits set-ready (blocked for uploader);
+              // the printing branch calls onLinkJob, which keeps the printer busy
+              // rather than marking it idle, so it stays open to every role.
+              const isSetReadyBranch = printer.status === 'FINISHED' || printer.status === 'IDLE';
+              const disabled = isSetReadyBranch && !canSetReady;
+              return (
+                <button
+                  onClick={() => isSetReadyBranch ? onSetReady(printer.id, null) : onLinkJob(printer.id, true)}
+                  disabled={disabled}
+                  title={disabled ? setReadyTitle : undefined}
+                  style={{ flex: 1, background: '#166534', color: '#4ade80', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}
+                >
+                  {isSetReadyBranch ? '✓ Set Ready' : '✓ Job Running'}
+                </button>
+              );
+            })()}
             <button
               onClick={() => onUploadFailed(printer.id)}
               style={{ flex: 1, background: '#7f1d1d', color: '#f87171', border: 'none', borderRadius: 6, padding: '5px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
@@ -351,6 +371,8 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
 
 export default function Fleet() {
   const navigate                              = useNavigate();
+  const { user }                              = useAuth();
+  const canSetReady                           = user.role !== 'uploader';
   const [confirm, confirmModal]               = useConfirm();
   const [showToast, toastEl]                  = useToast();
   const [printers, setPrinters]               = useState([]);
@@ -821,7 +843,9 @@ export default function Fleet() {
               </button>
               <button
                 onClick={setReadyForSelected}
-                style={{ background: '#15803d', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                disabled={!canSetReady}
+                title={canSetReady ? undefined : 'The uploader role cannot confirm a printer is ready for new work'}
+                style={{ background: '#15803d', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: canSetReady ? 'pointer' : 'not-allowed', opacity: canSetReady ? 1 : 0.5 }}
               >
                 ✓ Set Ready ({selectedForReady.size})
               </button>

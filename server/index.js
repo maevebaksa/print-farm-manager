@@ -61,7 +61,10 @@ app.use('/api/auth', authRouter);
 app.use('/api', auth.requireAuth(db));
 
 // API routes
-app.use('/api/users',           auth.requireRole('admin'), usersRouter);
+// Not blanket admin-only: usersRouter gates each of its own routes (most
+// admin-only, the pending-approval routes admin-or-operator). See its header
+// comment.
+app.use('/api/users',           usersRouter);
 app.use('/api/api-keys',        apiKeysRouter);
 app.use('/api/printers',        printersRouter);
 app.use('/api/printers/:id/jobs', printerJobsRouter);
@@ -138,8 +141,10 @@ const server = app.listen(PORT, () => {
   // batched sweep, which keeps pulling from the ready queue until dispatch_batch_size
   // printers actually have a job reserved (or the queue runs out), not a fixed chunk
   // of dispatch_batch_size printers evaluated at a time (see _sweepInBatches).
-  // Used by the "Set Ready (N)" action in the Fleet UI.
-  app.post('/api/printers/set-ready-batch', (req, res) => {
+  // Used by the "Set Ready (N)" action in the Fleet UI. Blocked for the uploader role:
+  // confirming a printer is idle and ready for new work is an operator judgment call
+  // about physical print quality, not something an uploader account should do.
+  app.post('/api/printers/set-ready-batch', auth.blockRole('uploader'), (req, res) => {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ error: 'ids array required' });
@@ -174,7 +179,8 @@ const server = app.listen(PORT, () => {
     res.json(updated);
   });
 
-  // Set a held printer ready — releases hold and dispatches next job to it.
+  // Set a held printer ready — releases hold and dispatches next job to it. Blocked
+  // for the uploader role, same reasoning as set-ready-batch above.
   //
   // Two cases:
   //
@@ -186,7 +192,7 @@ const server = app.listen(PORT, () => {
   // Operator clicking Set Ready is the explicit success confirmation. We credit qty now
   // (using confirmed_qty if provided, otherwise the full parts_per_plate) and mark the
   // job finished. No assumptions are made without operator input.
-  app.post('/api/printers/:id/set-ready', (req, res) => {
+  app.post('/api/printers/:id/set-ready', auth.blockRole('uploader'), (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
 

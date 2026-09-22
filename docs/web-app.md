@@ -187,6 +187,8 @@ Filter chips in the Fleet header derive their text color from the same `STATUS_C
 
 **Confirmation button visibility:** "Set Ready" and "Bad Print" buttons (and the green card highlight) appear when `is_held === 1` AND `status` is `FINISHED`, `IDLE`, or `STOPPED`.
 
+**Uploader role:** every "Set Ready"-flavored button (including "Job OK" and the FINISHED/IDLE branch of "Job Running", and the batch "Set Ready (N)" button) is disabled, not hidden, with a title explaining why (`useAuth()`'s `user.role !== 'uploader'` gate, mirrored server-side by `server/auth.js`'s `blockRole('uploader')` on both set-ready routes: this client check is a UX nicety, not the source of truth). "Bad Print" and the printing-branch of "Job Running" (which links an already-running job rather than marking the printer idle) stay enabled for every role. See [docs/auth.md](auth.md)'s Roles section.
+
 **Stopped printers:** `STOPPED` is included because some printers (Bambu) latch the stopped state until the next print starts, with nothing to acknowledge on the printer screen — confirming here is the only way to resume dispatch without power-cycling the machine. For stopped printers the `Good: N / M` input defaults to **0** (the operator deliberately stopped the print, so crediting parts must be an explicit choice); this also excludes them from batch Set Ready via the partial-count rule, forcing individual confirmation. Server-side, set-ready resolves the stopped (`cancelled`) job when it is newer than the last finished job, crediting `confirmed_qty` — it is never applied as a delta against the older finished job.
 
 A STOPPED printer that is **not** held (its outcome was already resolved, or the stopped print was never a farm job) shows no buttons — instead it is dispatch-eligible: `sweepIdlePrinters` includes unheld STOPPED printers, so it returns to service on the next sweep (server start, project activation, or Sweep for Jobs). The card notes this.
@@ -294,6 +296,8 @@ Responsive grid of decommissioned printers — printers that have been pulled fr
 
 **Single Sign-On section (admin only, hidden entirely for an operator):** a checkbox for the `auto_sso_redirect` setting, saved immediately on toggle (`PUT /api/settings/auto_sso_redirect`) rather than needing a separate Save button. If OIDC itself isn't configured (`GET /api/auth/status`'s `oidcEnabled`), the checkbox is replaced with a note pointing at the environment variables instead, since the toggle would do nothing yet. See `docs/auth.md`'s "Automatic SSO redirect" section for the full behavior, including the `/backup-login` fallback.
 
+**Account Approval section (admin only, hidden entirely for anyone else):** a checkbox for the `require_uploader_approval` setting, same immediate-save-on-toggle pattern as Single Sign-On above (`PUT /api/settings/require_uploader_approval`). See `docs/auth.md`'s "Account approval" section.
+
 **Dispatch Settings section:** the `dispatch_batch_size` concurrency target (`PUT /api/settings/dispatch_batch_size`), plus a **Color tolerance** sub-section (`color_tolerance`, `PUT /api/settings/color_tolerance`): a number input (0-450) with suggested values (`<datalist>`, matching the Group field's autocomplete pattern) explaining what a given number roughly means ("Off", "Very close", "Same color family", "Loose match"). `0` (default) keeps color matching exact-only. See `docs/filaments.md` for how this reads `filament_colors.hex_color` and `server/scheduler.js` for the matching rule itself.
 
 A third **Upload retry window** sub-section (`upload_retry_window_min`, `PUT /api/settings/upload_retry_window_min`): a number input (1-180 minutes, default 15) for how long the scheduler keeps retrying a failing upload on later sweeps before holding the printer for operator confirmation. See `jobs.upload_first_failed_at` in [docs/database.md](database.md) and the scheduler note in [docs/api.md](api.md).
@@ -369,7 +373,12 @@ Self-service page for the signed-in user's own API keys. `GET /api/api-keys` lis
 
 `client/src/pages/Users.jsx`
 
-Admin-only account management (see [docs/auth.md](auth.md) for the role model). Lists every user via `GET /api/users`, with an inline "+ Add User" form (`POST /api/users`, password optional for an SSO-only account) and a role `<select>` per row (`PUT /api/users/:id`) that updates immediately on change. Removing a user (`DELETE /api/users/:id`) goes through the shared `useConfirm` modal; the server itself refuses to demote or delete the last remaining admin, and refuses to delete the account you're currently signed in as, so this page just surfaces whatever error message comes back rather than duplicating those checks client-side.
+Reachable by `admin` and `operator` (`App.jsx`'s sidebar and route), but the page itself renders very differently for each (see [docs/auth.md](auth.md) for the role model):
+
+- **Admin:** full account management, unchanged from before the uploader role. Lists every user via `GET /api/users`, with an inline "+ Add User" form (`POST /api/users`, role defaults to `uploader`, password optional for an SSO-only account) and a role `<select>` per row (`PUT /api/users/:id`) that updates immediately on change. Removing a user (`DELETE /api/users/:id`) goes through the shared `useConfirm` modal; the server itself refuses to demote or delete the last remaining admin, and refuses to delete the account you're currently signed in as, so this page just surfaces whatever error message comes back rather than duplicating those checks client-side. A row for an unapproved account also shows a "Pending" badge.
+- **Operator:** only the Pending Approval section below; no create/edit/delete/role-change UI, since `GET /api/users` itself is admin-only and 403s for an operator (the page never calls it unless the signed-in user is an admin).
+
+**Pending Approval section** (both roles, `GET /api/users/pending`): rendered above everything else when there is at least one unapproved account, with an Approve button per row (`POST /api/users/:id/approve`). See `require_uploader_approval` in the Settings Page section above and `docs/auth.md`'s "Account approval" section.
 
 ## Live Update Pattern
 

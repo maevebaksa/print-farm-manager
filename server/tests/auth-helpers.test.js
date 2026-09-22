@@ -138,3 +138,62 @@ describe('requireRole middleware', () => {
     expect(next).toHaveBeenCalled();
   });
 });
+
+describe('requireAnyRole middleware', () => {
+  test('403s when req.user.role is not in the list', () => {
+    const req = { user: { role: 'uploader' } };
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const next = jest.fn();
+    auth.requireAnyRole(['admin', 'operator'])(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('calls next() when req.user.role is any listed role', () => {
+    for (const role of ['admin', 'operator']) {
+      const req = { user: { role } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const next = jest.fn();
+      auth.requireAnyRole(['admin', 'operator'])(req, res, next);
+      expect(next).toHaveBeenCalled();
+    }
+  });
+
+  test('403s with no req.user at all', () => {
+    const req = {};
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const next = jest.fn();
+    auth.requireAnyRole(['admin', 'operator'])(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('blockRole middleware', () => {
+  test('403s when req.user.role matches the blocked role', () => {
+    const req = { user: { role: 'uploader' } };
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const next = jest.fn();
+    auth.blockRole('uploader')(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('calls next() for any other role', () => {
+    for (const role of ['admin', 'operator']) {
+      const req = { user: { role } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const next = jest.fn();
+      auth.blockRole('uploader')(req, res, next);
+      expect(next).toHaveBeenCalled();
+    }
+  });
+
+  test('uses the custom message when provided', () => {
+    const req = { user: { role: 'uploader' } };
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const next = jest.fn();
+    auth.blockRole('uploader', 'custom denial message')(req, res, next);
+    expect(res.json).toHaveBeenCalledWith({ error: 'custom denial message' });
+  });
+});

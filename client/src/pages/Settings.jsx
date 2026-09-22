@@ -394,6 +394,13 @@ export default function Settings() {
   const [oidcEnabled, setOidcEnabled] = useState(false);
   const [ssoError, setSsoError] = useState(null);
 
+  // Require uploader approval: admin-only (server enforces this too; see
+  // routes/settings.js). When on, a brand new uploader account auto-provisioned
+  // via OIDC login cannot sign in until an operator or admin approves it
+  // (Users page). Never affects an account an admin creates directly.
+  const [requireUploaderApproval, setRequireUploaderApproval] = useState(false);
+  const [approvalError, setApprovalError] = useState(null);
+
   useEffect(() => {
     fetch('/api/settings')
       .then(r => r.json())
@@ -403,6 +410,7 @@ export default function Settings() {
         setAutoSsoRedirect(data.auto_sso_redirect === '1');
         setColorTolerance(data.color_tolerance ?? '0');
         setRetryWindow(data.upload_retry_window_min ?? '15');
+        setRequireUploaderApproval(data.require_uploader_approval === '1');
       })
       .catch(() => {});
     if (user?.role === 'admin') {
@@ -426,6 +434,25 @@ export default function Settings() {
     } catch (err) {
       setAutoSsoRedirect(previous);
       setSsoError(err.message);
+    }
+  }
+
+  async function handleToggleRequireUploaderApproval(checked) {
+    setApprovalError(null);
+    const previous = requireUploaderApproval;
+    setRequireUploaderApproval(checked); // optimistic: simple on/off, no Save button
+    try {
+      const res = await fetch('/api/settings/require_uploader_approval', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: checked ? '1' : '0' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      showToast(checked ? 'New uploader accounts will require approval' : 'New uploader accounts no longer require approval');
+    } catch (err) {
+      setRequireUploaderApproval(previous);
+      setApprovalError(err.message);
     }
   }
 
@@ -1534,6 +1561,31 @@ export default function Settings() {
           )}
           {ssoError && (
             <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{ssoError}</div>
+          )}
+        </section>
+      )}
+
+      {/* Account Approval: admin only; see docs/auth.md's Roles section */}
+      {user?.role === 'admin' && (
+        <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Account Approval</h2>
+          <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
+            When enabled, a brand new <code style={{ fontFamily: 'monospace', color: '#94a3b8' }}>uploader</code>{' '}
+            account created on its own via single sign-on cannot sign in until an operator or admin
+            approves it from the Users page. Never affects an account an admin creates directly, or
+            an existing account.
+          </p>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#e2e8f0', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={requireUploaderApproval}
+              onChange={e => handleToggleRequireUploaderApproval(e.target.checked)}
+              style={{ accentColor: '#3b82f6' }}
+            />
+            Require approval for new uploader accounts
+          </label>
+          {approvalError && (
+            <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{approvalError}</div>
           )}
         </section>
       )}

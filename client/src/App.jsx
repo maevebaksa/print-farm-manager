@@ -26,7 +26,10 @@ function navItems(role) {
     { to: '/decommissioned', label: 'Decommissioned' },
     { to: '/settings',       label: 'Settings' },
   ];
-  if (role === 'admin') items.push({ to: '/users', label: 'Users' });
+  // An operator can also reach /users to approve pending uploader accounts,
+  // even though the page hides full user management from anyone but an admin
+  // (see client/src/pages/Users.jsx).
+  if (role === 'admin' || role === 'operator') items.push({ to: '/users', label: 'Users' });
   items.push({ to: '/account', label: 'Account' });
   return items;
 }
@@ -174,7 +177,7 @@ export default function App() {
             <Route path="/jobs"            element={<Jobs />} />
             <Route path="/decommissioned"  element={<Decommissioned />} />
             <Route path="/settings"        element={<Settings />} />
-            {user.role === 'admin' && <Route path="/users" element={<Users />} />}
+            {(user.role === 'admin' || user.role === 'operator') && <Route path="/users" element={<Users />} />}
             <Route path="/account"         element={<Account />} />
           </Routes>
         </main>
