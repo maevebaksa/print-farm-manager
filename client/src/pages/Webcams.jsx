@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { rotationFitTransform, useNaturalSize } from '../cameraTransform';
+import { buildColorHexMap } from '../filamentColorHex';
+import ColorSwatch from '../components/ColorSwatch';
 
 const SNAPSHOT_REFRESH_MS = 30000;
 
 // One card. Pulled out of the page's map() so its rotation-fit natural-size
 // state (see cameraTransform.js) is a proper per-image hook instance instead
 // of one shared state object keyed by printer id.
-function WebcamCard({ printer, camera, isLive, onToggleLive, refreshedAt }) {
+function WebcamCard({ printer, camera, isLive, onToggleLive, refreshedAt, colorHexMap }) {
   const [natural, onImgLoad] = useNaturalSize();
   const lanes = printer.lanes || [];
 
@@ -39,9 +41,20 @@ function WebcamCard({ printer, camera, isLive, onToggleLive, refreshedAt }) {
         <div style={{ fontSize: 11, color: '#7dd3fc', marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {lanes.length > 0
             ? lanes.map(l => (
-                <span key={l.lane_index}>Lane {l.lane_index}: {[l.material, l.color].filter(Boolean).join(' · ') || '(not set)'}</span>
+                // l.color is a hex value reported directly by the lane sync plugin
+                // (server/drivers/klipper.js getLaneData), not a Filament Library
+                // color name: no colorHexMap lookup needed, unlike the fallback below.
+                <span key={l.lane_index} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <ColorSwatch hex={l.color} />
+                  Lane {l.lane_index}: {[l.material, l.color].filter(Boolean).join(' · ') || '(not set)'}
+                </span>
               ))
-            : <span>{[printer.loaded_material, printer.loaded_color].filter(Boolean).join(' · ')}</span>}
+            : (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <ColorSwatch hex={colorHexMap.get(printer.loaded_color)} />
+                  {[printer.loaded_material, printer.loaded_color].filter(Boolean).join(' · ')}
+                </span>
+              )}
         </div>
       )}
       {isLive ? (
@@ -91,6 +104,7 @@ export default function Webcams() {
   const [cameras, setCameras] = useState({}); // { [printerId]: { available, snapshotUrl, streamUrl } }
   const [refreshedAt, setRefreshedAt] = useState(Date.now());
   const [liveViewId, setLiveViewId] = useState(null);
+  const [colorHexMap, setColorHexMap] = useState(new Map());
   const fetchedCameras = useRef(new Set());
 
   const fetchPrinters = useCallback(async () => {
@@ -103,6 +117,12 @@ export default function Webcams() {
     const interval = setInterval(fetchPrinters, 15000);
     return () => clearInterval(interval);
   }, [fetchPrinters]);
+
+  // Only needed for the legacy loaded_color fallback (a Filament Library color
+  // name); lane colors are already raw hex, see WebcamCard above.
+  useEffect(() => {
+    fetch('/api/filaments/colors').then(r => r.json()).then(colors => setColorHexMap(buildColorHexMap(colors))).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!printers) return;
@@ -145,6 +165,7 @@ export default function Webcams() {
             isLive={liveViewId === p.id}
             onToggleLive={() => setLiveViewId(liveViewId === p.id ? null : p.id)}
             refreshedAt={refreshedAt}
+            colorHexMap={colorHexMap}
           />
         ))}
       </div>
