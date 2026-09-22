@@ -2,6 +2,60 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 
+// Classic Levenshtein (edit) distance: the minimum number of single-character
+// insertions, deletions, or substitutions to turn `a` into `b`. Only the
+// current and previous DP rows are kept (not the full a.length x b.length
+// matrix) since nothing else here ever needs to see past that.
+function editDistance(a, b) {
+  let prevRow = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = a[i - 1] === b[j - 1]
+        ? prevRow[j - 1]
+        : 1 + Math.min(prevRow[j - 1], prevRow[j], row[j - 1]);
+    }
+    prevRow = row;
+  }
+  return prevRow[b.length];
+}
+
+// How many typos (insertions/deletions/substitutions) a query of this length
+// is allowed before a candidate stops counting as a match. Scales with query
+// length so a 3-character query isn't swamped by near-arbitrary matches, but
+// a longer one still tolerates more than a single slip.
+function typoTolerance(queryLength) {
+  if (queryLength <= 3) return 0; // too short to safely fuzz: exact substring only
+  return Math.floor((queryLength - 1) / 4) + 1;
+}
+
+// Lower is a better match; null means no match at all. An exact substring
+// match always scores 0 (unchanged from the plain .includes() this replaces,
+// so a correctly-typed query is never reordered by the fuzzy fallback below
+// it). Failing that, slides a query-length window across the label looking
+// for the closest typo'd match: windows one shorter/longer than the query
+// are included too, so a single missing or extra character (not just a wrong
+// one) still counts as one typo, not a length mismatch that inflates the
+// distance past the tolerance.
+function fuzzyScore(label, query) {
+  const text = label.toLowerCase();
+  if (text.includes(query)) return 0;
+
+  const tolerance = typoTolerance(query.length);
+  if (tolerance === 0) return null;
+
+  let best = null;
+  for (const windowLen of [query.length - 1, query.length, query.length + 1]) {
+    if (windowLen <= 0) continue;
+    for (let start = 0; start <= text.length - windowLen; start++) {
+      const dist = editDistance(query, text.slice(start, start + windowLen));
+      if (dist <= tolerance && (best === null || dist < best)) best = dist;
+      if (best === 1) break; // won't find better than 1 without an exact match, which is already handled above
+    }
+  }
+  return best;
+}
+
 // Global jump-to-anything search: Cmd+K (Mac) / Ctrl+K (elsewhere), or the
 // sidebar's Search button, which dispatches 'openCommandPalette' (same window
 // CustomEvent pattern App.jsx already uses for farmNameChanged: this needs
@@ -77,23 +131,27 @@ export default function CommandPalette() {
     if (!q) return []; // nothing typed: don't dump the whole fleet, this is a jump-to tool
     const list = [];
     (printers || []).forEach(p => {
-      if (p.name.toLowerCase().includes(q)) {
-        list.push({ kind: 'Printer', id: p.id, label: p.name, sub: p.model, action: () => navigate(`/printers/${p.id}`) });
-      }
+      const score = fuzzyScore(p.name, q);
+      if (score !== null) list.push({ kind: 'Printer', id: p.id, label: p.name, sub: p.model, score, action: () => navigate(`/printers/${p.id}`) });
     });
     (projects || []).forEach(p => {
-      if (p.name.toLowerCase().includes(q)) {
-        list.push({ kind: 'Project', id: p.id, label: p.name, sub: p.status, action: () => navigate(`/projects?open=${p.id}`) });
-      }
+      const score = fuzzyScore(p.name, q);
+      if (score !== null) list.push({ kind: 'Project', id: p.id, label: p.name, sub: p.status, score, action: () => navigate(`/projects?open=${p.id}`) });
     });
     (parts || []).forEach(p => {
-      if (p.name.toLowerCase().includes(q)) {
+      const score = fuzzyScore(p.name, q);
+      if (score !== null) {
         list.push({
-          kind: 'Part', id: p.id, label: p.name, sub: projectNameById.get(p.project_id) || '',
+          kind: 'Part', id: p.id, label: p.name, sub: projectNameById.get(p.project_id) || '', score,
           action: () => navigate(`/projects?open=${p.project_id}&part=${p.id}`),
         });
       }
     });
+    // Best matches first (lower score = closer): an exact substring match
+    // (score 0) always outranks a typo'd one, same ordering a plain
+    // .includes() filter always gave for the exact-match case, with
+    // fuzzy matches now filling in below rather than being absent entirely.
+    list.sort((a, b) => a.score - b.score);
     return list.slice(0, 30); // cap: a jump-to tool, not a report
   }, [query, printers, projects, parts, projectNameById, navigate]);
 
