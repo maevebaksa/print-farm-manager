@@ -120,14 +120,6 @@ try { db.exec('ALTER TABLE projects ADD COLUMN allowed_groups TEXT'); } catch (_
 try { db.exec('ALTER TABLE printer_events ADD COLUMN user_id INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE printer_events ADD COLUMN user_name TEXT'); } catch (_) {}
 
-// When an upload's immediate retries (see scheduler.js's _executeUpload) are all
-// exhausted but the printer still looks alive, the job is left 'uploading' rather
-// than held right away: this timestamp marks when that first happened, so later
-// scheduler sweeps (poller.js's pollComplete, every 15s) know how long they have
-// been retrying and when the configurable upload_retry_window_min setting has
-// finally run out. NULL for a job that has never failed an upload attempt.
-try { db.exec('ALTER TABLE jobs ADD COLUMN upload_first_failed_at INTEGER'); } catch (_) {}
-
 // Printer models — source of truth for which models this farm supports.
 // New installs start empty; operator adds models in Settings.
 // Existing installs auto-seed from models already referenced in the live DB.
@@ -364,6 +356,18 @@ if (gcodeIdCol && gcodeIdCol.notnull === 1) {
     PRAGMA foreign_keys = ON;
   `);
 }
+
+// When an upload's immediate retries (see scheduler.js's _executeUpload) are all
+// exhausted but the printer still looks alive, the job is left 'uploading' rather
+// than held right away: this timestamp marks when that first happened, so later
+// scheduler sweeps (poller.js's pollComplete, every 15s) know how long they have
+// been retrying and when the configurable upload_retry_window_min setting has
+// finally run out. NULL for a job that has never failed an upload attempt.
+// Placed after the jobs_migrated block above (not before it): that block's
+// INSERT INTO jobs_migrated SELECT * FROM jobs relies on a fixed, hardcoded
+// column list matching the live jobs table exactly. Adding a column to jobs
+// before it runs breaks that INSERT with a column-count mismatch.
+try { db.exec('ALTER TABLE jobs ADD COLUMN upload_first_failed_at INTEGER'); } catch (_) {}
 
 // Backfill decommission events for printers that were decommissioned before the
 // printer_events table existed. Runs once per printer (checked via event absence).
