@@ -17,14 +17,16 @@
 const request  = require('supertest');
 const express  = require('express');
 const Database = require('better-sqlite3');
+const auth     = require('../auth');
 
 // ── Minimal express app that replicates the set-ready route ──────────────────
 
-function makeApp(db, scheduler = { scheduleForPrinter: jest.fn(), startedAt: 0 }) {
+function makeApp(db, scheduler = { scheduleForPrinter: jest.fn(), startedAt: 0 }, user = { id: 1, role: 'admin' }) {
   const app = express();
   app.use(express.json());
+  app.use((req, res, next) => { req.user = user; next(); });
 
-  app.post('/api/printers/:id/set-ready', (req, res) => {
+  app.post('/api/printers/:id/set-ready', auth.blockRole('uploader'), (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
 
@@ -233,6 +235,30 @@ describe('POST /api/printers/:id/set-ready — 404', () => {
     const app = makeApp(makeDb());
     const res = await request(app).post('/api/printers/99999/set-ready').send({});
     expect(res.status).toBe(404);
+  });
+});
+
+// ── Role gate ────────────────────────────────────────────────────────────────
+
+describe('POST /api/printers/:id/set-ready: uploader role', () => {
+  test('403s for the uploader role, even for a real printer, before touching any job', async () => {
+    const db        = makeDb();
+    const printerId = seedPrinter(db);
+    const app       = makeApp(db, undefined, { id: 1, role: 'uploader' });
+    const res       = await request(app).post(`/api/printers/${printerId}/set-ready`).send({});
+    expect(res.status).toBe(403);
+    // Hold is untouched: an uploader's blocked attempt has no side effect.
+    expect(db.prepare('SELECT is_held FROM printers WHERE id = ?').get(printerId).is_held).toBe(1);
+  });
+
+  test('admin and operator are unaffected', async () => {
+    for (const role of ['admin', 'operator']) {
+      const db        = makeDb();
+      const printerId = seedPrinter(db);
+      const app       = makeApp(db, undefined, { id: 1, role });
+      const res       = await request(app).post(`/api/printers/${printerId}/set-ready`).send({});
+      expect(res.status).toBe(200);
+    }
   });
 });
 

@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-09-22: uploader role, and optional approval for new uploader accounts
+
+Requested: a new `uploader` role that cannot mark printers as idle, made the default role; plus, in a follow-up request, an admin-toggleable requirement that a new uploader account wait for an operator or admin to approve it before it can sign in.
+
+Third role alongside `admin`/`operator`. It has full operator access except it cannot release a held printer back into the dispatch queue: `POST /api/printers/:id/set-ready` and `POST /api/printers/set-ready-batch` (Fleet's "Set Ready" / "Set Ready (N)") now 403 for it, via a new `blockRole()` auth middleware (the inverse of the existing `requireRole()`: lets every role through except the named one, rather than requiring an exact match). Confirming a printer's physical print outcome stays an operator judgment call; an uploader account (built for a script, or a person who only queues work) was never expected to make it. `uploader` is now the default role everywhere an account can be created without an explicit choice: `POST /api/users` with no `role`, and a brand new account auto-provisioned via OIDC login, both least-privilege by default rather than full operator access.
+
+Along the way, fixed a real bug the new role would otherwise have reintroduced: the "refuse to demote the last admin" guard in `PUT /api/users/:id` checked `role === 'operator'` specifically, so demoting the last admin straight to the new `uploader` role would have slipped past it. Now checks `role !== 'admin'`, catching a demotion to any other role.
+
+The approval workflow: a new admin-only setting, `require_uploader_approval` (Settings → Account Approval, off by default). When on, a brand new uploader account that appears on its own via OIDC auto-provisioning is created unapproved (`users.approved = 0`) and cannot sign in until approved: both password login and the OIDC callback 403 it with an explanatory message, setting no session cookie. Approving is deliberately not gated to admin: `POST /api/users/:id/approve` (and the paired `GET /api/users/pending` list) use a new `requireAnyRole()` middleware so an operator can approve a new coworker's account without needing an admin to do it, even though the rest of user management (`GET /api/users`, create, edit, delete) stays admin-only. This meant moving `/api/users`'s auth gate from a single blanket `requireRole('admin')` at the mount point (`server/index.js`) to per-route gates inside `routes/users.js` itself, so the two approval routes could use a different one. Only OIDC auto-provisioning is gated: an admin creating an account directly via `POST /api/users` has already made the call this workflow exists to gate, so that path is always created approved. An existing account is never retroactively affected by toggling the setting later.
+
+### Changes
+- `server/auth.js`: new `blockRole(role, message)` and `requireAnyRole(roles)` middleware.
+- `server/db.js`: `users.role` default changed to `'uploader'`; new `users.approved` column (migration, default `1`).
+- `server/index.js`: `blockRole('uploader')` on both set-ready routes; `/api/users` mount no longer blanket-gated (see routes/users.js).
+- `server/routes/users.js`: `VALID_ROLES` gains `uploader`; default role on create is `uploader`; the last-admin demote guard now checks `role !== 'admin'`; per-route auth gates (admin-only for full management, admin-or-operator for the two new pending/approve routes); new `GET /pending` and `POST /:id/approve`; `PUT /:id` also accepts `approved`.
+- `server/routes/auth.js`: OIDC auto-provisioning creates `uploader` (was `operator`) and sets `approved` from the `require_uploader_approval` setting; both password login and the OIDC callback refuse to start a session for an unapproved account.
+- `server/routes/settings.js`: new admin-only `require_uploader_approval` setting (`"0"`/`"1"`).
+- `client/src/pages/Users.jsx`: new Pending Approval section (visible to admin and operator) with an Approve button; role dropdown and default gain `uploader`; full management UI stays admin-only.
+- `client/src/App.jsx`: `/users` route and sidebar link now also reachable by `operator` (Users.jsx itself renders the cut-down view for that role).
+- `client/src/pages/Settings.jsx`: new Account Approval section (admin-only) toggling `require_uploader_approval`.
+- `client/src/pages/Fleet.jsx`: every Set Ready-flavored button is disabled (not hidden) with an explanatory title for the uploader role; "Bad Print" and the "Job Running" (link an in-progress job) path stay enabled for every role.
+- `docs/auth.md`, `docs/api.md`, `docs/web-app.md`: documented the role, the approval workflow, and the UI changes.
+- `server/tests/auth-helpers.test.js`: direct coverage of `blockRole`/`requireAnyRole`.
+- `server/tests/users-routes.test.js`: per-route admin gating, the uploader role (default, always-approved on admin create, the demote-guard fix), and the new pending/approve routes (admin, operator, and a blocked uploader).
+- `server/tests/auth-routes.test.js`: login 403s for an unapproved account and sets no cookie.
+- `server/tests/settings.test.js`: validation and admin-only gating for the new setting.
+- `server/tests/set-ready.test.js`, new `server/tests/set-ready-batch.test.js`: the uploader role is blocked on both set-ready routes (a minimal standalone replica for the batch route, since its real handler depends on the events.js singleton; see the new file's header comment).
+
+---
+
 ## 2026-09-22: fix Webcams page showing a raw hex code instead of a color swatch
 
 Reported: the Webcams page's per-lane "what's loaded" lines showed text like `Lane 0: PLA · #FDFF00`, the hex code printed as a literal string, with no actual colored swatch. Earlier this session's swatch work (see the 2026-09-XX filament color entries below) only reached Fleet.jsx and PrinterDetail.jsx; Webcams.jsx was never touched, so its lane rows kept rendering plain text.

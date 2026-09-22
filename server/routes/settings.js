@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min']);
+const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min', 'require_uploader_approval']);
 // RGB Euclidean distance (server/color-distance.js) ranges 0 (identical) to
 // ~441.7 (black vs white): anything past ~450 would treat literally any two
 // colors as interchangeable, which is never a useful tolerance.
@@ -10,7 +10,7 @@ const MAX_COLOR_TOLERANCE = 450;
 // authenticated user, matching this router's existing behavior. This one
 // changes what every logged-out visitor sees on the login page, so it is
 // scoped to admin the same way /api/users is (see server/index.js).
-const ADMIN_ONLY_KEYS = new Set(['auto_sso_redirect']);
+const ADMIN_ONLY_KEYS = new Set(['auto_sso_redirect', 'require_uploader_approval']);
 
 module.exports = (db) => {
   // GET /api/settings — returns all settings as { key: value, ... }
@@ -62,6 +62,10 @@ module.exports = (db) => {
       if (isNaN(n) || n < 1 || n > 180) {
         return res.status(400).json({ error: 'upload_retry_window_min must be an integer between 1 and 180' });
       }
+    }
+
+    if (key === 'require_uploader_approval' && value !== '0' && value !== '1') {
+      return res.status(400).json({ error: 'require_uploader_approval must be "0" or "1"' });
     }
 
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, String(value));

@@ -50,7 +50,7 @@ Public.
 
 **Body:** `{ "email": "...", "password": "..." }`
 
-Returns `200` with the user and sets the session cookie. `401 { "error": "Invalid email or password" }` on any mismatch (unknown email and wrong password are indistinguishable on purpose).
+Returns `200` with the user and sets the session cookie. `401 { "error": "Invalid email or password" }` on any mismatch (unknown email and wrong password are indistinguishable on purpose). `403 { "error": "This account is pending approval from an operator or admin." }` for a correct password on an unapproved account (see `require_uploader_approval` in Settings and [docs/auth.md](auth.md)); no cookie is set.
 
 ### `POST /api/auth/logout`
 
@@ -66,31 +66,45 @@ Public. Redirects to the configured OIDC provider. `404 { "error": "OIDC is not 
 
 ### `GET /api/auth/oidc/callback`
 
-Public. This is the redirect target the IdP calls back to: exchanges the authorization code, resolves or provisions a local user (always as `operator` when newly provisioned; see [docs/auth.md](auth.md)), sets the session cookie, and redirects to `/`. Returns a plain-text `400` or `502` on an expired/invalid flow or an IdP error, rather than JSON, since this endpoint is only ever reached via browser redirect, never called directly by the client.
+Public. This is the redirect target the IdP calls back to: exchanges the authorization code, resolves or provisions a local user (always as `uploader` when newly provisioned; see [docs/auth.md](auth.md)), sets the session cookie, and redirects to `/`. Returns a plain-text `400` or `502` on an expired/invalid flow or an IdP error, rather than JSON, since this endpoint is only ever reached via browser redirect, never called directly by the client. `403` with a plain-text explanation instead of a redirect if the newly (or previously) provisioned account is unapproved (`require_uploader_approval`; see [docs/auth.md](auth.md)); no session cookie is set.
 
 ---
 
 ## Users
 
-Admin only (`403` for an operator, including a well-formed session). See [docs/auth.md](auth.md) for the role model.
+Admin only (`403` for an operator or uploader, including a well-formed session), except the two pending-approval routes below, which an operator can also reach. See [docs/auth.md](auth.md) for the role model and the account approval workflow.
 
 ### `GET /api/users`
 
+Admin only.
+
 ```json
-[{ "id": 1, "email": "joel@farm.local", "name": "Joel", "role": "admin", "oidc_subject": null, "created_at": 1774903214349, "last_login_at": 1774903214349 }]
+[{ "id": 1, "email": "joel@farm.local", "name": "Joel", "role": "admin", "approved": 1, "oidc_subject": null, "created_at": 1774903214349, "last_login_at": 1774903214349 }]
 ```
+
+### `GET /api/users/pending`
+
+Admin or operator. Lists every account with `approved = 0`, a narrower projection than `GET /api/users` above (`id`, `email`, `name`, `role`, `created_at` only):
+
+```json
+[{ "id": 5, "email": "new@farm.local", "name": "New Person", "role": "uploader", "created_at": 1774903214349 }]
+```
+
+### `POST /api/users/:id/approve`
+
+Admin or operator. Sets `approved = 1`. `404` if not found. Idempotent: approving an already-approved account is a `200` no-op, not an error.
 
 ### `POST /api/users`
 
-**Body:** `{ "email": "...", "name": "...", "role": "operator", "password": "..." }`, `email` and `name` required, `role` defaults to `operator`, `password` is optional (omit for an SSO-only account). Returns `201`, `400` on a bad role or a short password, `409` if the email already exists.
+Admin only. **Body:** `{ "email": "...", "name": "...", "role": "uploader", "password": "..." }`, `email` and `name` required, `role` defaults to `uploader`, `password` is optional (omit for an SSO-only account). Returns `201`, `400` on a bad role or a short password, `409` if the email already exists. Always created `approved: 1` regardless of role: the account approval workflow only gates an account that appears on its own via OIDC, not one an admin creates directly.
 
 ### `PUT /api/users/:id`
 
-Partial update (`COALESCE`, omitted fields unchanged). **Body:** any of `name`, `role`, `password`. `404` if not found, `409` if this would demote the last remaining admin.
+Admin only. Partial update (`COALESCE`, omitted fields unchanged). **Body:** any of `name`, `role`, `password`, `approved` (boolean). `404` if not found, `409` if this would demote the last remaining admin to any other role.
 
 ### `DELETE /api/users/:id`
 
-`404` if not found, `409` if deleting your own currently-signed-in account or the last remaining admin. On success, also deletes that user's sessions and API keys.
+Admin only. `404` if not found, `409` if deleting your own currently-signed-in account or the last remaining admin. On success, also deletes that user's sessions and API keys.
 
 ---
 
@@ -771,8 +785,9 @@ Body: `{ "value": "..." }`. Allowed keys:
 | `auto_sso_redirect` | `"0"` or `"1"` | Admin-only (`403` for a non-admin, even with a valid session). Whether the login page skips the local form and redirects straight to the OIDC provider; see [docs/auth.md](auth.md). |
 | `color_tolerance` | integer 0-450 | Any authenticated user. RGB-distance (server/color-distance.js) fallback the scheduler and `GET /api/parts/:id/dispatch-status` use when no printer has the exact required color loaded; `0` (the default) disables it. See `docs/database.md`'s `printers` section and the scheduler note below. |
 | `upload_retry_window_min` | integer 1-180 | How many minutes the scheduler keeps retrying a failing upload on later sweeps (roughly every 15s, tied to the poller's cycle) before finally holding the printer for operator confirmation. Default `15`. See `jobs.upload_first_failed_at` in [docs/database.md](database.md). |
+| `require_uploader_approval` | `"0"` or `"1"` | Admin-only. Off by default. Whether a new `uploader` account auto-provisioned via OIDC must be approved (`POST /api/users/:id/approve`) before it can sign in; see [docs/auth.md](auth.md)'s Account approval section. |
 
-Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`.
+Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect` or `require_uploader_approval`.
 
 ---
 

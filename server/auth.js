@@ -170,6 +170,31 @@ function requireRole(role) {
   };
 }
 
+// Like requireRole, but accepts any of several roles. Used for the uploader
+// approval endpoints (routes/users.js), which an operator can reach even
+// though the rest of user management stays admin-only.
+function requireAnyRole(roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: `Requires one of: ${roles.join(', ')}` });
+    }
+    next();
+  };
+}
+
+// Opposite of requireRole: lets every role through except the given one.
+// Used for the uploader role, which has access to everything an operator does
+// except a small set of specific actions (currently: releasing a held printer
+// back into the dispatch queue) rather than everything a single named role has.
+function blockRole(role, message) {
+  return (req, res, next) => {
+    if (req.user && req.user.role === role) {
+      return res.status(403).json({ error: message || `The ${role} role cannot do this` });
+    }
+    next();
+  };
+}
+
 module.exports = {
   SESSION_COOKIE,
   hashPassword,
@@ -186,4 +211,6 @@ module.exports = {
   publicUser,
   requireAuth,
   requireRole,
+  requireAnyRole,
+  blockRole,
 };

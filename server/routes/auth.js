@@ -81,6 +81,9 @@ module.exports = (db) => {
     if (!user || !auth.verifyPassword(password, user.password_hash)) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+    if (!user.approved) {
+      return res.status(403).json({ error: 'This account is pending approval from an operator or admin.' });
+    }
     db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id);
     const token = auth.createSession(db, user.id);
     auth.setSessionCookie(req, res, token);
@@ -154,16 +157,29 @@ module.exports = (db) => {
         // New identity, never seen before: auto-provision at the lowest
         // privilege. An admin must promote the account to grant more access;
         // OIDC login is never allowed to hand out admin by itself.
+        //
+        // require_uploader_approval (Settings, admin-only): when on, this
+        // freshly auto-provisioned account starts unapproved and cannot sign
+        // in (below) until an operator or admin approves it. This is the only
+        // account-creation path the setting affects: an admin creating an
+        // account directly via POST /api/users has already made that call.
+        const requireApproval = db.prepare(
+          "SELECT value FROM settings WHERE key = 'require_uploader_approval'"
+        ).get()?.value === '1';
         const now = Date.now();
         const email = (claims.email || `${claims.sub}@oidc.local`).toLowerCase();
         const result = db.prepare(`
-          INSERT INTO users (email, name, role, oidc_subject, created_at, last_login_at)
-          VALUES (?, ?, 'operator', ?, ?, ?)
-        `).run(email, claims.name || email, claims.sub, now, now);
+          INSERT INTO users (email, name, role, approved, oidc_subject, created_at, last_login_at)
+          VALUES (?, ?, 'uploader', ?, ?, ?, ?)
+        `).run(email, claims.name || email, requireApproval ? 0 : 1, claims.sub, now, now);
         user = db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
-        console.log(`[auth] Provisioned new operator account via OIDC: ${user.email}`);
+        console.log(`[auth] Provisioned new uploader account via OIDC: ${user.email}${requireApproval ? ' (pending approval)' : ''}`);
       } else {
         db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id);
+      }
+
+      if (!user.approved) {
+        return res.status(403).send('Your account was created but is pending approval from an operator or admin. Try signing in again once approved.');
       }
 
       const token = auth.createSession(db, user.id);

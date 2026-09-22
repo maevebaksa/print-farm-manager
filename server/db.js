@@ -405,12 +405,20 @@ try {
     email         TEXT NOT NULL UNIQUE,
     name          TEXT NOT NULL,
     password_hash TEXT,
-    role          TEXT NOT NULL DEFAULT 'operator',
+    role          TEXT NOT NULL DEFAULT 'uploader',
+    approved      INTEGER NOT NULL DEFAULT 1,
     oidc_subject  TEXT UNIQUE,
     created_at    INTEGER NOT NULL,
     last_login_at INTEGER
   )`);
 } catch (_) {}
+// Existing installs: users predates the approval workflow, so add the column
+// separately (a fresh install already has it from the CREATE TABLE above).
+// Defaults to 1 (approved) so no existing account is retroactively locked
+// out when an admin later turns on the require_uploader_approval setting;
+// only a newly auto-provisioned uploader account is ever created with 0,
+// see routes/auth.js's OIDC callback.
+try { db.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1'); } catch (_) {}
 
 try {
   db.exec(`CREATE TABLE IF NOT EXISTS sessions (

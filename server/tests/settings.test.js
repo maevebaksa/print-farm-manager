@@ -183,3 +183,32 @@ describe('PUT /api/settings/upload_retry_window_min', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('PUT /api/settings/require_uploader_approval', () => {
+  afterEach(() => { currentUser = { id: 1, role: 'admin' }; });
+
+  test('admin can enable it', async () => {
+    const res = await request(app)
+      .put('/api/settings/require_uploader_approval')
+      .send({ value: '1' });
+    expect(res.status).toBe(200);
+    expect(res.body.value).toBe('1');
+    expect(db.prepare("SELECT value FROM settings WHERE key = 'require_uploader_approval'").get().value).toBe('1');
+  });
+
+  test('rejects a value other than 0 or 1', async () => {
+    const res = await request(app)
+      .put('/api/settings/require_uploader_approval')
+      .send({ value: 'yes' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/must be "0" or "1"/i);
+  });
+
+  test('an operator cannot change it', async () => {
+    currentUser = { id: 2, role: 'operator' };
+    const res = await request(app)
+      .put('/api/settings/require_uploader_approval')
+      .send({ value: '1' });
+    expect(res.status).toBe(403);
+  });
+});
