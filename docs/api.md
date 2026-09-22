@@ -756,6 +756,7 @@ Body: `{ "value": "..." }`. Allowed keys:
 | `farm_name` | ≤ 40 chars | Sidebar branding (falls back to "Print Farm") |
 | `auto_sso_redirect` | `"0"` or `"1"` | Admin-only (`403` for a non-admin, even with a valid session). Whether the login page skips the local form and redirects straight to the OIDC provider; see [docs/auth.md](auth.md). |
 | `color_tolerance` | integer 0-450 | Any authenticated user. RGB-distance (server/color-distance.js) fallback the scheduler and `GET /api/parts/:id/dispatch-status` use when no printer has the exact required color loaded; `0` (the default) disables it. See `docs/database.md`'s `printers` section and the scheduler note below. |
+| `upload_retry_window_min` | integer 1-180 | How many minutes the scheduler keeps retrying a failing upload on later sweeps (roughly every 15s, tied to the poller's cycle) before finally holding the printer for operator confirmation. Default `15`. See `jobs.upload_first_failed_at` in [docs/database.md](database.md). |
 
 Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`.
 

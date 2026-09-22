@@ -72,6 +72,16 @@ The poller reads `response.data.printer.state` from the PrusaLink `/api/v1/statu
 
 Both events are available for the Phase 2 scheduler to `poller.on(...)`.
 
+### `pollComplete`
+
+Fired once per poll cycle, after every active printer has been polled, whether or not any of their statuses actually changed.
+
+```js
+poller.on('pollComplete', () => { ... });
+```
+
+`server/index.js` uses `.once()` on this to defer the startup sweep until live printer state is loaded (see [docs/server.md](server.md)). `server/scheduler.js` uses `.on()` on it to re-check for any printer with a pending upload retry (`_retryPendingUploads`) on every cycle, since `statusChange`/`printerIdle` only fire on a transition and a printer whose upload keeps failing typically never re-transitions (it was never reachable as anything other than `IDLE` in the first place). See `jobs.upload_first_failed_at` in [docs/database.md](database.md) and the `upload_retry_window_min` setting in [docs/api.md](api.md).
+
 ### `statusChange`
 
 Fired on every status transition (any state → any other state).

@@ -149,3 +149,37 @@ describe('PUT /api/settings/color_tolerance', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('PUT /api/settings/upload_retry_window_min', () => {
+  test('saves a valid value and returns it', async () => {
+    const res = await request(app)
+      .put('/api/settings/upload_retry_window_min')
+      .send({ value: '30' });
+    expect(res.status).toBe(200);
+    expect(res.body.value).toBe('30');
+    expect(db.prepare("SELECT value FROM settings WHERE key = 'upload_retry_window_min'").get().value).toBe('30');
+  });
+
+  test('rejects a value below 1', async () => {
+    const res = await request(app)
+      .put('/api/settings/upload_retry_window_min')
+      .send({ value: '0' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/between 1 and 180/i);
+  });
+
+  test('rejects a value above 180', async () => {
+    const res = await request(app)
+      .put('/api/settings/upload_retry_window_min')
+      .send({ value: '181' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/between 1 and 180/i);
+  });
+
+  test('rejects a non-numeric value', async () => {
+    const res = await request(app)
+      .put('/api/settings/upload_retry_window_min')
+      .send({ value: 'a while' });
+    expect(res.status).toBe(400);
+  });
+});

@@ -97,7 +97,8 @@ function makeDb(gcodeFilepath) {
       part_id INTEGER NOT NULL, printer_id INTEGER NOT NULL,
       gcode_id INTEGER, parts_per_plate INTEGER NOT NULL,
       status TEXT DEFAULT 'queued',
-      started_at INTEGER, finished_at INTEGER, created_at INTEGER NOT NULL
+      started_at INTEGER, finished_at INTEGER, created_at INTEGER NOT NULL,
+      upload_first_failed_at INTEGER
     );
     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
@@ -263,7 +264,7 @@ describe('_dispatchToPrinter — upload failure recovery', () => {
     expect(printer.is_held).toBe(0);
   });
 
-  test('leaves job as uploading (not failed) and holds printer when all retries exhausted and not printing', async () => {
+  test('leaves job uploading and does not hold the printer yet, while still within the retry window', async () => {
     const filename = `exhaust_${Date.now()}.bgcode`;
     createTestFile(filename);
     const db = makeDb(filename);
@@ -278,30 +279,54 @@ describe('_dispatchToPrinter — upload failure recovery', () => {
 
     expect(jobId).toBeNull();
     // Job must be left as 'uploading' — operator must confirm via Fleet UI (Job Running / Upload Failed)
-    const job = db.prepare("SELECT status FROM jobs ORDER BY id DESC LIMIT 1").get();
+    // once the retry window eventually runs out (see the next test).
+    const job = db.prepare("SELECT status, upload_first_failed_at FROM jobs ORDER BY id DESC LIMIT 1").get();
     expect(job.status).toBe('uploading');
-    // Printer should be held for operator review
+    expect(job.upload_first_failed_at).not.toBeNull();
+    // Not held yet: a later scheduler sweep (poller.js's pollComplete) should get
+    // another chance to retry instead of stopping the operator immediately.
     const printer = db.prepare('SELECT is_held FROM printers WHERE id = 1').get();
-    expect(printer.is_held).toBe(1);
+    expect(printer.is_held).toBe(0);
+    expect(notifications.add).not.toHaveBeenCalled();
   });
 
-  test('sends a notification when upload retries are exhausted', async () => {
-    const filename = `notif_exhaust_${Date.now()}.bgcode`;
+  test('holds the printer and sends a notification once the retry window is exhausted on a later sweep', async () => {
+    const filename = `exhaust_window_${Date.now()}.bgcode`;
     createTestFile(filename);
     const db = makeDb(filename);
+    db.prepare("INSERT INTO settings (key, value) VALUES ('upload_retry_window_min', '15')").run();
     const scheduler = new JobScheduler(db, { on: () => {} });
 
     mockDriver.uploadAndPrint.mockRejectedValue(new Error('ETIMEDOUT'));
     mockDriver.checkIfPrinting.mockResolvedValue(false);
 
-    const promise = scheduler._dispatchToPrinter(fakePrinter);
+    // First sweep: exhausts the immediate in-call retries, parks the job (not held)
+    // and stamps upload_first_failed_at.
+    let promise = scheduler._dispatchToPrinter(fakePrinter);
     await jest.runAllTimersAsync();
     await promise;
+    expect(db.prepare('SELECT is_held FROM printers WHERE id = 1').get().is_held).toBe(0);
+
+    // Simulate the 15-minute window having elapsed since that first failure: a
+    // later sweep, not a real 15-minute wait in this test.
+    db.prepare("UPDATE jobs SET upload_first_failed_at = ? WHERE printer_id = 1").run(Date.now() - 16 * 60000);
+
+    // A later sweep (pollComplete → _retryPendingUploads → scheduleForPrinter) retries
+    // the same job via _reserveJob's pending-retry branch (_reservationForRetry).
+    promise = scheduler._dispatchToPrinter(fakePrinter);
+    await jest.runAllTimersAsync();
+    const jobId = await promise;
+
+    expect(jobId).toBeNull();
+    const job = db.prepare("SELECT status FROM jobs ORDER BY id DESC LIMIT 1").get();
+    expect(job.status).toBe('uploading');
+    const printer = db.prepare('SELECT is_held FROM printers WHERE id = 1').get();
+    expect(printer.is_held).toBe(1);
 
     expect(notifications.add).toHaveBeenCalledTimes(1);
     const msg = notifications.add.mock.calls[0][0];
     expect(msg).toMatch(/P1/);
-    expect(msg).toMatch(/failed after/);
+    expect(msg).toMatch(/15 minutes/);
   });
 
   test('retries up to MAX_RETRIES times before giving up', async () => {
@@ -323,6 +348,85 @@ describe('_dispatchToPrinter — upload failure recovery', () => {
     expect(mockDriver.uploadAndPrint).toHaveBeenCalledTimes(2);
     const job = db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId);
     expect(job.status).toBe('printing');
+  });
+});
+
+// ─── Pending-retry re-sweep (poller.js's pollComplete) ─────────────────────────
+// _retryPendingUploads is what actually gives a parked job another chance on a
+// later sweep: without it, a printer that stays IDLE the whole time (never
+// re-transitions, since the upload itself is what's failing, not the printer's
+// reported status) would never get a second look after the first exhausted attempt.
+
+describe('_retryPendingUploads', () => {
+  test('re-sweeps a printer that has a job parked mid-retry-window', () => {
+    const filename = `pending_${Date.now()}.bgcode`;
+    createTestFile(filename);
+    const db = makeDb(filename);
+    db.prepare(`
+      UPDATE printers SET status = 'IDLE' WHERE id = 1
+    `).run();
+    db.prepare(`
+      INSERT INTO jobs (part_id, printer_id, gcode_id, parts_per_plate, status, created_at, upload_first_failed_at)
+      VALUES (1, 1, 1, 1, 'uploading', ?, ?)
+    `).run(Date.now(), Date.now());
+
+    const scheduler = new JobScheduler(db, { on: () => {} });
+    const scheduleSpy = jest.spyOn(scheduler, 'scheduleForPrinter').mockImplementation(() => {});
+
+    scheduler._retryPendingUploads();
+
+    expect(scheduleSpy).toHaveBeenCalledTimes(1);
+    expect(scheduleSpy.mock.calls[0][0].id).toBe(1);
+  });
+
+  test('ignores a printer with no pending-retry job', () => {
+    const filename = `no_pending_${Date.now()}.bgcode`;
+    createTestFile(filename);
+    const db = makeDb(filename);
+    const scheduler = new JobScheduler(db, { on: () => {} });
+    const scheduleSpy = jest.spyOn(scheduler, 'scheduleForPrinter').mockImplementation(() => {});
+
+    scheduler._retryPendingUploads();
+
+    expect(scheduleSpy).not.toHaveBeenCalled();
+  });
+
+  test('ignores a pending-retry job whose printer is already held', () => {
+    const filename = `held_pending_${Date.now()}.bgcode`;
+    createTestFile(filename);
+    const db = makeDb(filename);
+    db.prepare("UPDATE printers SET is_held = 1 WHERE id = 1").run();
+    db.prepare(`
+      INSERT INTO jobs (part_id, printer_id, gcode_id, parts_per_plate, status, created_at, upload_first_failed_at)
+      VALUES (1, 1, 1, 1, 'uploading', ?, ?)
+    `).run(Date.now(), Date.now());
+
+    const scheduler = new JobScheduler(db, { on: () => {} });
+    const scheduleSpy = jest.spyOn(scheduler, 'scheduleForPrinter').mockImplementation(() => {});
+
+    scheduler._retryPendingUploads();
+
+    expect(scheduleSpy).not.toHaveBeenCalled();
+  });
+
+  test('holds the printer if the G-code file for a pending retry was deleted from disk in the meantime', async () => {
+    // No createTestFile: the file genuinely does not exist on disk, simulating it
+    // having been removed (or never present) since the job was first parked.
+    const db = makeDb('vanished_during_retry.bgcode');
+    db.prepare(`
+      INSERT INTO jobs (part_id, printer_id, gcode_id, parts_per_plate, status, created_at, upload_first_failed_at)
+      VALUES (1, 1, 1, 1, 'uploading', ?, ?)
+    `).run(Date.now(), Date.now());
+
+    const scheduler = new JobScheduler(db, { on: () => {} });
+    const jobId = await scheduler._dispatchToPrinter(fakePrinter);
+
+    expect(jobId).toBeNull();
+    expect(mockDriver.uploadAndPrint).not.toHaveBeenCalled();
+    const printer = db.prepare('SELECT is_held FROM printers WHERE id = 1').get();
+    expect(printer.is_held).toBe(1);
+    expect(notifications.add).toHaveBeenCalledTimes(1);
+    expect(notifications.add.mock.calls[0][0]).toMatch(/G-code file missing/);
   });
 });
 

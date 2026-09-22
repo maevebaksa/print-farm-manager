@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-09-22: extend the upload retry window across later scheduler sweeps
+
+Requested as part of a batch of quality-of-life items: auto-retry a failed upload N times before holding the printer, instead of holding on the first failure. The scheduler already retried an upload 3 times with 5s/60s backoff before holding (see `_executeUpload`), so the actual gap was survival time, not attempt count: a printer that is briefly rebooting, or a network blip that outlasts about a minute of backoff, still got held immediately. Requested fix, once that was clarified: more retries over a longer window, by continuing to retry on later scheduler sweeps rather than lengthening the immediate backoff.
+
+When an upload's immediate retries are exhausted and the printer genuinely isn't printing, the job is now left `uploading` (not held) and stamped with `jobs.upload_first_failed_at` the first time this happens. A new operator-configurable setting, `upload_retry_window_min` (default 15 minutes, Settings page), governs how long the scheduler keeps retrying that same job on later sweeps before finally holding the printer. The retry cadence rides `poller.js`'s existing `pollComplete` event (fired every ~15s, whether or not any printer's status changed), since the usual `printerIdle`/`statusChange` triggers only fire on a transition and a printer whose upload keeps failing typically never leaves `IDLE`.
+
+The one non-obvious wrinkle: an existing, unrelated guard (`STALE_JOB_GRACE_MS`, 90 seconds) auto-fails any job the scheduler finds sitting in `uploading`/`printing` for too long on the assumption it's an orphaned job from a missed status transition. A job deliberately parked for a multi-minute retry window looks identical to that on paper, so `_reserveJob` now checks `upload_first_failed_at` first and routes a pending-retry job straight to a retry (reusing the same job row, not creating a new one) instead of into the stale-job check. A printer that goes verifiably `OFFLINE` (the poller can't reach it at all) is unaffected by any of this and is still held immediately by the existing, separate offline-handling path: the window only helps the case where the printer keeps responding to status polls but the upload endpoint itself is what's flaking.
+
+### Changes
+- `server/db.js`: `jobs.upload_first_failed_at` migration; `upload_retry_window_min` settings default (`15`).
+- `server/routes/settings.js`: `upload_retry_window_min` added to `ALLOWED_KEYS`, validated as an integer 1-180.
+- `server/scheduler.js`: `_executeUpload`'s give-up branch is now window-gated instead of holding immediately; new `_reservationForRetry` (rebuilds a reservation for an already-dispatched job instead of picking a new candidate); `_reserveJob` routes a pending-retry job straight to it; new `_retryPendingUploads`, wired to the poller's `pollComplete` event in `start()`; `_waitForBatch`'s settled check now also treats a parked pending-retry job as settled for the current wave, so a sweep doesn't block for its full 10-minute timeout waiting on a job that only a future sweep will resolve.
+- `client/src/pages/Settings.jsx`: new "Upload retry window" sub-section under Dispatch Settings.
+- `docs/api.md`, `docs/database.md`, `docs/poller.md`, `docs/web-app.md`: documented the new setting, column, event listener, and Settings UI.
+- `server/tests/settings.test.js`: validation coverage for the new setting.
+- `server/tests/backup-restore.test.js`: `jobs.upload_first_failed_at` added to the migrated-column export/restore round-trip coverage.
+- `server/tests/scheduler-file.test.js`: retry-window behavior (stays open within the window, holds and notifies once it's exhausted), `_retryPendingUploads` coverage, and a pending-retry job whose G-code file has since vanished from disk.
+- `server/tests/scheduler-sweep.test.js`: `start()` wires `pollComplete` to `_retryPendingUploads`.
+- `server/tests/scheduler-file.test.js`, `server/tests/scheduler-finished.test.js`, `server/tests/scheduler-sweep.test.js`, `server/tests/scheduler-targeting.test.js`: added `upload_first_failed_at` to each file's in-memory `jobs` schema so the real (unmocked) scheduler code these tests exercise can query it.
+
+---
+
 ## 2026-09-22: G-code plate thumbnail preview
 
 Requested as part of a batch of quality-of-life items: `.bgcode` and `.3mf` files usually embed a plate thumbnail, and showing it on the part/job row would help distinguish similar-sounding files at a glance instead of reading filenames.

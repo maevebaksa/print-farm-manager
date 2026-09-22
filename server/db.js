@@ -330,6 +330,9 @@ try {
 try {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('dispatch_batch_size', '10')").run();
 } catch (_) {}
+try {
+  db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('upload_retry_window_min', '15')").run();
+} catch (_) {}
 
 // Make jobs.gcode_id nullable so gcodes can be deleted after jobs have run
 const gcodeIdCol = db.prepare("PRAGMA table_info(jobs)").all().find(c => c.name === 'gcode_id');
@@ -353,6 +356,18 @@ if (gcodeIdCol && gcodeIdCol.notnull === 1) {
     PRAGMA foreign_keys = ON;
   `);
 }
+
+// When an upload's immediate retries (see scheduler.js's _executeUpload) are all
+// exhausted but the printer still looks alive, the job is left 'uploading' rather
+// than held right away: this timestamp marks when that first happened, so later
+// scheduler sweeps (poller.js's pollComplete, every 15s) know how long they have
+// been retrying and when the configurable upload_retry_window_min setting has
+// finally run out. NULL for a job that has never failed an upload attempt.
+// Placed after the jobs_migrated block above (not before it): that block's
+// INSERT INTO jobs_migrated SELECT * FROM jobs relies on a fixed, hardcoded
+// column list matching the live jobs table exactly. Adding a column to jobs
+// before it runs breaks that INSERT with a column-count mismatch.
+try { db.exec('ALTER TABLE jobs ADD COLUMN upload_first_failed_at INTEGER'); } catch (_) {}
 
 // Backfill decommission events for printers that were decommissioned before the
 // printer_events table existed. Runs once per printer (checked via event absence).
