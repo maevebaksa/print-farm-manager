@@ -363,7 +363,7 @@ export default function PrinterDetail() {
 
   return (
     <div style={{ maxWidth: 720 }}>
-      {/* Back link — Fleet, not the old standalone Printers directory (merged into it) */}
+      {/* Back link: Fleet, not the old standalone Printers directory (merged into it) */}
       <button
         onClick={() => navigate('/fleet')}
         style={{

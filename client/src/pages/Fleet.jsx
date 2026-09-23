@@ -424,7 +424,7 @@ export default function Fleet() {
   // { printerId, printerName, jobs, selectedJobId, isHeld }
   const [linkJobModal, setLinkJobModal]       = useState(null);
 
-  // Bulk edit (material / color / group across many printers at once) —
+  // Bulk edit (material / color / group across many printers at once):
   // merged in from the old Printers page. A separate selection set from
   // selectedForReady above: that one only ever holds printers awaiting
   // sign-off, for the unrelated batch Set Ready flow, and bulk edit applies
@@ -484,7 +484,7 @@ export default function Fleet() {
     if (results.every(r => r.ok)) {
       showToast(`Updated ${bulkEditIds.size} printer${bulkEditIds.size === 1 ? '' : 's'}`, 'success');
     } else {
-      showToast('Some printers failed to update — check them individually', 'error');
+      showToast('Some printers failed to update, check them individually', 'error');
     }
     setBulkEditIds(new Set());
     setBulkMaterial(''); setBulkColor(''); setBulkGroup('');
@@ -876,7 +876,7 @@ export default function Fleet() {
           </button>
           <button
             onClick={sweep}
-            title="Manually trigger job dispatch now. This normally happens automatically — use it to start jobs on idle machines without waiting for the next cycle."
+            title="Manually trigger job dispatch now. This normally happens automatically, use it to start jobs on idle machines without waiting for the next cycle."
             style={{ background: '#1e2433', color: '#94a3b8', border: '1px solid #2d3748', borderRadius: 6, padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}
           >
             Sweep for Jobs
@@ -884,7 +884,7 @@ export default function Fleet() {
         </div>
       </div>
 
-      {/* Bulk edit bar — merged in from the old Printers page */}
+      {/* Bulk edit bar: merged in from the old Printers page */}
       {bulkEditMode && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',

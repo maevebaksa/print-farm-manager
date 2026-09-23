@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-09-22: merge the Printers page into Fleet
+
+Requested: Fleet and the standalone Printers page had overlapping purposes (live status vs. a searchable directory) with each having something the other lacked, and after discussing the actual difference, asked to merge the buttons and functionality into one page.
+
+Fleet already covered live status, the operator action buttons (Set Ready, Bad Print, Decommission, Link Job), pinned printers, and per-model grouping. Printers' one genuinely unique capability was bulk material/color/group editing across many printers at once; its "Show decommissioned" checkbox and per-model collapse/expand were, on inspection, largely redundant with what already exists elsewhere (the dedicated Decommissioned page, and the new chip layout that already keeps Fleet compact without needing to collapse anything), so those were not carried over rather than duplicating them.
+
+Fleet's `PrinterCard` gained a `bulkEditMode` prop: toggling the new **Bulk Edit** button switches every card's click behavior to select/deselect it instead of opening its detail view or the existing awaiting-confirmation selection, as a distinct mode rather than layered on top of that other selection (a card should never mean two different things to two different clicks at once). With printers selected, the same Material/Color/Group bar Printers had appears, applying `PUT /api/printers/:id` to each selected printer exactly as before (no server change: the endpoint already supported this). Fleet's search now also matches `model`, matching what Printers searched.
+
+`/printers` (the list route) now redirects to `/fleet` rather than 404ing, so an old bookmark or link still lands somewhere useful; `/printers/:id` (the Printer Detail view) is untouched, a separate route. `client/src/pages/Printers.jsx` is deleted.
+
+### Changes
+- `client/src/pages/Fleet.jsx`: new Bulk Edit mode (`bulkEditMode`/`bulkEditIds` state, `PrinterCard`'s `bulkEditMode`/`bulkEditSelected`/`onToggleBulkEdit` props, the Material/Color/Group bar); search now also matches `model`.
+- `client/src/App.jsx`: removed the `Printers` import/route/nav entry; `/printers` redirects to `/fleet` (`<Navigate>`).
+- `client/src/pages/PrinterDetail.jsx`: the back button now goes to `/fleet` ("← Fleet") instead of the removed `/printers` list.
+- `client/src/pages/Printers.jsx`: deleted.
+- `docs/web-app.md`: removed the standalone Printers Page section, folded its content into the Fleet Page section, and fixed every cross-reference that pointed at the old page (including one already-stale reference to the Users nav being admin-only, predating the uploader role from earlier this session, fixed in passing since it was directly adjacent to what this change was already touching).
+
+No automated test: this repo has no client-side test framework, so `npm run build` plus manual code review is the verification available here, same as every other client-only change this session. Could not exercise the real page in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-22: typo-tolerant command palette search
 
 Requested: make the command palette's search tolerant of typos. It previously filtered printers, projects, and parts by a plain case-insensitive substring match, so a single mistyped character (`swichwire` for `Switchwire-0`) returned nothing.
