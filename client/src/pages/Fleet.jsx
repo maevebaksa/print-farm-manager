@@ -17,6 +17,10 @@ import { useAuth } from '../AuthContext';
 // (see the per-model layout below): roughly 2 full-width chips side by side
 // on any screen size, since 2 * CHIP_MAX_VW + gaps stays under 100vw.
 const CHIP_MAX_VW = 42;
+// Horizontal padding (left + right) of the chip's own rectangle, below: the
+// width math has to account for it or a single-card chip's minmax(220px, 1fr)
+// grid column overflows the chip's border by exactly this much.
+const CHIP_PADDING_X = 28;
 
 const STATUS_COLORS = {
   PRINTING:   { bg: '#1e3a5f', text: '#60a5fa', label: 'Printing' },
@@ -187,30 +191,20 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
         >
           {pinned ? '★' : '☆'}
         </button>
-        <span style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {printer.name}
         </span>
-        {(() => {
-          const link = webUiLink(printer);
-          return link && (
-            <a
-              href={link.url}
-              target="_blank"
-              rel="noreferrer"
-              onClick={e => e.stopPropagation()}
-              title={`Open ${link.label.replace(' ↗', '')}`}
-              style={{ color: '#60a5fa', fontSize: 11, textDecoration: 'none', flexShrink: 0 }}
-            >
-              {link.label}
-            </a>
-          );
-        })()}
         <span style={{ background: style.bg, color: style.text, borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
           {style.label}
         </span>
       </div>
 
-      {/* Model + group */}
+      {/* Model + group. The web-UI quick link lives here, not the name row above:
+          it and the status badge were both flexShrink: 0, so the printer name
+          (the only flexible item) absorbed the entire deficit on the narrower
+          chip-capped cards, truncating to a couple of characters. This row
+          already flexWraps, so the link just wraps onto its own line instead
+          of competing with the name for space. */}
       <div style={{ fontSize: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ background: '#0f172a', borderRadius: 3, padding: '1px 6px', fontFamily: 'monospace', color: '#64748b' }}>
           {printer.model}
@@ -222,6 +216,21 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
             {[printer.loaded_material, printer.loaded_color].filter(Boolean).join(' · ')}
           </span>
         )}
+        {(() => {
+          const link = webUiLink(printer);
+          return link && (
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              title={`Open ${link.label.replace(' ↗', '')}`}
+              style={{ color: '#60a5fa', textDecoration: 'none' }}
+            >
+              {link.label}
+            </a>
+          );
+        })()}
       </div>
 
       {/* Upload in progress — file is being transferred to the printer */}
@@ -1151,15 +1160,19 @@ export default function Fleet() {
           uncapped grid always did). */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
         {Object.entries(grouped).map(([model, group]) => {
-          const naturalWidth = `${group.length * 230 - 10}px`;
-          // max(220px, ...) floors the vw cap at one card wide: on a narrow/
-          // mobile viewport CHIP_MAX_VW can resolve below 220px, which would
-          // otherwise squeeze a card's own minmax(220px, 1fr) column below its
-          // own minimum and overflow the chip instead of wrapping to 1-per-row.
-          const chipWidth = `max(220px, min(100%, ${naturalWidth}, ${CHIP_MAX_VW}vw))`;
+          const naturalWidth = `${group.length * 230 - 10 + CHIP_PADDING_X}px`;
+          // max(220px + padding, ...) floors the vw cap at one card wide plus the
+          // chip's own padding: on a narrow/mobile viewport CHIP_MAX_VW can
+          // resolve below that, which would otherwise squeeze a card's own
+          // minmax(220px, 1fr) column below its own minimum, overflowing the
+          // chip's border instead of wrapping to 1-per-row.
+          const chipWidth = `max(${220 + CHIP_PADDING_X}px, min(100%, ${naturalWidth}, ${CHIP_MAX_VW}vw))`;
           return (
-            <div key={model} style={{ width: chipWidth }}>
-              <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
+            <div key={model} style={{
+              width: chipWidth, background: '#111827', border: '1px solid #1e2433',
+              borderRadius: 10, padding: '12px 14px',
+            }}>
+              <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, margin: '0 0 10px' }}>
                 {MODEL_LABELS[model] || model} <span style={{ fontWeight: 400, color: '#475569' }}>({group.length})</span>
               </h2>
               <div style={{

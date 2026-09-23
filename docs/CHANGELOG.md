@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-09-23: fix Fleet card name truncation, add group rectangles
+
+Reported: after the Printers-into-Fleet merge shipped narrower chip-capped cards, printer names on the Fleet page truncated down to a couple of characters ("B...", "Switch...", "Doron ...") with nothing readable left. Also asked for a bordered rectangle around each model group, matching the Dashboard's `FleetStatusGrid`, which the Fleet page's chips never had.
+
+The name truncation was a flex layout bug in `PrinterCard`'s header row: the pin button, the web-UI quick link (Mainsail/OctoPrint/OctoEverywhere), and the status badge were all `flexShrink: 0`, so the printer name, the only flexible item in that row, absorbed the entire width deficit on a narrow chip-capped card. Moved the web-UI link out of the header row and into the model/group row below (which already `flexWrap`s), leaving the header with just the pin, name, and status badge, so the name gets the row to itself.
+
+Added the group rectangle by wrapping each model's chip in the same bordered box the Dashboard's `FleetStatusGrid` already uses (`background: #111827`, `1px solid #1e2433` border, padding). The chip width math (`CHIP_MAX_VW`, from the earlier "pack small model groups side by side" change) had to account for the new padding, or a single-card chip's `minmax(220px, 1fr)` grid column would overflow the chip's own border; added a `CHIP_PADDING_X` constant folded into the width expression.
+
+### Changes
+- `client/src/pages/Fleet.jsx`: `PrinterCard`'s header row no longer renders the web-UI link (moved to the model/group row); name span is now `flex: 1, minWidth: 0`. New `CHIP_PADDING_X` constant; the per-model chip wrapper gains a bordered rectangle and the width expression accounts for its padding.
+- `docs/web-app.md`: Fleet Page section updated for the new card header layout and the chip's bordered rectangle.
+
+No automated test: this repo has no client-side test framework. Verified `npm run build` succeeds; could not exercise the real page in a live browser, this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
+
+---
+
+## 2026-09-23: fix invisible lane color swatches on the Webcams page
+
+Reported: after the earlier fix/webcams-lane-color-swatch change (below) shipped, claiming to show a colored swatch instead of raw hex text next to each printer's loaded material/color, the operator still didn't see a swatch for per-lane colors on multi-material printers.
+
+That earlier fix only corrected the legacy `loaded_color` fallback path. The per-lane path in `WebcamCard` still passed a lane's `color` straight into `ColorSwatch` as a CSS color value, on the assumption it was already a hex string reported by the klipper-filament-sync plugin. It is not: `server/drivers/klipper.js`'s `getLaneData` (and its tests) show `color` is a Filament Library color name, the same as `loaded_color`. A name that happens to also be a valid CSS keyword (Black, Red) rendered a swatch by coincidence; anything else (a real Filament Library entry like Galaxy Black or Silk Gold) rendered nothing, which is what the operator was seeing.
+
+Now routes lane colors through the same `colorHexMap` lookup the legacy fallback already uses.
+
+### Changes
+- `client/src/pages/Webcams.jsx`: lane color swatch now looks up `colorHexMap.get(l.color)` instead of using `l.color` directly; corrected the comment explaining why.
+- `docs/web-app.md`: Webcams Page section corrected to describe both swatch sources as Filament Library color names going through `colorHexMap`, not one of them being raw hex.
+
+No automated test: this repo has no client-side test framework, consistent with every other client-only change. Verified `npm run build` succeeds and confirmed the data shape directly against `server/tests/klipper-driver.test.js` and `server/tests/poller-lanes.test.js`, both of which seed `color` with plain names (`'Black'`, `'Red'`), matching the bug. Could not exercise the real page in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-22: merge the Printers page into Fleet
 
 Requested: Fleet and the standalone Printers page had overlapping purposes (live status vs. a searchable directory) with each having something the other lacked, and after discussing the actual difference, asked to merge the buttons and functionality into one page.
@@ -20,19 +52,6 @@ Fleet's `PrinterCard` gained a `bulkEditMode` prop: toggling the new **Bulk Edit
 - `docs/web-app.md`: removed the standalone Printers Page section, folded its content into the Fleet Page section, and fixed every cross-reference that pointed at the old page (including one already-stale reference to the Users nav being admin-only, predating the uploader role from earlier this session, fixed in passing since it was directly adjacent to what this change was already touching).
 
 No automated test: this repo has no client-side test framework, so `npm run build` plus manual code review is the verification available here, same as every other client-only change this session. Could not exercise the real page in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
-## 2026-09-23: fix invisible lane color swatches on the Webcams page
-
-Reported: after the earlier fix/webcams-lane-color-swatch change (below) shipped, claiming to show a colored swatch instead of raw hex text next to each printer's loaded material/color, the operator still didn't see a swatch for per-lane colors on multi-material printers.
-
-That earlier fix only corrected the legacy `loaded_color` fallback path. The per-lane path in `WebcamCard` still passed a lane's `color` straight into `ColorSwatch` as a CSS color value, on the assumption it was already a hex string reported by the klipper-filament-sync plugin. It is not: `server/drivers/klipper.js`'s `getLaneData` (and its tests) show `color` is a Filament Library color name, the same as `loaded_color`. A name that happens to also be a valid CSS keyword (Black, Red) rendered a swatch by coincidence; anything else (a real Filament Library entry like Galaxy Black or Silk Gold) rendered nothing, which is what the operator was seeing.
-
-Now routes lane colors through the same `colorHexMap` lookup the legacy fallback already uses.
-
-### Changes
-- `client/src/pages/Webcams.jsx`: lane color swatch now looks up `colorHexMap.get(l.color)` instead of using `l.color` directly; corrected the comment explaining why.
-- `docs/web-app.md`: Webcams Page section corrected to describe both swatch sources as Filament Library color names going through `colorHexMap`, not one of them being raw hex.
-
-No automated test: this repo has no client-side test framework, consistent with every other client-only change. Verified `npm run build` succeeds and confirmed the data shape directly against `server/tests/klipper-driver.test.js` and `server/tests/poller-lanes.test.js`, both of which seed `color` with plain names (`'Black'`, `'Red'`), matching the bug. Could not exercise the real page in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
 
 ---
 
