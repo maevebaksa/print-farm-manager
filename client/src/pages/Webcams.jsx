@@ -41,11 +41,11 @@ function WebcamCard({ printer, camera, isLive, onToggleLive, refreshedAt, colorH
         <div style={{ fontSize: 11, color: '#7dd3fc', marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {lanes.length > 0
             ? lanes.map(l => (
-                // l.color is a hex value reported directly by the lane sync plugin
-                // (server/drivers/klipper.js getLaneData), not a Filament Library
-                // color name: no colorHexMap lookup needed, unlike the fallback below.
+                // l.color is a Filament Library color name reported by the lane sync
+                // plugin (server/drivers/klipper.js getLaneData), same as the legacy
+                // loaded_color fallback below: needs the colorHexMap lookup too.
                 <span key={l.lane_index} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <ColorSwatch hex={l.color} />
+                  <ColorSwatch hex={colorHexMap.get(l.color)} />
                   Lane {l.lane_index}: {[l.material, l.color].filter(Boolean).join(' · ') || '(not set)'}
                 </span>
               ))

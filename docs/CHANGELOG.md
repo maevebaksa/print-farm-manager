@@ -20,6 +20,19 @@ Fleet's `PrinterCard` gained a `bulkEditMode` prop: toggling the new **Bulk Edit
 - `docs/web-app.md`: removed the standalone Printers Page section, folded its content into the Fleet Page section, and fixed every cross-reference that pointed at the old page (including one already-stale reference to the Users nav being admin-only, predating the uploader role from earlier this session, fixed in passing since it was directly adjacent to what this change was already touching).
 
 No automated test: this repo has no client-side test framework, so `npm run build` plus manual code review is the verification available here, same as every other client-only change this session. Could not exercise the real page in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
+## 2026-09-23: fix invisible lane color swatches on the Webcams page
+
+Reported: after the earlier fix/webcams-lane-color-swatch change (below) shipped, claiming to show a colored swatch instead of raw hex text next to each printer's loaded material/color, the operator still didn't see a swatch for per-lane colors on multi-material printers.
+
+That earlier fix only corrected the legacy `loaded_color` fallback path. The per-lane path in `WebcamCard` still passed a lane's `color` straight into `ColorSwatch` as a CSS color value, on the assumption it was already a hex string reported by the klipper-filament-sync plugin. It is not: `server/drivers/klipper.js`'s `getLaneData` (and its tests) show `color` is a Filament Library color name, the same as `loaded_color`. A name that happens to also be a valid CSS keyword (Black, Red) rendered a swatch by coincidence; anything else (a real Filament Library entry like Galaxy Black or Silk Gold) rendered nothing, which is what the operator was seeing.
+
+Now routes lane colors through the same `colorHexMap` lookup the legacy fallback already uses.
+
+### Changes
+- `client/src/pages/Webcams.jsx`: lane color swatch now looks up `colorHexMap.get(l.color)` instead of using `l.color` directly; corrected the comment explaining why.
+- `docs/web-app.md`: Webcams Page section corrected to describe both swatch sources as Filament Library color names going through `colorHexMap`, not one of them being raw hex.
+
+No automated test: this repo has no client-side test framework, consistent with every other client-only change. Verified `npm run build` succeeds and confirmed the data shape directly against `server/tests/klipper-driver.test.js` and `server/tests/poller-lanes.test.js`, both of which seed `color` with plain names (`'Black'`, `'Red'`), matching the bug. Could not exercise the real page in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
 
 ---
 
