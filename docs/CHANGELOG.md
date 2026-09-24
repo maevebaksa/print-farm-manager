@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-09-24: fix CI: camera proxy tests failing on the multipart/binary content types they proxy
+
+Reported: the last three pushes to main all failed CI (`Publish Docker image`), blocking the image from being rebuilt and repulled. `npm test` on this dev machine never runs for real (the disclosed `better-sqlite3` binding gap), so this was never caught locally; CI runs on a working Linux environment where the whole suite actually executes.
+
+Both failures were in `server/tests/printers-camera-proxy.test.js`, added when the camera proxy itself shipped. `supertest`'s client (`superagent`) picks a body parser from the response's own `Content-Type`: `image/jpeg` has none registered, so `res.text` came back empty instead of the fake bytes; `multipart/x-mixed-replace` matched superagent's multipart parser, which then choked (`formidable`: "stream ended unexpectedly") trying to read plain fake bytes as real multipart-boundary data. Neither is a bug in the proxy route itself, which forwards whatever bytes and `Content-Type` the upstream camera actually sends without caring what they are; the test just needs to read the raw response the same way.
+
+### Changes
+- `server/tests/printers-camera-proxy.test.js`: both proxy tests now use a custom raw-buffer `supertest` parser (`.buffer(true).parse(...)`) instead of relying on superagent's Content-Type-based body parsing, and assert on `res.body.toString()` instead of `res.text`.
+
+Could not run this locally to confirm: this machine still can't start `better-sqlite3` at all, so not even this one test file's `beforeEach` gets past constructing the in-memory DB. Diagnosed directly from the CI log's exact error text and stack (superagent's parser selection, `formidable`'s multipart error) rather than a guess; the real confirmation is the next CI run.
+
+---
+
 ## 2026-09-24: per-account print approval for uploader G-codes
 
 Requested: an individual-user setting controlling whether an uploader can queue G-code freely or needs operator/admin sign-off first, separate from the existing account-sign-in approval (`require_uploader_approval`).

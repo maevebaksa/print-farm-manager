@@ -108,6 +108,18 @@ function fakeUpstream(contentType, body) {
   return { headers: { 'content-type': contentType }, data: stream };
 }
 
+// superagent (supertest's client) picks a body parser from the response's own
+// Content-Type: 'image/jpeg' has none registered, so res.text/res.body come back
+// empty, and 'multipart/x-mixed-replace' matches its multipart parser, which then
+// chokes trying to read our plain fake bytes as real multipart-boundary data. Ask
+// for the raw bytes directly instead, regardless of what Content-Type the proxy
+// route sets, exactly as the proxy itself claims to not care what it's forwarding.
+function rawBufferParser(res, callback) {
+  const chunks = [];
+  res.on('data', (chunk) => chunks.push(chunk));
+  res.on('end', () => callback(null, Buffer.concat(chunks)));
+}
+
 describe('GET /api/printers/:id/camera/snapshot', () => {
   test('404s for a missing printer', async () => {
     const res = await request(app).get('/api/printers/999/camera/snapshot');
@@ -139,11 +151,11 @@ describe('GET /api/printers/:id/camera/snapshot', () => {
     });
     axios.get.mockResolvedValue(fakeUpstream('image/jpeg', 'fake-jpeg-bytes'));
 
-    const res = await request(app).get('/api/printers/1/camera/snapshot');
+    const res = await request(app).get('/api/printers/1/camera/snapshot').buffer(true).parse(rawBufferParser);
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('image/jpeg');
-    expect(res.text).toBe('fake-jpeg-bytes');
+    expect(res.body.toString()).toBe('fake-jpeg-bytes');
     expect(axios.get).toHaveBeenCalledWith(
       'http://192.168.1.50/webcam/?action=snapshot',
       expect.objectContaining({ responseType: 'stream' })
@@ -183,11 +195,11 @@ describe('GET /api/printers/:id/camera/stream', () => {
     });
     axios.get.mockResolvedValue(fakeUpstream('multipart/x-mixed-replace; boundary=frame', 'fake-mjpeg-bytes'));
 
-    const res = await request(app).get('/api/printers/1/camera/stream');
+    const res = await request(app).get('/api/printers/1/camera/stream').buffer(true).parse(rawBufferParser);
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('multipart/x-mixed-replace; boundary=frame');
-    expect(res.text).toBe('fake-mjpeg-bytes');
+    expect(res.body.toString()).toBe('fake-mjpeg-bytes');
     expect(axios.get).toHaveBeenCalledWith(
       'http://192.168.1.50/webcam/?action=stream',
       expect.objectContaining({ responseType: 'stream' })
