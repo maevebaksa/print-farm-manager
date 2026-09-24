@@ -100,7 +100,7 @@ Admin only. **Body:** `{ "email": "...", "name": "...", "role": "uploader", "pas
 
 ### `PUT /api/users/:id`
 
-Admin only. Partial update (`COALESCE`, omitted fields unchanged). **Body:** any of `name`, `role`, `password`, `approved` (boolean). `404` if not found, `409` if this would demote the last remaining admin to any other role.
+Admin only. Partial update (`COALESCE`, omitted fields unchanged). **Body:** any of `name`, `role`, `password`, `approved` (boolean), `requires_print_approval` (boolean). `404` if not found, `409` if this would demote the last remaining admin to any other role. `requires_print_approval` is unrelated to `approved`: it gates whether *this account's own G-code uploads* need review before dispatch (`POST /api/gcodes/upload`, `POST /api/gcodes/:id/approve`), not whether the account itself can sign in; see [docs/auth.md](auth.md)'s Print approval section.
 
 ### `DELETE /api/users/:id`
 
@@ -577,7 +577,7 @@ Diagnostic for the "Why isn't this printing?" button on the Projects page. Mirro
 }
 ```
 
-- `reasons` — populated when `dispatchable` is `false`: global blockers (project not active, part complete, no G-code, remaining qty already covered by in-progress jobs) followed by per-G-code availability problems (no printers of that model, group/material/color mismatch, all matching printers busy or held).
+- `reasons`: populated when `dispatchable` is `false`: global blockers (project not active, part complete, no G-code, remaining qty already covered by in-progress jobs) followed by per-G-code availability problems (pending print approval, no printers of that model, group/material/color mismatch, all matching printers busy or held).
 - `notes` — populated when `dispatchable` is `true`: advisory per-G-code items (e.g. one G-code can dispatch but another has no ready printers).
 
 The material/color check counts a printer as a match via its own `loaded_material`/`loaded_color`, or via any single one of its `printer_lanes` rows (a multi-lane Klipper printer synced from the klipper-filament-sync plugin): mirrors `server/scheduler.js`'s candidate query exactly, see `docs/database.md`'s `printer_lanes` entry.
@@ -678,7 +678,7 @@ Upload a G-code file and create a DB record. `Content-Type: multipart/form-data`
 
 Returns `201` with created G-code record. Returns `409` if a G-code for this `(part_id, printer_model)` combination already exists.
 
-A part only becomes a real dispatch candidate once it has at least one matching G-code (the scheduler's candidate query joins on `gcodes`). A successful upload triggers a scheduler sweep immediately, so an idle printer can pick up the part right away instead of waiting for a manual dispatch or the next printer status transition.
+A part only becomes a real dispatch candidate once it has at least one matching, *approved* G-code (the scheduler's candidate query joins on `gcodes` and checks `approved = 1`). The created record's `approved` field is `0`, not the usual `1`, if the uploading account (`req.user`) has `requires_print_approval` set; see [docs/auth.md](auth.md)'s Print approval section and `POST /api/gcodes/:id/approve` below. A successful upload triggers a scheduler sweep immediately regardless, so an idle printer can pick up the part right away instead of waiting for a manual dispatch or the next printer status transition; an unapproved G-code just won't be a candidate that sweep finds anything for yet.
 
 ### `PUT /api/gcodes/:id`
 
@@ -711,6 +711,10 @@ Returns `404` if the G-code record does not exist, the file is missing from disk
 ### `DELETE /api/gcodes/:id`
 
 Deletes the DB record and removes the file from disk. Returns `{ "success": true }`.
+
+### `POST /api/gcodes/:id/approve`
+
+Admin or operator. Sets `approved = 1` on a G-code uploaded by an account with `requires_print_approval` set, making it a dispatch candidate. `404` if not found. Idempotent: approving an already-approved G-code is a `200` no-op, not an error. Triggers a scheduler sweep, same reasoning as `POST /api/gcodes/upload`: the part this G-code belongs to may now have an idle printer waiting for it.
 
 Returns `409` if the gcode is referenced by an active job (`queued`, `uploading`, or `printing`). Wait for the job to finish or cancel it before deleting.
 

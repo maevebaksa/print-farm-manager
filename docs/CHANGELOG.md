@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-09-24: per-account print approval for uploader G-codes
+
+Requested: an individual-user setting controlling whether an uploader can queue G-code freely or needs operator/admin sign-off first, separate from the existing account-sign-in approval (`require_uploader_approval`).
+
+New per-user flag, `users.requires_print_approval` (admin-only, off by default, `PUT /api/users/:id`). When set, every G-code that account uploads (`POST /api/gcodes/upload`) is created with `gcodes.approved = 0` instead of the usual `1`. An unapproved G-code is simply never a dispatch candidate: the scheduler's candidate query and `GET /api/parts/:id/dispatch-status` both check `approved = 1`, the same mechanism a G-code with no matching printer already uses, no new job or hold state needed. `POST /api/gcodes/:id/approve` (admin-or-operator, same bar as approving a pending account) clears it, shown as a "Pending approval" badge with an Approve button next to the G-code on the Projects page.
+
+Deliberately per-account and per-upload, not a role or a global switch: two uploaders can have opposite settings, and toggling the flag only affects uploads made after the change, an uploader's past G-codes keep whatever `approved` they were created with. Does not touch `parts.completed_qty` anywhere: this gates whether a G-code is a dispatch *candidate*, the credit path for a finished print is completely unaffected.
+
+### Changes
+- `server/db.js`: new `users.requires_print_approval` and `gcodes.approved` columns (additive migrations).
+- `server/routes/gcodes.js`: `POST /upload` sets `approved` from the uploading account's `requires_print_approval`; new `POST /:id/approve` (admin-or-operator).
+- `server/scheduler.js`: candidate query gains `AND gcodes.approved = 1`.
+- `server/routes/parts.js`: `GET /:id/dispatch-status` mirrors the same check, adding a "pending operator approval" note (see CLAUDE.md sync pairs).
+- `server/routes/users.js`: `USER_FIELDS` and `PUT /:id` gain `requires_print_approval` (COALESCE, same pattern as `approved`).
+- `client/src/pages/Users.jsx`: "Requires print approval" checkbox per `uploader`-role row, admin-only.
+- `client/src/pages/Projects.jsx`: "Pending approval" badge and Approve button on an unapproved G-code, visible to `admin`/`operator`.
+- `docs/auth.md`: new "Print approval" section. `docs/database.md`, `docs/api.md`, `docs/web-app.md` updated for the new columns, endpoint, and UI.
+- `server/tests/gcodes.test.js`, `gcodes-targeting.test.js`, `gcodes-upload-sweep.test.js`: `approved` column added to inline schemas; `req.user` now injected (a real request always has it via the global auth gate, these test apps previously didn't simulate it, needed once `POST /upload` started reading `req.user.requires_print_approval`); new tests for upload-time approval and the approve endpoint.
+- `server/tests/scheduler-file.test.js`, `scheduler-finished.test.js`, `scheduler-sweep.test.js`, `scheduler-targeting.test.js`, `dispatch-status.test.js`: `approved` column added to inline schemas (the scheduler's candidate SQL now references it unconditionally); new tests for the approval gate itself in `scheduler-targeting.test.js` and `dispatch-status.test.js`.
+- `server/tests/users-routes.test.js`: `requires_print_approval` column added; new tests for setting, leaving unchanged, and clearing it via `PUT /:id`.
+
+`npm test` could not be run locally: this machine's `better-sqlite3` native binding fails to load, so neither the server nor the test suite can start, the same limitation disclosed on every test this session. Verified `npm run build` succeeds for the client change, `node --check` for syntax on every touched server/test file, and confirmed every failure that does occur (both via `:memory:` construction in touched test files and via the module-level real-`db.js` require chain `scheduler.js` pulls in) traces to that same pre-existing binding gap, not a new error, by re-running the affected suites before and after this change.
+
+---
+
 ## 2026-09-24: three small fixes from a live testing pass (Fleet chip width, Dashboard header wrap, Projects drag-and-drop)
 
 Three unrelated small UI bugs, all reported live against the just-updated app in one session, bundled into a single commit rather than three separate ones since each is a one-file, few-line fix.

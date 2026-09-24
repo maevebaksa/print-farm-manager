@@ -23,6 +23,7 @@ beforeAll(() => {
       password_hash TEXT,
       role          TEXT NOT NULL DEFAULT 'uploader',
       approved      INTEGER NOT NULL DEFAULT 1,
+      requires_print_approval INTEGER NOT NULL DEFAULT 0,
       oidc_subject  TEXT UNIQUE,
       created_at    INTEGER NOT NULL,
       last_login_at INTEGER
@@ -117,6 +118,30 @@ describe('PUT /api/users/:id', () => {
     const res = await request(app).put(`/api/users/${secondAdmin.id}`).send({ role: 'operator' });
     expect(res.status).toBe(200);
     expect(res.body.role).toBe('operator');
+  });
+
+  test('sets requires_print_approval on an uploader, leaving other fields unchanged (COALESCE)', async () => {
+    const up = insertUser({ email: 'up@farm.local', role: 'uploader' });
+    const res = await request(app).put(`/api/users/${up.id}`).send({ requires_print_approval: true });
+    expect(res.status).toBe(200);
+    expect(res.body.requires_print_approval).toBe(1);
+    expect(res.body.role).toBe('uploader');
+  });
+
+  test('omitting requires_print_approval leaves it unchanged', async () => {
+    const up = insertUser({ email: 'up2@farm.local', role: 'uploader' });
+    await request(app).put(`/api/users/${up.id}`).send({ requires_print_approval: true });
+    const res = await request(app).put(`/api/users/${up.id}`).send({ name: 'Renamed' });
+    expect(res.status).toBe(200);
+    expect(res.body.requires_print_approval).toBe(1);
+  });
+
+  test('clears requires_print_approval back to false when explicitly sent', async () => {
+    const up = insertUser({ email: 'up3@farm.local', role: 'uploader' });
+    await request(app).put(`/api/users/${up.id}`).send({ requires_print_approval: true });
+    const res = await request(app).put(`/api/users/${up.id}`).send({ requires_print_approval: false });
+    expect(res.status).toBe(200);
+    expect(res.body.requires_print_approval).toBe(0);
   });
 });
 

@@ -51,10 +51,11 @@ beforeEach(() => {
  * @param {string|null} opts.gcodeColor       - required_color on the gcode (null = any)
  * @param {string|null} opts.projectGroups    - JSON string for projects.allowed_groups (null = none), used as the fallback when gcodeGroups is null
  * @param {number|null} opts.colorTolerance   - color_tolerance setting value (null = not set, tolerance off)
+ * @param {number}      opts.gcodeApproved    - gcodes.approved (default 1; 0 simulates a G-code pending print approval)
  */
 function makeDb({ printerGroup = null, printerMaterial = null, printerColor = null,
                    gcodeGroups = null, gcodeMaterial = null, gcodeColor = null,
-                   projectGroups = null, colorTolerance = null } = {}) {
+                   projectGroups = null, colorTolerance = null, gcodeApproved = 1 } = {}) {
   const db = new Database(':memory:');
   db.exec(`
     CREATE TABLE printers (
@@ -91,6 +92,7 @@ function makeDb({ printerGroup = null, printerMaterial = null, printerColor = nu
       filename TEXT NOT NULL, filepath TEXT NOT NULL,
       parts_per_plate INTEGER NOT NULL, ams_slot INTEGER,
       allowed_groups TEXT, required_material TEXT, required_color TEXT,
+      approved INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE jobs (
@@ -121,9 +123,9 @@ function makeDb({ printerGroup = null, printerMaterial = null, printerColor = nu
   db.prepare(`INSERT INTO parts (project_id, name, target_qty, completed_qty, status, sort_order, created_at, updated_at)
               VALUES (1, 'Part A', 10, 0, 'open', 0, ?, ?)`)
     .run(now, now);
-  db.prepare(`INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, allowed_groups, required_material, required_color, created_at)
-              VALUES (1, 'mk4s', ?, ?, 2, ?, ?, ?, ?)`)
-    .run(gcodeFilename, gcodeFilename, gcodeGroups, gcodeMaterial, gcodeColor, now);
+  db.prepare(`INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, allowed_groups, required_material, required_color, approved, created_at)
+              VALUES (1, 'mk4s', ?, ?, 2, ?, ?, ?, ?, ?)`)
+    .run(gcodeFilename, gcodeFilename, gcodeGroups, gcodeMaterial, gcodeColor, gcodeApproved, now);
 
   return db;
 }
@@ -162,6 +164,26 @@ describe('scheduler — group filtering', () => {
     const db = makeDb({ printerGroup: null, gcodeGroups: JSON.stringify(['Rack A']) });
     const scheduler = new JobScheduler(db, { on: () => {} });
     const jobId = await scheduler._dispatchToPrinter({ ...printer, group_name: null });
+    expect(jobId).toBeNull();
+    expect(mockDriver.uploadAndPrint).not.toHaveBeenCalled();
+  });
+});
+
+// ── Print approval ────────────────────────────────────────────────────────────
+
+describe('scheduler: print approval', () => {
+  test('dispatches an approved gcode normally', async () => {
+    const db = makeDb({ gcodeApproved: 1 });
+    const scheduler = new JobScheduler(db, { on: () => {} });
+    const jobId = await scheduler._dispatchToPrinter(printer);
+    expect(jobId).not.toBeNull();
+    expect(mockDriver.uploadAndPrint).toHaveBeenCalled();
+  });
+
+  test('skips a gcode pending print approval (approved = 0), even with no other restrictions', async () => {
+    const db = makeDb({ gcodeApproved: 0 });
+    const scheduler = new JobScheduler(db, { on: () => {} });
+    const jobId = await scheduler._dispatchToPrinter(printer);
     expect(jobId).toBeNull();
     expect(mockDriver.uploadAndPrint).not.toHaveBeenCalled();
   });

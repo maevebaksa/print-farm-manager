@@ -485,4 +485,23 @@ try {
   )`);
 } catch (_) {}
 
+// Admin-set, per uploader account: when 1, every G-code that account uploads is
+// created with gcodes.approved = 0 (see POST /api/gcodes/upload) instead of the
+// normal default of 1, so it needs an operator or admin to approve it (POST
+// /api/gcodes/:id/approve) before the scheduler will dispatch it. Off by default
+// for every account, uploader or otherwise; an admin opts specific uploaders in
+// via PUT /api/users/:id. Unlike require_uploader_approval (a global setting
+// gating account sign-in), this is per-account and gates individual uploads, not
+// login.
+try { db.exec('ALTER TABLE users ADD COLUMN requires_print_approval INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+
+// Whether this G-code is eligible for the scheduler to dispatch. Defaults to 1
+// (approved) for every insert except one made by an uploader with
+// requires_print_approval = 1, which starts at 0 (see POST /api/gcodes/upload).
+// Checked in the scheduler's candidate query (server/scheduler.js) and mirrored
+// in GET /api/parts/:id/dispatch-status (see CLAUDE.md's sync-pairs table): an
+// unapproved G-code is simply never a dispatch candidate, the same mechanism as
+// a G-code with no matching printer, no new job/hold state needed.
+try { db.exec('ALTER TABLE gcodes ADD COLUMN approved INTEGER NOT NULL DEFAULT 1'); } catch (_) {}
+
 module.exports = db;

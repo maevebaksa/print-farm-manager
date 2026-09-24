@@ -41,6 +41,7 @@ beforeEach(() => {
       part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
       filename TEXT NOT NULL, filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL,
       allowed_groups TEXT, required_material TEXT, required_color TEXT,
+      approved INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE jobs (
@@ -90,10 +91,10 @@ function seedPart(projectId, overrides = {}) {
 
 function seedGcode(partId, overrides = {}) {
   db.prepare(`
-    INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, allowed_groups, required_material, required_color, created_at)
-    VALUES (?, ?, 'f.gcode', 'f.gcode', 1, ?, ?, ?, ?)
+    INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, allowed_groups, required_material, required_color, approved, created_at)
+    VALUES (?, ?, 'f.gcode', 'f.gcode', 1, ?, ?, ?, ?, ?)
   `).run(partId, overrides.printer_model ?? 'mk4s', overrides.allowed_groups ?? null,
-         overrides.required_material ?? null, overrides.required_color ?? null, now);
+         overrides.required_material ?? null, overrides.required_color ?? null, overrides.approved ?? 1, now);
 }
 
 function seedPrinter(overrides = {}) {
@@ -149,6 +150,17 @@ describe('GET /api/parts/:id/dispatch-status', () => {
     expect(res.status).toBe(200);
     expect(res.body.dispatchable).toBe(true);
     expect(res.body.reasons).toEqual([]);
+  });
+
+  test('not dispatchable when the gcode is pending print approval, even with a matching idle printer', async () => {
+    const projectId = seedProject();
+    const partId = seedPart(projectId);
+    seedGcode(partId, { approved: 0 });
+    seedPrinter();
+    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.status).toBe(200);
+    expect(res.body.dispatchable).toBe(false);
+    expect(res.body.reasons.some(r => /pending operator approval/i.test(r))).toBe(true);
   });
 
   test('a gcode with no allowed_groups inherits the project-level restriction and reports no match', async () => {

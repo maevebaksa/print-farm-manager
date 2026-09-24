@@ -54,7 +54,9 @@ function makeDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
       filename TEXT NOT NULL, filepath TEXT NOT NULL,
-      parts_per_plate INTEGER NOT NULL, ams_slot INTEGER, created_at INTEGER NOT NULL
+      parts_per_plate INTEGER NOT NULL, ams_slot INTEGER,
+      approved INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
     );
     CREATE TABLE jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

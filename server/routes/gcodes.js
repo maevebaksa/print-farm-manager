@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const router = express.Router();
 const { extractThumbnail } = require('../gcode-thumbnail');
+const { requireAnyRole } = require('../auth');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 
@@ -158,9 +159,17 @@ module.exports = (db, scheduler = null) => {
     const parsedRequiredMaterial = required_material && required_material !== '' ? required_material.trim() : null;
     const parsedRequiredColor    = required_color    && required_color    !== '' ? required_color.trim()    : null;
 
+    // An uploader account flagged requires_print_approval uploads gcodes that start
+    // unapproved (gcodes.approved = 0), same idea as require_uploader_approval for
+    // sign-in but per-account and per-upload instead of global and at login. Every
+    // other account (including an unflagged uploader) gets the normal default of
+    // approved. req.user is always set here: this route sits behind the global
+    // requireAuth gate in server/index.js.
+    const approved = req.user.requires_print_approval ? 0 : 1;
+
     const gcode = db.prepare(`
-      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, ams_slot, allowed_groups, required_material, required_color, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, ams_slot, allowed_groups, required_material, required_color, approved, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       part_id,
       printer_model,
@@ -173,14 +182,16 @@ module.exports = (db, scheduler = null) => {
       parsedAllowedGroups,
       parsedRequiredMaterial,
       parsedRequiredColor,
+      approved,
       Date.now()
     );
 
-    // A part only becomes a real dispatch candidate once it has a matching G-code: the
-    // scheduler's candidate query joins on gcodes. Sweep now so an idle printer picks up
-    // work immediately instead of waiting for a manual dispatch or the next printer status
-    // transition. Safe to call unconditionally: sweepIdlePrinters already filters to active
-    // projects with open, unmet parts internally.
+    // A part only becomes a real dispatch candidate once it has a matching, approved
+    // G-code: the scheduler's candidate query joins on gcodes and checks approved = 1.
+    // Sweep now so an idle printer picks up work immediately instead of waiting for a
+    // manual dispatch or the next printer status transition. Safe to call
+    // unconditionally even when this upload starts unapproved: sweepIdlePrinters
+    // already filters to active projects with open, unmet, approved parts internally.
     if (scheduler) scheduler.sweepIdlePrinters();
 
     res.status(201).json(db.prepare('SELECT * FROM gcodes WHERE id = ?').get(gcode.lastInsertRowid));
@@ -276,6 +287,23 @@ module.exports = (db, scheduler = null) => {
     }
     db.prepare('DELETE FROM gcodes WHERE id = ?').run(req.params.id);
     res.json({ success: true });
+  });
+
+  // POST /api/gcodes/:id/approve: clears the pending-approval flag on a G-code
+  // uploaded by an account with requires_print_approval set. Admin-or-operator,
+  // same as approving a pending uploader account (POST /api/users/:id/approve):
+  // day-to-day review work, not a permissions change, so it isn't admin-only.
+  // A no-op (still 200) if the G-code was already approved.
+  router.post('/:id/approve', requireAnyRole(['admin', 'operator']), (req, res) => {
+    const gcode = db.prepare('SELECT * FROM gcodes WHERE id = ?').get(req.params.id);
+    if (!gcode) return res.status(404).json({ error: 'G-code not found' });
+
+    db.prepare('UPDATE gcodes SET approved = 1 WHERE id = ?').run(req.params.id);
+
+    // Newly eligible for dispatch: same reasoning as the upload route's sweep.
+    if (scheduler) scheduler.sweepIdlePrinters();
+
+    res.json(db.prepare('SELECT * FROM gcodes WHERE id = ?').get(req.params.id));
   });
 
   return router;

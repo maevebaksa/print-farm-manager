@@ -157,11 +157,14 @@ CREATE TABLE IF NOT EXISTS gcodes (
   allowed_groups     TEXT,               -- nullable JSON array e.g. '["Rack A","Rack B"]'; NULL = no restriction
   required_material  TEXT,               -- nullable; overrides the project default below when set
   required_color     TEXT,               -- nullable; overrides the project default below when set
+  approved           INTEGER NOT NULL DEFAULT 1,  -- 0 if the uploader requires print approval; see below
   created_at         INTEGER NOT NULL
 );
 ```
 
 **Uniqueness on `(part_id, printer_model)`** is enforced at the application layer, not as a DB constraint, so the error message shown to the operator is clear and specific.
+
+**`approved`:** 1 for every G-code except one uploaded by an account with `users.requires_print_approval = 1`, which starts at 0 (`POST /api/gcodes/upload`, see below). The scheduler's dispatch candidate query and `GET /api/parts/:id/dispatch-status` both check `approved = 1`: an unapproved G-code is simply never a dispatch candidate, the same mechanism as one with no matching printer, not a new hold/job state. `POST /api/gcodes/:id/approve` (admin-or-operator) clears it back to 1.
 
 `est_print_secs` and `material_grams` are **per-plate** values (i.e., covering all parts on one plate, not one part). They are auto-populated from the filename on upload when the Bambu-style naming convention is detected, and can be edited later via `PUT /api/gcodes/:id`. Since each gcode belongs to one `printer_model`, the stats system can break down elapsed time and material used by model across a project's completed jobs.
 

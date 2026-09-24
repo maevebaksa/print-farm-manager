@@ -127,6 +127,23 @@ export default function Users() {
     fetchUsers();
   }
 
+  // Per-account, not the global require_uploader_approval setting: gates whether
+  // this uploader's own G-code uploads need an operator/admin to approve them
+  // before the scheduler will dispatch them (POST /api/gcodes/:id/approve), not
+  // whether the account itself can sign in.
+  async function toggleRequiresPrintApproval(u) {
+    const requires_print_approval = !u.requires_print_approval;
+    const res = await fetch(`/api/users/${u.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requires_print_approval }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { showToast(`Update failed: ${body.error || res.status}`, 'error'); return; }
+    showToast(`${u.name} ${requires_print_approval ? 'now requires' : 'no longer requires'} approval for prints`, 'success');
+    fetchUsers();
+  }
+
   async function approveUser(u) {
     const res = await fetch(`/api/users/${u.id}/approve`, { method: 'POST' });
     const body = await res.json().catch(() => ({}));
@@ -214,6 +231,20 @@ export default function Users() {
                 <span style={{ background: '#422006', color: '#fbbf24', borderRadius: 4, padding: '2px 9px', fontSize: 11, fontWeight: 700 }}>
                   Pending
                 </span>
+              )}
+              {u.role === 'uploader' && (
+                <label
+                  title="Every G-code this account uploads stays unapproved (excluded from dispatch) until an operator or admin approves it"
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#94a3b8', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!u.requires_print_approval}
+                    onChange={() => toggleRequiresPrintApproval(u)}
+                    style={{ accentColor: '#3b82f6', cursor: 'pointer' }}
+                  />
+                  Requires print approval
+                </label>
               )}
               <RoleBadge role={u.role} />
               <select

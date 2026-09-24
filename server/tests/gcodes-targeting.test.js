@@ -39,6 +39,7 @@ beforeAll(() => {
       parts_per_plate INTEGER NOT NULL,
       est_print_secs INTEGER, material_grams REAL, ams_slot INTEGER,
       allowed_groups TEXT, required_material TEXT, required_color TEXT,
+      approved INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE printers (
@@ -69,6 +70,9 @@ beforeAll(() => {
 
   app = express();
   app.use(express.json());
+  // POST /upload reads req.user.requires_print_approval; a real request always has
+  // this set by the global auth gate (server/index.js), so simulate it here too.
+  app.use((req, res, next) => { req.user = { id: 1, role: 'admin', requires_print_approval: 0 }; next(); });
   app.use('/api/gcodes', require('../routes/gcodes')(db));
 });
 

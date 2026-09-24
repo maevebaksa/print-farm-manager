@@ -460,6 +460,11 @@ class JobScheduler extends EventEmitter {
         ${colorJoin}
         WHERE parts.status    = 'open'
           AND projects.status = 'active'
+          -- gcodes.approved = 0 for a G-code uploaded by an account flagged
+          -- requires_print_approval, until an operator or admin approves it (POST
+          -- /api/gcodes/:id/approve). Not yet a dispatch candidate at all: mirrored
+          -- in routes/parts.js's dispatch-status endpoint (see CLAUDE.md sync pairs).
+          AND gcodes.approved = 1
           AND gcodes.printer_model = ?
           AND (COALESCE(gcodes.allowed_groups, projects.allowed_groups) IS NULL OR EXISTS (
             SELECT 1 FROM json_each(COALESCE(gcodes.allowed_groups, projects.allowed_groups)) WHERE value = ?

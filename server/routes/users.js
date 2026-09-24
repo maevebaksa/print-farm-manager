@@ -12,7 +12,7 @@ const router = express.Router();
 const auth = require('../auth');
 
 const VALID_ROLES = new Set(['admin', 'operator', 'uploader']);
-const USER_FIELDS = 'id, email, name, role, approved, oidc_subject, created_at, last_login_at';
+const USER_FIELDS = 'id, email, name, role, approved, requires_print_approval, oidc_subject, created_at, last_login_at';
 
 function countAdmins(db) {
   return db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'").get().count;
@@ -91,7 +91,7 @@ module.exports = (db) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const { name, role, password, approved } = req.body || {};
+    const { name, role, password, approved, requires_print_approval } = req.body || {};
     if (role !== undefined && !VALID_ROLES.has(role)) {
       return res.status(400).json({ error: `role must be one of: ${[...VALID_ROLES].join(', ')}` });
     }
@@ -111,9 +111,17 @@ module.exports = (db) => {
       SET name = COALESCE(?, name),
           role = COALESCE(?, role),
           approved = COALESCE(?, approved),
+          requires_print_approval = COALESCE(?, requires_print_approval),
           password_hash = COALESCE(?, password_hash)
       WHERE id = ?
-    `).run(name ?? null, role ?? null, approved === undefined ? null : (approved ? 1 : 0), password ? auth.hashPassword(password) : null, req.params.id);
+    `).run(
+      name ?? null,
+      role ?? null,
+      approved === undefined ? null : (approved ? 1 : 0),
+      requires_print_approval === undefined ? null : (requires_print_approval ? 1 : 0),
+      password ? auth.hashPassword(password) : null,
+      req.params.id
+    );
 
     res.json(db.prepare(`SELECT ${USER_FIELDS} FROM users WHERE id = ?`).get(req.params.id));
   });

@@ -91,6 +91,15 @@ module.exports = (db, scheduler = null) => {
 
     // Per-gcode printer availability, using the same filters as the scheduler
     for (const gc of gcodes) {
+      // Mirrors the scheduler's candidate query: gcodes.approved = 0 (an account
+      // flagged requires_print_approval uploaded this and no one has approved it
+      // yet) is never a dispatch candidate at all, same as a G-code with no
+      // matching printer. Keep in sync (see CLAUDE.md sync pairs).
+      if (gc.approved === 0) {
+        notes.push(`${gc.filename}: pending operator approval before it can be dispatched`);
+        continue;
+      }
+
       const requiredMaterial = gc.required_material || part.project_material || null;
       const requiredColor    = gc.required_color    || part.project_color    || null;
       const allowedGroups    = gc.allowed_groups

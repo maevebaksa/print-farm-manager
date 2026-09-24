@@ -6,6 +6,7 @@ import EmptyState from '../components/EmptyState';
 import { useConfirm } from '../useConfirm';
 import GcodeUploadWizard from '../components/GcodeUploadWizard';
 import GcodeThumbnail from '../components/GcodeThumbnail';
+import { useAuth } from '../AuthContext';
 
 // ── Estimate helpers ──────────────────────────────────────────────────────────
 
@@ -440,7 +441,7 @@ function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, pro
   );
 }
 
-function GcodeEstimateRow({ gc, onDelete, onSaved, filamentTypes, filamentColors, projectMaterial, projectColor, projectGroups, groups }) {
+function GcodeEstimateRow({ gc, onDelete, onApprove, onSaved, filamentTypes, filamentColors, projectMaterial, projectColor, projectGroups, groups }) {
   const [timeDraft, setTimeDraft]         = useState(formatDurationForInput(gc.est_print_secs));
   const [materialDraft, setMaterialDraft] = useState(formatMaterialForInput(gc.material_grams));
   const [parsing, setParsing]             = useState(false);
@@ -524,6 +525,33 @@ function GcodeEstimateRow({ gc, onDelete, onSaved, filamentTypes, filamentColors
         }}>
           {gc.printer_model}
         </span>
+        {/* approved defaults to 1 for every G-code except one uploaded by an
+            account flagged requires_print_approval (see Users page); the
+            scheduler excludes it from dispatch until this is cleared. */}
+        {!gc.approved && (
+          <span
+            title="Uploaded by an account that requires print approval: not eligible for dispatch until approved"
+            style={{
+              background: '#422006', color: '#fbbf24', borderRadius: 3,
+              padding: '1px 6px', fontSize: 11, fontWeight: 700, flexShrink: 0,
+            }}
+          >
+            Pending approval
+          </span>
+        )}
+        {!gc.approved && onApprove && (
+          <button
+            onClick={onApprove}
+            title="Approve this G-code for dispatch"
+            style={{
+              background: 'none', border: '1px solid #15803d', color: '#4ade80',
+              borderRadius: 5, padding: '3px 8px', fontSize: 11, fontWeight: 600,
+              cursor: 'pointer', flexShrink: 0,
+            }}
+          >
+            Approve
+          </button>
+        )}
         <button
           onClick={onDelete}
           title="Delete G-code"
@@ -641,7 +669,7 @@ function GcodeEstimateRow({ gc, onDelete, onSaved, filamentTypes, filamentColors
   );
 }
 
-function PartDetailsPanel({ part, gcodes, onRefresh, onSaved, onConfirm, filamentTypes, filamentColors, projectMaterial, projectColor, projectGroups, groups }) {
+function PartDetailsPanel({ part, gcodes, onRefresh, onSaved, onConfirm, filamentTypes, filamentColors, projectMaterial, projectColor, projectGroups, groups, canApprove }) {
   const [have, setHave] = useState(String(part.completed_qty));
   const [need, setNeed] = useState(String(part.target_qty));
   const [saving, setSaving] = useState(false);
@@ -740,6 +768,14 @@ function PartDetailsPanel({ part, gcodes, onRefresh, onSaved, onConfirm, filamen
     onRefresh();
   }
 
+  async function approveGcode(gcodeId) {
+    const res = await fetch(`/api/gcodes/${gcodeId}/approve`, { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { onSaved(`Approve failed: ${body.error || res.status}`, 'error'); return; }
+    onSaved('G-code approved');
+    onRefresh();
+  }
+
   const sectionLabel = {
     fontSize: 11, fontWeight: 700, color: '#475569',
     textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8,
@@ -827,6 +863,7 @@ function PartDetailsPanel({ part, gcodes, onRefresh, onSaved, onConfirm, filamen
               key={gc.id}
               gc={gc}
               onDelete={() => deleteGcode(gc.id)}
+              onApprove={canApprove ? () => approveGcode(gc.id) : null}
               onSaved={onSaved}
               filamentTypes={filamentTypes}
               filamentColors={filamentColors}
@@ -895,6 +932,10 @@ function PartDetailsPanel({ part, gcodes, onRefresh, onSaved, onConfirm, filamen
 }
 
 export default function Projects() {
+  const { user }                          = useAuth();
+  // Same admin-or-operator bar as POST /api/gcodes/:id/approve itself: day-to-day
+  // review work, not a permissions change.
+  const canApprove                        = user.role === 'admin' || user.role === 'operator';
   const [showToast, toastEl]              = useToast();
   const [confirm, confirmModal]           = useConfirm();
   const [projects, setProjects]           = useState([]);
@@ -1919,6 +1960,7 @@ export default function Projects() {
                 projectColor={detailProject.required_color || ''}
                 projectGroups={projectGroups}
                 groups={allGroups}
+                canApprove={canApprove}
               />
             )}
           </div>

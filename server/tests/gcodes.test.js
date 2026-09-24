@@ -43,6 +43,7 @@ beforeAll(() => {
       allowed_groups TEXT,
       required_material TEXT,
       required_color TEXT,
+      approved INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE printers (
@@ -80,6 +81,7 @@ beforeAll(() => {
   db.exec(`INSERT INTO printer_models VALUES ('x1c',  'X1 Carbon',  'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('a1',   'A1',         'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('p1s',  'P1S',        'bambu')`);
+  db.exec(`INSERT INTO printer_models VALUES ('a1m',  'A1 Mini',    'bambu')`); // requires_print_approval tests only, kept unused elsewhere so (part_id, printer_model) never collides
 
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
 
@@ -94,11 +96,19 @@ const express     = require('express');
 const gcodesRouter = require('../routes/gcodes');
 
 let app;
+// Mutable so individual tests (the requires_print_approval ones below) can swap in
+// a different req.user without needing a second app instance.
+let currentUser = { id: 1, role: 'admin', requires_print_approval: 0 };
 beforeAll(() => {
   app = express();
   app.use(express.json());
+  // POST /upload reads req.user.requires_print_approval, and POST /:id/approve is
+  // role-gated on req.user.role; a real request always has req.user set by the
+  // global auth gate (server/index.js), so simulate it here too.
+  app.use((req, res, next) => { req.user = currentUser; next(); });
   app.use('/api/gcodes', gcodesRouter(db));
 });
+afterEach(() => { currentUser = { id: 1, role: 'admin', requires_print_approval: 0 }; });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -186,6 +196,7 @@ describe('POST /api/gcodes/upload', () => {
     expect(res.status).toBe(201);
     expect(res.body.printer_model).toBe('mk4s');
     expect(res.body.parts_per_plate).toBe(4);
+    expect(res.body.approved).toBe(1); // uploader's requires_print_approval is 0 (or unset)
     uploadedPath = res.body.filepath;
   });
 
@@ -297,13 +308,72 @@ describe('POST /api/gcodes/upload', () => {
   });
 });
 
+describe('POST /api/gcodes/upload: requires_print_approval', () => {
+  let uploadedPath;
+  afterEach(() => {
+    if (uploadedPath && fs.existsSync(uploadedPath)) {
+      fs.unlinkSync(uploadedPath);
+      uploadedPath = null;
+    }
+  });
+
+  test('an upload from an account flagged requires_print_approval starts unapproved', async () => {
+    currentUser = { id: 2, role: 'uploader', requires_print_approval: 1 };
+    const tmpFile = makeTempGcode('needs_approval.bgcode');
+
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', tmpFile)
+      .field('part_id', '1')
+      .field('parts_per_plate', '1')
+      .field('printer_model', 'a1m');
+
+    fs.unlinkSync(tmpFile);
+
+    expect(res.status).toBe(201);
+    expect(res.body.approved).toBe(0);
+    uploadedPath = res.body.filepath;
+  });
+});
+
+describe('POST /api/gcodes/:id/approve', () => {
+  test('returns 404 for unknown id', async () => {
+    const res = await request(app).post('/api/gcodes/999999/approve');
+    expect(res.status).toBe(404);
+  });
+
+  test('403s for an uploader (not admin or operator)', async () => {
+    const id = insertGcode('pending1.bgcode', 'pending1.bgcode', 0);
+    currentUser = { id: 3, role: 'uploader', requires_print_approval: 0 };
+    const res = await request(app).post(`/api/gcodes/${id}/approve`);
+    expect(res.status).toBe(403);
+  });
+
+  test('operator can approve, clearing approved back to 1', async () => {
+    const id = insertGcode('pending2.bgcode', 'pending2.bgcode', 0);
+    currentUser = { id: 4, role: 'operator', requires_print_approval: 0 };
+    const res = await request(app).post(`/api/gcodes/${id}/approve`);
+    expect(res.status).toBe(200);
+    expect(res.body.approved).toBe(1);
+    expect(db.prepare('SELECT approved FROM gcodes WHERE id = ?').get(id).approved).toBe(1);
+  });
+
+  test('is a no-op (still 200) on an already-approved G-code', async () => {
+    const id = insertGcode('already.bgcode', 'already.bgcode', 1);
+    currentUser = { id: 1, role: 'admin', requires_print_approval: 0 };
+    const res = await request(app).post(`/api/gcodes/${id}/approve`);
+    expect(res.status).toBe(200);
+    expect(res.body.approved).toBe(1);
+  });
+});
+
 // ── Helper: insert a gcode row directly and write its file to disk ────────────
-function insertGcode(filename, filepath) {
+function insertGcode(filename, filepath, approved = 1) {
   const now = Date.now();
   const row = db.prepare(`
-    INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, created_at)
-    VALUES (1, 'mk4s', ?, ?, 1, ?)
-  `).run(filename, filepath, now);
+    INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, approved, created_at)
+    VALUES (1, 'mk4s', ?, ?, 1, ?, ?)
+  `).run(filename, filepath, approved, now);
   return row.lastInsertRowid;
 }
 
