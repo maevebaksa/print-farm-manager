@@ -152,6 +152,30 @@ docker compose pull
 docker compose up -d
 ```
 
+**Auto-updating (optional):** instead of running the two commands above by hand, add a [Watchtower](https://watchtower.nickfedor.com/) sidecar that polls GHCR and redeploys the container the moment a new image lands (CI publishes on every push to `main`, on a version tag, and on a daily schedule, see [docs/docker-publish.md](docs/docker-publish.md)). Add a label to the service above and this second service to the same `docker-compose.yml`:
+
+```yaml
+services:
+  print-farm-manager:
+    image: ghcr.io/joeltelling/print-farm-manager:latest
+    # ...same as above...
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  watchtower:
+    image: nickfedor/watchtower
+    container_name: print-farm-manager-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+```
+
+`WATCHTOWER_LABEL_ENABLE=true` scopes it to only containers carrying that label, so it never touches anything else running on the same Docker host or Portainer instance. `WATCHTOWER_POLL_INTERVAL=300` checks GHCR every 5 minutes; `WATCHTOWER_CLEANUP=true` removes the superseded image after each update so they don't pile up. Two tradeoffs worth knowing before enabling this: a redeploy can land mid-print-dispatch, killing an in-flight upload the same way a manual restart would (the scheduler's held-printer/stalled-upload handling recovers from this, but it's still an interruption nothing here waits out); and the container needs the Docker socket mounted in, which is broad host access, standard for this class of tool but worth being deliberate about on a shared host. `containrrr/watchtower` (the original image) was archived in December 2025; `nickfedor/watchtower` is the actively maintained fork, a drop-in replacement using the same image behavior and `com.centurylinklabs.watchtower.*` label namespace.
+
 **Useful commands:**
 
 | Command | What it does |

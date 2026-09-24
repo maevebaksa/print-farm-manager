@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-09-24: document Watchtower auto-updating for the Docker/Portainer path
+
+Asked: running the published image on a Portainer host, manually repulling and redeploying (`docker compose pull && docker compose up -d`) every time a new image lands on GHCR was the actual friction, not anything about `update.bat` (which does not apply here: it is a Windows batch script for the bare-metal path, and the container image has no `.git` or client source for it to pull against anyway).
+
+Documented a Watchtower sidecar as an opt-in addition to the README's "Quickest start" Docker Compose snippet: scoped to just the `print-farm-manager` container via a label (`com.centurylinklabs.watchtower.enable=true` plus `WATCHTOWER_LABEL_ENABLE=true`), polling GHCR every 5 minutes and redeploying automatically when a new image lands, matching CI's publish-on-push-to-main behavior. Named the two real tradeoffs rather than presenting this as a free win: a redeploy can land mid-print-dispatch, and the sidecar needs the Docker socket mounted in. `containrrr/watchtower` (the original image) was archived in December 2025; used `nickfedor/watchtower`, the actively maintained drop-in fork, instead.
+
+### Changes
+- `README.md`: new "Auto-updating (optional)" subsection under the Docker "Quickest start" section, with the Watchtower compose snippet and its tradeoffs.
+
+Docs-only change; no code touched.
+
+---
+
 ## 2026-09-23: fix Fleet card name truncation, add group rectangles
 
 Reported: after the Printers-into-Fleet merge shipped narrower chip-capped cards, printer names on the Fleet page truncated down to a couple of characters ("B...", "Switch...", "Doron ...") with nothing readable left. Also asked for a bordered rectangle around each model group, matching the Dashboard's `FleetStatusGrid`, which the Fleet page's chips never had.
