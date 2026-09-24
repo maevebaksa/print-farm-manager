@@ -550,8 +550,13 @@ module.exports = (db) => {
     res.json({ success: true, job_id: job.id });
   });
 
-  // GET /api/printers/:id/camera: live webcam feed URLs from the printer's driver, if supported.
+  // GET /api/printers/:id/camera: webcam feed info for a printer, if supported.
   // Returns { available: false } for connectors with no camera support (currently: Prusa, Bambu, Elegoo).
+  // streamUrl/snapshotUrl point at this server's own proxy routes below, not the
+  // printer directly: the printer's webcam is typically only reachable on the same
+  // LAN as the printer, but the manager itself is already required to be on that
+  // LAN to poll it, so proxying through the manager lets a browser anywhere reach
+  // the feed too. See GET /:id/camera/snapshot and /:id/camera/stream.
   router.get('/:id/camera', async (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
@@ -566,11 +571,74 @@ module.exports = (db) => {
     if (!camera) return res.json({ available: false });
     res.json({
       available: true,
-      ...camera,
+      streamUrl: camera.streamUrl ? `/api/printers/${printer.id}/camera/stream` : null,
+      snapshotUrl: camera.snapshotUrl ? `/api/printers/${printer.id}/camera/snapshot` : null,
       rotation: printer.camera_rotation || 0,
       flipH: !!printer.camera_flip_h,
       flipV: !!printer.camera_flip_v,
     });
+  });
+
+  // Shared by the two proxy routes below: looks up the printer and its live camera
+  // URLs, 404ing consistently (same body shape) for a missing printer, an
+  // unsupported connector, or a printer currently reporting no camera at all.
+  async function loadPrinterCamera(req, res) {
+    const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
+    if (!printer) {
+      res.status(404).json({ error: 'Printer not found' });
+      return null;
+    }
+    const { getDriver } = require('../drivers');
+    const driver = getDriver(printer.type);
+    const camera = typeof driver.getCameraUrl === 'function' ? await driver.getCameraUrl(printer) : null;
+    if (!camera) {
+      res.status(404).json({ error: 'Camera not available' });
+      return null;
+    }
+    return camera;
+  }
+
+  // Proxies one still snapshot from the printer's webcam through the manager, so
+  // the browser only ever needs to reach this server, never the printer's LAN
+  // address directly. Aborts the upstream request if the client disconnects first.
+  router.get('/:id/camera/snapshot', async (req, res) => {
+    const camera = await loadPrinterCamera(req, res);
+    if (!camera) return;
+    if (!camera.snapshotUrl) return res.status(404).json({ error: 'Camera has no snapshot URL' });
+
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+    try {
+      const upstream = await axios.get(camera.snapshotUrl, {
+        responseType: 'stream', timeout: 8000, signal: controller.signal,
+      });
+      res.set('Content-Type', upstream.headers['content-type'] || 'image/jpeg');
+      upstream.data.pipe(res);
+    } catch (err) {
+      if (!res.headersSent) res.status(502).json({ error: 'Could not reach camera: ' + err.message });
+    }
+  });
+
+  // Proxies the continuous MJPEG live stream the same way. Stays open, piping
+  // frames through, until the client (or the printer) closes the connection;
+  // no fixed timeout once the upstream response has started.
+  router.get('/:id/camera/stream', async (req, res) => {
+    const camera = await loadPrinterCamera(req, res);
+    if (!camera) return;
+    if (!camera.streamUrl) return res.status(404).json({ error: 'Camera has no stream URL' });
+
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+    try {
+      const upstream = await axios.get(camera.streamUrl, {
+        responseType: 'stream', timeout: 8000, signal: controller.signal,
+      });
+      res.set('Content-Type', upstream.headers['content-type'] || 'multipart/x-mixed-replace');
+      upstream.data.pipe(res);
+      upstream.data.on('error', () => { if (!res.writableEnded) res.end(); });
+    } catch (err) {
+      if (!res.headersSent) res.status(502).json({ error: 'Could not reach camera: ' + err.message });
+    }
   });
 
   // GET /api/printers/:id/raw-status — calls the printer's driver, returns raw response for debugging

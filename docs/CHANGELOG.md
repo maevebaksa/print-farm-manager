@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-09-24: proxy webcam feeds through the manager instead of the printer's LAN address
+
+Requested: webcam snapshots and live view only worked when the browser itself was on the same LAN as the printer, since `GET /:id/camera`'s `streamUrl`/`snapshotUrl` were the printer's own LAN address (e.g. `http://192.168.1.50/webcam/...`), fetched directly by the `<img>` tag. Accessing the manager from off that LAN (a VPN to just the manager, a reverse-proxied instance, etc.) showed a broken image for every camera.
+
+The manager is already required to be on the printer's LAN to poll it, so it can always reach a printer's webcam even when the browser cannot. Two new routes, `GET /:id/camera/snapshot` and `GET /:id/camera/stream`, fetch from the driver's `getCameraUrl()` (the printer's real LAN address, resolved exactly as before) and pipe the response straight through, forwarding its `Content-Type`; `GET /:id/camera` now returns these proxy paths instead of the raw LAN URLs, so every existing caller (Webcams page, Printer Detail camera card, Fleet's hover preview) picks this up with no client change beyond the URLs it was already treating as opaque. Deliberately does not touch `octoeverywhere_url` or `webUiLink.js`'s "open web interface" link, a separate, unrelated feature: OctoEverywhere is a remote-access relay for the printer's own web UI, not something the manager should proxy webcam bytes through, and the "open web interface" button correctly keeps preferring it when configured.
+
+Each proxy route aborts its upstream request if the client disconnects first, and the stream route has no fixed timeout once the upstream response has started (only on establishing the connection), so a long-running live view isn't cut off.
+
+### Changes
+- `server/routes/printers.js`: new `GET /:id/camera/snapshot` and `GET /:id/camera/stream`, both proxying the driver's resolved camera URL through with `axios` (`responseType: 'stream'`), piped to the response; `GET /:id/camera` now returns `/api/printers/:id/camera/stream` and `/snapshot` instead of the driver's raw URLs.
+- `docs/api.md`: updated `GET /:id/camera`'s example response; new entries for the two proxy routes.
+- `docs/web-app.md`: Webcams Page and Printer Detail View sections note that the feed URLs are this server's own proxy routes, not the printer's LAN address.
+- `server/tests/printers-camera-proxy.test.js`: new file, covering all three routes (success, printer not found, no camera support, no snapshot/stream URL, upstream fetch failure), drivers and axios both mocked.
+
+Client-only in effect, but a server change: no `client/src` file needed editing, since every consumer already treated `streamUrl`/`snapshotUrl` as opaque URLs. Could not run `npm test` or exercise this in a live browser: this machine's `better-sqlite3` native binding fails to load, so neither the server nor the test suite can start locally, the same limitation disclosed on every test this session; the new test file was checked with `node --check` for syntax only.
+
+---
+
 ## 2026-09-24: fix stray "0" rendered at the bottom of the Printer Detail page
 
 Reported: a bare "0" showing up below the event history on a printer's detail page, on printers that were not in an uncataloged-print state.

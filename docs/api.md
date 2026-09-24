@@ -194,14 +194,14 @@ Returns a single printer by ID. `404` if not found.
 
 ### `GET /api/printers/:id/camera`
 
-Returns live webcam feed URLs for a printer, if its connector supports one. `404` if the printer is not found.
+Returns webcam feed info for a printer, if its connector supports one. `404` if the printer is not found.
 
 **Response, camera available:**
 ```json
 {
   "available": true,
-  "streamUrl": "http://192.168.1.250/webcam/?action=stream",
-  "snapshotUrl": "http://192.168.1.250/webcam/?action=snapshot",
+  "streamUrl": "/api/printers/7/camera/stream",
+  "snapshotUrl": "/api/printers/7/camera/snapshot",
   "rotation": 180,
   "flipH": true,
   "flipV": false
@@ -215,7 +215,17 @@ Returns live webcam feed URLs for a printer, if its connector supports one. `404
 
 Currently implemented for `klipper` (via Moonraker's `/server/webcams/list`) and `octoprint` (via `/api/settings`'s `webcam` section). Other connectors always return `available: false`. `snapshotUrl` may be `null` even when `streamUrl` is present. For `klipper`, if the printer's `camera_uid` matches one of the webcams Moonraker reports, that one is used; otherwise the first enabled webcam is, same as before `camera_uid` existed.
 
-`rotation`/`flipH`/`flipV` come straight from the printer row (`camera_rotation`/`camera_flip_h`/`camera_flip_v`), not from the connector: they are a display preference the client applies as a CSS transform, not something read from or written to the printer's own webcam server. Always present when `available: true`, regardless of connector.
+`streamUrl`/`snapshotUrl` point at this server's own proxy routes below, not the printer's LAN address directly: see those two entries for why. `rotation`/`flipH`/`flipV` come straight from the printer row (`camera_rotation`/`camera_flip_h`/`camera_flip_v`), not from the connector: they are a display preference the client applies as a CSS transform, not something read from or written to the printer's own webcam server. Always present when `available: true`, regardless of connector.
+
+### `GET /api/printers/:id/camera/snapshot`
+
+Proxies one still image from the printer's webcam through this server, so the browser only ever needs to reach the manager, not the printer's own LAN address directly (the manager is already required to be on that LAN to poll the printer, so it can always reach the webcam even when the browser cannot). Streams the upstream response body through as-is, forwarding its `Content-Type` (normally `image/jpeg`).
+
+`404` if the printer is not found, its connector has no camera support, or it currently reports no snapshot URL at all (same body shape as `GET /:id/camera`'s `available: false` case: `{ "error": "..." }`, message varies). `502` if the printer's webcam URL could not be reached (`{ "error": "Could not reach camera: <details>" }`). Aborts the upstream request if the client disconnects before it completes.
+
+### `GET /api/printers/:id/camera/stream`
+
+Same proxying, for the continuous MJPEG live stream instead of a single snapshot. Forwards `Content-Type` (normally `multipart/x-mixed-replace`) and pipes frames through until the client or the printer closes the connection; no fixed timeout once the upstream response has started. Same `404`/`502` semantics as the snapshot route above.
 
 ### `POST /api/printers/list-cameras`
 
