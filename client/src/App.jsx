@@ -13,6 +13,7 @@ import Users from './pages/Users';
 import Account from './pages/Account';
 import CommandPalette from './components/CommandPalette';
 import { useAuth } from './AuthContext';
+import { isMac } from './platform';
 
 function navItems(role) {
   const items = [
@@ -115,7 +116,7 @@ export default function App() {
           >
             Search
             <span style={{ fontSize: 10, color: '#475569', border: '1px solid #334155', borderRadius: 4, padding: '1px 5px' }}>
-              ⌘K
+              {isMac ? '⌘K' : 'Ctrl K'}
             </span>
           </button>
           {NAV_ITEMS.map((item) => (

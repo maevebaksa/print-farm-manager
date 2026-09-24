@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-09-24: make the command palette's keyboard hint match the actual OS
+
+Reported: the sidebar Search button always showed the **⌘K** hint, even on Windows/Linux, where the actual shortcut (already correctly OS-aware in `CommandPalette.jsx`'s key handler) is Ctrl+K. The hint just never matched the key handler's own `isMac` check, it duplicated the logic inline instead of sharing it, and only the key handler's copy was ever exercised by testing on a Mac.
+
+New `client/src/platform.js` exports `isMac`, computed once from `navigator.platform`. `CommandPalette.jsx`'s key handler now imports it instead of recomputing it inline on every keydown; `App.jsx`'s Search button hint imports it too and renders `Ctrl K` instead of always `⌘K` when not on a Mac.
+
+### Changes
+- `client/src/platform.js`: new file, `isMac`.
+- `client/src/App.jsx`: Search button hint now `isMac ? '⌘K' : 'Ctrl K'`.
+- `client/src/components/CommandPalette.jsx`: key handler now imports `isMac` instead of recomputing it inline.
+- `docs/web-app.md`: Command Palette section documents the hint now matching the actual OS; Key Files table gains `platform.js`.
+
+No automated test: this repo has no client-side test framework. Verified `npm run build` succeeds. Could not exercise the real page in a live browser to confirm the hint renders correctly on both platforms: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session; `navigator.platform` itself is also straightforward enough (a single substring check already proven correct in the pre-existing key handler) that this is a low-risk change to ship unverified in-browser.
+
+---
+
 ## 2026-09-24: document Watchtower auto-updating for the Docker/Portainer path
 
 Asked: running the published image on a Portainer host, manually repulling and redeploying (`docker compose pull && docker compose up -d`) every time a new image lands on GHCR was the actual friction, not anything about `update.bat` (which does not apply here: it is a Windows batch script for the bare-metal path, and the container image has no `.git` or client source for it to pull against anyway).

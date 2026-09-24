@@ -37,6 +37,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/useCameraHover.jsx` | Hover-to-preview camera hook used by `FleetStatusGrid`: lazy-fetches `GET /api/printers/:id/camera` on first hover, shows a snapshot only (never the live stream) |
 | `client/src/cameraTransform.js` | Builds the CSS `transform` for a camera image from `camera_rotation`/`camera_flip_h`/`camera_flip_v`, plus `rotationFitTransform`/`useNaturalSize` to keep a 90/270-rotated image's box correctly sized instead of overflowing it; shared by PrinterDetail's camera card, `useCameraHover.jsx`, and Webcams.jsx |
 | `client/src/webUiLink.js` | Picks the "open web interface" URL/label for a printer: its `octoeverywhere_url` if set, otherwise the connector-appropriate local-IP link; shared by Fleet.jsx and FleetStatusGrid.jsx |
+| `client/src/platform.js` | `isMac`: true on macOS (`navigator.platform`), for picking Cmd vs. Ctrl in a shortcut and labeling it correctly; shared by App.jsx (Search button hint) and CommandPalette.jsx (the actual key handler) |
 | `client/src/components/GcodeUploadWizard.jsx` | Drag-and-drop-triggered 3-step upload wizard used by the Projects page: an alternative to its per-part upload panel |
 | `client/src/filamentColorHex.js` | Builds a color-name-to-hex-code lookup from `GET /api/filaments/colors`, for showing a printer's loaded color as a swatch outside the Filament Library table |
 | `client/src/components/ColorSwatch.jsx` | Small colored square for a filament color's hex code; renders nothing if no hex is set |
@@ -94,7 +95,7 @@ A successful bootstrap or login calls `setUser` from `AuthContext`, which re-ren
 
 `client/src/components/CommandPalette.jsx`, mounted once in `App.jsx` inside `<BrowserRouter>` (so `useNavigate` works), available from every page once signed in.
 
-Opens on **Cmd+K** (Mac) / **Ctrl+K** (elsewhere), Escape closes it, or the sidebar's **Search** button, which dispatches an `openCommandPalette` window `CustomEvent` (the same cross-component-tree signal pattern `App.jsx` already uses for `farmNameChanged`). `GET /api/printers`, `/api/projects`, and `/api/parts` are fetched once, lazily, the first time the palette is actually opened, not on every page load.
+Opens on **Cmd+K** (Mac) / **Ctrl+K** (elsewhere), Escape closes it, or the sidebar's **Search** button, which dispatches an `openCommandPalette` window `CustomEvent` (the same cross-component-tree signal pattern `App.jsx` already uses for `farmNameChanged`). The Search button's own shortcut hint matches: **⌘K** on Mac, **Ctrl K** elsewhere, both driven by the shared `isMac` check in `client/src/platform.js` (`navigator.platform`), so the hint never shows the wrong modifier for the browser's actual OS. `GET /api/printers`, `/api/projects`, and `/api/parts` are fetched once, lazily, the first time the palette is actually opened, not on every page load.
 
 Typing filters printers, projects, and parts by name, case-insensitive and typo-tolerant (nothing shown until at least one character is typed: this is a jump-to tool, not a fleet report), capped at 30 results, best match first. Arrow keys move the highlighted result, Enter or a click chooses it:
 

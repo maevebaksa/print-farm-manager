@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { isMac } from '../platform';
 
 // Classic Levenshtein (edit) distance: the minimum number of single-character
 // insertions, deletions, or substitutions to turn `a` into `b`. Only the
@@ -78,7 +79,6 @@ export default function CommandPalette() {
 
   useEffect(() => {
     function handleKeyDown(e) {
-      const isMac = navigator.platform.toUpperCase().includes('MAC');
       if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setOpen(v => !v);
