@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-09-24: fix stray "0" rendered at the bottom of the Printer Detail page
+
+Reported: a bare "0" showing up below the event history on a printer's detail page, on printers that were not in an uncataloged-print state.
+
+`printer.needs_catalog` is a SQLite boolean expression (see `NEEDS_CATALOG_SQL` in `server/routes/printers.js`), which comes back over JSON as the number `0` or `1`, not a JS boolean. The uncataloged-print popup's guard used it bare: `printer.needs_catalog && catalogOptions && !catalogDismissed && (<div>...)`. When `needs_catalog` was `0`, the common case for a printer with nothing to catalog, the `&&` chain short-circuited on the first operand and the whole expression evaluated to the number `0`, not `false`, so React rendered it as a literal "0" text node instead of nothing. It sits at the very end of the page's JSX, hence "at the bottom." This file already has the right pattern one guard earlier (`!!printer.auto_advance`, another SQLite 0/1 field) for exactly this reason; this one guard was just missed.
+
+Swept the rest of `client/src` for the same pattern against every other SQLite 0/1-boolean field name (`is_held`, `is_active`, `has_active_job`, `has_uploading_job`, `has_printing_job`, `approved`, `camera_flip_h`, `camera_flip_v`); no other instance found; everywhere else already either compares explicitly (`=== 1`) or negates (`!field`, which coerces to boolean regardless of the operand's type).
+
+### Changes
+- `client/src/pages/PrinterDetail.jsx`: the uncataloged-print popup's guard is now `!!printer.needs_catalog && ...`.
+
+No automated test: this repo has no client-side test framework. Verified `npm run build` succeeds. Could not exercise the real page in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-24: make the command palette's keyboard hint match the actual OS
 
 Reported: the sidebar Search button always showed the **⌘K** hint, even on Windows/Linux, where the actual shortcut (already correctly OS-aware in `CommandPalette.jsx`'s key handler) is Ctrl+K. The hint just never matched the key handler's own `isMac` check, it duplicated the logic inline instead of sharing it, and only the key handler's copy was ever exercised by testing on a Mac.

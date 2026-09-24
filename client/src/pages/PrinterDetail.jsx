@@ -1000,7 +1000,7 @@ export default function PrinterDetail() {
           or shows finished with no job the farm dispatched (see needs_catalog). Lets the
           operator attach whatever OrcaSlicer, or any other tool outside the farm, sent
           straight to the printer to a real Part, instead of leaving it untracked forever. */}
-      {printer.needs_catalog && catalogOptions && !catalogDismissed && (
+      {!!printer.needs_catalog && catalogOptions && !catalogDismissed && (
         <div
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
