@@ -120,27 +120,36 @@ export default function Dashboard() {
     >
 
       {/* ── HEADER ────────────────────────────────────────────────────────── */}
+      {/* minHeight + flexWrap, not a fixed height: this row has three chunks of
+          fairly wide content (branding, utilization, clock+TV button) that
+          simply don't fit side by side once the window gets much narrower than
+          a full desktop width (a TV or a full monitor is the primary target,
+          but the browser can still be snapped to half a screen). A fixed
+          height with no wrap let overflowing content (e.g. "PRINT FARM"
+          wrapping to two lines) spill outside the box and overlap whatever
+          sat beside it instead of the row growing or the sections dropping to
+          a second line. */}
       <div style={{
         background: '#0d1117', borderBottom: '1px solid #1e2433',
-        padding: '0 28px', height: 64,
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 28px', minHeight: 64,
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '8px 24px',
       }}>
 
         {/* Left: branding */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ width: 4, height: 36, background: '#1d4ed8', borderRadius: 2, flexShrink: 0 }} />
           <div>
-            <div style={{ fontWeight: 800, fontSize: 20, letterSpacing: '0.05em', color: '#f1f5f9' }}>
+            <div style={{ fontWeight: 800, fontSize: 20, letterSpacing: '0.05em', color: '#f1f5f9', whiteSpace: 'nowrap' }}>
               PRINT FARM
             </div>
-            <div style={{ fontSize: 11, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 1 }}>
+            <div style={{ fontSize: 11, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 1, whiteSpace: 'nowrap' }}>
               Command Center
             </div>
           </div>
         </div>
 
         {/* Center: utilization */}
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, whiteSpace: 'nowrap' }}>
           <span style={{ fontSize: 13, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
             Fleet Utilization
           </span>
@@ -158,7 +167,7 @@ export default function Dashboard() {
             <div style={{ fontFamily: 'monospace', fontSize: 28, fontWeight: 700, color: '#60a5fa', lineHeight: 1 }}>
               {formatTime(clock)}
             </div>
-            <div style={{ fontSize: 12, color: '#475569', marginTop: 3 }}>
+            <div style={{ fontSize: 12, color: '#475569', marginTop: 3, whiteSpace: 'nowrap' }}>
               {formatDate(clock)}
             </div>
           </div>
@@ -170,6 +179,7 @@ export default function Dashboard() {
               background: '#1e2433', color: '#64748b',
               border: '1px solid #2d3748', borderRadius: 6,
               padding: '6px 12px', fontSize: 12, cursor: 'pointer',
+              whiteSpace: 'nowrap',
             }}
           >
             ⛶ TV Mode

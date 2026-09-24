@@ -21,6 +21,15 @@ const CHIP_MAX_VW = 42;
 // width math has to account for it or a single-card chip's minmax(220px, 1fr)
 // grid column overflows the chip's border by exactly this much.
 const CHIP_PADDING_X = 28;
+// The vw cap above is meant to stop a large model's chip from dominating the
+// row, not to starve a small one: at a narrow-ish window (e.g. the browser
+// snapped to half a smaller laptop screen), CHIP_MAX_VW can resolve to less
+// than two cards' width, so a 2+ printer model gets squeezed to 1 column even
+// though the window has room for 2. Floors the vw cap at exactly what 2 cards
+// need, so a 2-up (or larger) chip never loses its second column to the vw
+// term specifically; it can still be narrower than this via the naturalWidth/
+// 100% terms below (a 1-card group, or a genuinely narrow/mobile viewport).
+const TWO_UP_MIN_PX = 2 * 230 - 10 + CHIP_PADDING_X;
 
 const STATUS_COLORS = {
   PRINTING:   { bg: '#1e3a5f', text: '#60a5fa', label: 'Printing' },
@@ -1161,12 +1170,15 @@ export default function Fleet() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
         {Object.entries(grouped).map(([model, group]) => {
           const naturalWidth = `${group.length * 230 - 10 + CHIP_PADDING_X}px`;
-          // max(220px + padding, ...) floors the vw cap at one card wide plus the
-          // chip's own padding: on a narrow/mobile viewport CHIP_MAX_VW can
-          // resolve below that, which would otherwise squeeze a card's own
+          // The inner max(CHIP_MAX_VW vw, TWO_UP_MIN_PX) is the vw cap, floored so
+          // it never drops below 2-cards-wide (see TWO_UP_MIN_PX above). The outer
+          // max(220px + padding, ...) floors the whole thing at one card wide plus
+          // the chip's own padding: on a narrow/mobile viewport even that floored
+          // vw cap can still resolve below one card (min(100%, ...) already brings
+          // it down there), which would otherwise squeeze a card's own
           // minmax(220px, 1fr) column below its own minimum, overflowing the
           // chip's border instead of wrapping to 1-per-row.
-          const chipWidth = `max(${220 + CHIP_PADDING_X}px, min(100%, ${naturalWidth}, ${CHIP_MAX_VW}vw))`;
+          const chipWidth = `max(${220 + CHIP_PADDING_X}px, min(100%, ${naturalWidth}, max(${CHIP_MAX_VW}vw, ${TWO_UP_MIN_PX}px)))`;
           return (
             <div key={model} style={{
               width: chipWidth, background: '#111827', border: '1px solid #1e2433',

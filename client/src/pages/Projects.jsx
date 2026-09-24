@@ -1622,9 +1622,40 @@ export default function Projects() {
   try { projectGroups = detailProject.allowed_groups ? JSON.parse(detailProject.allowed_groups) : []; } catch (_) {}
 
   return (
-    <div>
+    <div onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {toastEl}
       {confirmModal}
+
+      {/* Drag-and-drop G-code upload works here too, not just the project list
+          (see the list view's return above for handleDragEnter/Over/Leave/Drop,
+          dragActive, and wizardOpen/wizardFile: this view previously had none of
+          this wiring at all, so dropping a file on an open project's part list,
+          arguably the single most natural place to do it, silently did nothing). */}
+      {dragActive && createPortal(
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 999, pointerEvents: 'none',
+          background: 'rgba(29, 78, 216, 0.15)', border: '3px dashed #3b82f6',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{ background: '#1e2433', border: '1px solid #3b82f6', borderRadius: 10, padding: '16px 28px', fontSize: 15, fontWeight: 600, color: '#93c5fd' }}>
+            Drop G-code to start a new job
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {wizardOpen && (
+        <GcodeUploadWizard
+          initialFile={wizardFile}
+          projects={projects}
+          filamentTypes={filamentTypes}
+          filamentColors={filamentColors}
+          groups={allGroups}
+          onClose={closeWizard}
+          onUploaded={handleWizardUploaded}
+        />
+      )}
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
         <button

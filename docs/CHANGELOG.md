@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-09-24: three small fixes from a live testing pass (Fleet chip width, Dashboard header wrap, Projects drag-and-drop)
+
+Three unrelated small UI bugs, all reported live against the just-updated app in one session, bundled into a single commit rather than three separate ones since each is a one-file, few-line fix.
+
+**Fleet chip width squeezed 2-printer models to 1 column on a narrower window.** `CHIP_MAX_VW` exists to stop a *large* model's chip from dominating the row, but on a window narrower than roughly `TWO_UP_MIN_PX / (CHIP_MAX_VW / 100)` (e.g. the browser snapped to half a smaller laptop screen), the vw cap alone could resolve below two cards' width, squeezing a 2+ printer model to a single column even though there was visibly room for two. New `TWO_UP_MIN_PX` constant floors the vw cap at exactly two cards' width, so a 2-up (or larger) chip never loses its second column to the vw term specifically.
+
+**Dashboard header could overlap itself on a narrower window.** The header row was `display: flex` with a fixed `height: 64` and no wrap; at a width where "PRINT FARM" wrapped to two lines, the fixed height let that overflow outside the box and overlap the utilization/clock sections beside it instead of the row growing or the sections dropping to a second line. Now `minHeight` instead of a fixed `height`, `flexWrap: 'wrap'` on the row, and `whiteSpace: 'nowrap'` on each short label so they wrap as whole blocks rather than mid-word.
+
+**Projects: drag-and-drop G-code upload only worked on the list view.** Dropping a file while a project's detail view was open (arguably the single most natural place to do it, onto that project's own part list) did nothing: this view had none of the `dragenter`/`dragover`/`dragleave`/`drop` wiring the list view already had, a gap the docs already called out as a known limitation rather than a bug. Wired up the same handlers, drag overlay, and wizard-open state the list view already uses (all defined once at the top of the component, shared by both views).
+
+### Changes
+- `client/src/pages/Fleet.jsx`: new `TWO_UP_MIN_PX` constant, folded into the chip width expression's vw-cap term.
+- `client/src/pages/Dashboard.jsx`: header row `minHeight` instead of fixed `height`, `flexWrap: 'wrap'`, `whiteSpace: 'nowrap'` on each label.
+- `client/src/pages/Projects.jsx`: the project-detail-view `return` now has the same drag-and-drop file handlers, drag overlay, and `GcodeUploadWizard` mount as the list view.
+- `docs/web-app.md`: Fleet Page chip-width formula, Dashboard Page header row, and Projects Page G-code upload wizard sections all updated; the wizard section's "list-view only" caveat is removed since it no longer applies.
+
+No automated test: this repo has no client-side test framework. Verified `npm run build` succeeds for all three. Could not exercise any of this in a live browser: this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session; all three were reasoned through directly against the reported symptoms and the relevant CSS/event-handling code instead.
+
+---
+
 ## 2026-09-24: proxy webcam feeds through the manager instead of the printer's LAN address
 
 Requested: webcam snapshots and live view only worked when the browser itself was on the same LAN as the printer, since `GET /:id/camera`'s `streamUrl`/`snapshotUrl` were the printer's own LAN address (e.g. `http://192.168.1.50/webcam/...`), fetched directly by the `<img>` tag. Accessing the manager from off that LAN (a VPN to just the manager, a reverse-proxied instance, etc.) showed a broken image for every camera.
