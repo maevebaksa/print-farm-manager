@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-09-25: camera proxy routes may have aborted the upstream fetch on every request
+
+Reported: webcams (both snapshots and live view) not working after updating to the build with the camera proxy.
+
+The proxy routes aborted their upstream fetch on `req.on('close', ...)`, meant to cancel the request if the browser disconnects early. `req` (the incoming request) is not the right object for that: its `close` event can fire as soon as the (bodyless, GET) request stream is done being read, which for a request with no body is effectively immediately, well before the client goes anywhere, aborting the upstream camera fetch before it has a real chance to complete. Every camera request being killed almost as soon as it started would explain both snapshots and live view failing across the board, not just one or the other.
+
+Switched to `res.on('close', ...)`, guarded by `!res.writableEnded`: `res` only closes early when the client actually disconnected before the response finished, so a normal, complete response never triggers the abort at all.
+
+Not fully confirmed as the actual root cause: this session cannot reach the deployed instance or reproduce the failure directly (same `better-sqlite3` gap that blocks running the server or the test suite locally), so this is the most likely explanation found on code review, not a verified fix.
+
+### Changes
+- `server/routes/printers.js`: both `GET /:id/camera/snapshot` and `GET /:id/camera/stream` now abort on `res`'s `close` event instead of `req`'s.
+
+No automated test added for this specific case (the premature-disconnect path itself, as opposed to the surrounding routes' already-tested behavior). Verified `node --check` for syntax; could not run the suite or a live browser against this, same limitation disclosed on every change this session.
+
+---
+
 ## 2026-09-24: fix CI: camera proxy tests failing on the multipart/binary content types they proxy
 
 Reported: the last three pushes to main all failed CI (`Publish Docker image`), blocking the image from being rebuilt and repulled. `npm test` on this dev machine never runs for real (the disclosed `better-sqlite3` binding gap), so this was never caught locally; CI runs on a working Linux environment where the whole suite actually executes.

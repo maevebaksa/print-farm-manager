@@ -607,7 +607,13 @@ module.exports = (db) => {
     if (!camera.snapshotUrl) return res.status(404).json({ error: 'Camera has no snapshot URL' });
 
     const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    // res, not req: req's 'close' can fire as soon as this bodyless GET's request
+    // stream is done being read, which is effectively immediately, well before the
+    // client actually disconnects, aborting the upstream fetch before it gets a
+    // chance to complete. res only closes early when the client really did go away
+    // before the response finished (guarded by writableEnded so a normal, complete
+    // response never triggers this at all).
+    res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
       const upstream = await axios.get(camera.snapshotUrl, {
         responseType: 'stream', timeout: 8000, signal: controller.signal,
@@ -628,7 +634,8 @@ module.exports = (db) => {
     if (!camera.streamUrl) return res.status(404).json({ error: 'Camera has no stream URL' });
 
     const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    // See the snapshot route above for why this is res, not req.
+    res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     try {
       const upstream = await axios.get(camera.streamUrl, {
         responseType: 'stream', timeout: 8000, signal: controller.signal,
