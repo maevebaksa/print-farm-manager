@@ -12,7 +12,7 @@ const router = express.Router();
 const auth = require('../auth');
 
 const VALID_ROLES = new Set(['admin', 'operator', 'uploader']);
-const USER_FIELDS = 'id, email, name, role, approved, requires_print_approval, oidc_subject, created_at, last_login_at';
+const USER_FIELDS = 'id, email, name, role, user_group_id, approved, requires_print_approval, oidc_subject, created_at, last_login_at';
 
 function countAdmins(db) {
   return db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'").get().count;
@@ -23,7 +23,7 @@ module.exports = (db) => {
   // operator can review and approve without reaching GET / and the rest of
   // the full admin-only user management surface. Must be declared before any
   // GET /:id-shaped route, if one is ever added.
-  router.get('/pending', auth.requireAnyRole(['admin', 'operator']), (req, res) => {
+  router.get('/pending', auth.requirePermission('can_approve'), (req, res) => {
     const pending = db.prepare(
       `SELECT id, email, name, role, created_at FROM users WHERE approved = 0 ORDER BY created_at`
     ).all();
@@ -35,7 +35,7 @@ module.exports = (db) => {
   // about the account. Idempotent (approving an already-approved account is
   // a no-op, not an error) so a double-click or a stale pending list doesn't
   // need special handling client-side.
-  router.post('/:id/approve', auth.requireAnyRole(['admin', 'operator']), (req, res) => {
+  router.post('/:id/approve', auth.requirePermission('can_approve'), (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     db.prepare('UPDATE users SET approved = 1 WHERE id = ?').run(user.id);
@@ -57,11 +57,21 @@ module.exports = (db) => {
   // to gate (see require_uploader_approval, which only applies to an account
   // that appears on its own via OIDC auto-provisioning).
   router.post('/', auth.requireRole('admin'), (req, res) => {
-    const { email, name, password, role } = req.body || {};
+    const { email, name, password, role, user_group_id } = req.body || {};
     if (!email || !name) {
       return res.status(400).json({ error: 'email and name are required' });
     }
-    const resolvedRole = role || 'uploader';
+    // A group decides the base role; without one, the account joins the system
+    // group matching its role so it shows up in group listings and member counts.
+    let group = null;
+    if (user_group_id !== undefined && user_group_id !== null) {
+      group = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(user_group_id);
+      if (!group) return res.status(400).json({ error: 'user_group_id does not match a user group' });
+      if (role && role !== group.role) {
+        return res.status(400).json({ error: `Group "${group.name}" gives the ${group.role} role, not ${role}` });
+      }
+    }
+    const resolvedRole = group ? group.role : (role || 'uploader');
     if (!VALID_ROLES.has(resolvedRole)) {
       return res.status(400).json({ error: `role must be one of: ${[...VALID_ROLES].join(', ')}` });
     }
@@ -70,10 +80,11 @@ module.exports = (db) => {
     }
     try {
       const now = Date.now();
+      if (!group) group = db.prepare('SELECT * FROM user_groups WHERE is_system = 1 AND role = ?').get(resolvedRole);
       const result = db.prepare(`
-        INSERT INTO users (email, name, password_hash, role, approved, created_at)
-        VALUES (?, ?, ?, ?, 1, ?)
-      `).run(email.trim().toLowerCase(), name.trim(), password ? auth.hashPassword(password) : null, resolvedRole, now);
+        INSERT INTO users (email, name, password_hash, role, user_group_id, approved, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?)
+      `).run(email.trim().toLowerCase(), name.trim(), password ? auth.hashPassword(password) : null, resolvedRole, group ? group.id : null, now);
       res.status(201).json(db.prepare(
         `SELECT ${USER_FIELDS} FROM users WHERE id = ?`
       ).get(result.lastInsertRowid));
@@ -91,9 +102,22 @@ module.exports = (db) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const { name, role, password, approved, requires_print_approval } = req.body || {};
+    const { name, password, approved, requires_print_approval, user_group_id } = req.body || {};
+    let role = req.body ? req.body.role : undefined;
     if (role !== undefined && !VALID_ROLES.has(role)) {
       return res.status(400).json({ error: `role must be one of: ${[...VALID_ROLES].join(', ')}` });
+    }
+    // Moving a user into a group also sets their base role to the group's. null
+    // detaches them (they fall back to their role's defaults).
+    let groupId = null;
+    if (user_group_id !== undefined && user_group_id !== null) {
+      const group = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(user_group_id);
+      if (!group) return res.status(400).json({ error: 'user_group_id does not match a user group' });
+      if (role !== undefined && role !== group.role) {
+        return res.status(400).json({ error: `Group "${group.name}" gives the ${group.role} role, not ${role}` });
+      }
+      role = group.role;
+      groupId = group.id;
     }
     // Guard against locking the farm out of its own admin panel: refuse to
     // demote the last remaining admin, including demoting yourself. Checked
@@ -110,6 +134,7 @@ module.exports = (db) => {
       UPDATE users
       SET name = COALESCE(?, name),
           role = COALESCE(?, role),
+          user_group_id = CASE WHEN ? THEN ? ELSE user_group_id END,
           approved = COALESCE(?, approved),
           requires_print_approval = COALESCE(?, requires_print_approval),
           password_hash = COALESCE(?, password_hash)
@@ -117,6 +142,8 @@ module.exports = (db) => {
     `).run(
       name ?? null,
       role ?? null,
+      user_group_id === undefined ? 0 : 1,
+      groupId,
       approved === undefined ? null : (approved ? 1 : 0),
       requires_print_approval === undefined ? null : (requires_print_approval ? 1 : 0),
       password ? auth.hashPassword(password) : null,

@@ -106,6 +106,38 @@ Admin only. Partial update (`COALESCE`, omitted fields unchanged). **Body:** any
 
 Admin only. `404` if not found, `409` if deleting your own currently-signed-in account or the last remaining admin. On success, also deletes that user's sessions and API keys.
 
+`POST` and `PUT` also accept `user_group_id` (a `user_groups.id`; `PUT` accepts `null` to detach). A group decides the account's role: sending a `role` that contradicts the group is a `400`, an unknown group is a `400`, and `PUT` refuses with `409` to move the last admin into a non-admin group. Without a group, a new account joins the built-in group matching its role. User rows include `user_group_id`.
+
+---
+
+## User groups
+
+See [docs/auth.md](auth.md#user-groups) for the model.
+
+### `GET /api/user-groups`
+
+Any signed-in user. Built-in groups first, then custom groups.
+
+```json
+[{ "id": 4, "name": "Students", "role": "uploader", "can_approve": 0, "can_set_ready": 0, "can_manage_printers": 0,
+   "can_quick_print": 1, "requires_approval": 1, "max_plates_per_upload": 4,
+   "allowed_printer_ids": [1, 2], "allowed_printer_groups": ["Rack A"], "is_system": 0, "member_count": 3, "created_at": 1774903214349 }]
+```
+
+`allowed_printer_ids` and `allowed_printer_groups` are `null` when unrestricted.
+
+### `POST /api/user-groups`
+
+Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the five boolean flags (defaults follow the role), `max_plates_per_upload` (positive integer or `null`), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
+
+### `PUT /api/user-groups/:id`
+
+Admin only. Partial update: omitted fields are unchanged, and `null` on `max_plates_per_upload` or the two lists clears them. Changing a custom group's `role` also updates its non-admin members. `404` if not found, `409` for the Admin group, or renaming or re-roling a built-in group.
+
+### `DELETE /api/user-groups/:id`
+
+Admin only. `404` if not found, `409` for a built-in group or one that still has members.
+
 ---
 
 ## API Keys
@@ -760,6 +792,20 @@ Returns `404` if the G-code record does not exist, the file is missing from disk
 ### `DELETE /api/gcodes/:id`
 
 Deletes the DB record and removes the file from disk. Returns `{ "success": true }`.
+
+### `POST /api/quick-print`
+
+Upload one sliced file and print it once, without building a project. `Content-Type: multipart/form-data`, file field `file` (`.gcode`, `.gco`, `.g`, `.bgcode`, `.3mf`). Available to every role unless the user's group turns off `can_quick_print` (`403`).
+
+**Form fields:** `printer_id` (optional; omit or `any` for any eligible printer, otherwise the print is pinned to that printer through `gcodes.target_printer_id`), `parts_per_plate` (optional, default 1).
+
+It goes through the same path as the slicer endpoint: one part (target quantity equals the plate) in the caller's own "Uploads: <name>" project, one G-code, dispatched by the scheduler. Nothing here changes `parts.completed_qty` outside the normal Set Ready flow. The printer model comes from the chosen printer, else the file header, else the only active model on the farm.
+
+```json
+{ "project_id": 12, "part_id": 40, "gcode_id": 41, "filename": "bracket.gcode", "printer_model": "mk4s", "target_printer_id": 3, "pending_approval": false }
+```
+
+Returns `201`. `400` for an unknown or ambiguous model, a bad `parts_per_plate`, or a file sliced for a different model than the chosen printer, `403` for a printer or plate count the user's group does not allow, `404` for an unknown printer, `409` for a decommissioned printer, `415` for an unsupported file type. `pending_approval` is true when the user's group or account requires approval; the print then waits for `POST /api/gcodes/:id/approve`.
 
 ### `POST /api/gcodes/:id/approve`
 

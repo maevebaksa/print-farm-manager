@@ -6,7 +6,7 @@ const router = express.Router();
 const { extractThumbnail } = require('../gcode-thumbnail');
 const { readPrintStats } = require('../gcode-metadata');
 const { safeFilename, displayFilename } = require('../safe-filename');
-const { requireAnyRole } = require('../auth');
+const { requirePermission } = require('../auth');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 
@@ -154,6 +154,14 @@ module.exports = (db, scheduler = null) => {
       });
     }
 
+    // User-group cap on plate size (parts_per_plate) per upload, when the uploader's
+    // group sets one. Checked before anything is stored.
+    const maxPlates = req.user.permissions?.max_plates_per_upload;
+    if (maxPlates && parseInt(parts_per_plate, 10) > maxPlates) {
+      fs.unlinkSync(req.file.path);
+      return res.status(403).json({ error: `Your user group allows at most ${maxPlates} parts per plate per upload` });
+    }
+
     // ams_slot: -1 = external spool, 0–N = AMS slot, null = not applicable (non-Bambu)
     const parsedAmsSlot = ams_slot !== undefined && ams_slot !== '' ? parseInt(ams_slot, 10) : null;
 
@@ -177,7 +185,7 @@ module.exports = (db, scheduler = null) => {
     // other account (including an unflagged uploader) gets the normal default of
     // approved. req.user is always set here: this route sits behind the global
     // requireAuth gate in server/index.js.
-    const approved = req.user.requires_print_approval ? 0 : 1;
+    const approved = (req.user.requires_print_approval || req.user.permissions?.requires_approval) ? 0 : 1;
 
     const gcode = db.prepare(`
       INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, material_type, ams_slot, allowed_groups, required_material, required_color, approved, uploaded_by_user_id, uploaded_by_name, created_at)
@@ -309,7 +317,7 @@ module.exports = (db, scheduler = null) => {
   // same as approving a pending uploader account (POST /api/users/:id/approve):
   // day-to-day review work, not a permissions change, so it isn't admin-only.
   // A no-op (still 200) if the G-code was already approved.
-  router.post('/:id/approve', requireAnyRole(['admin', 'operator']), (req, res) => {
+  router.post('/:id/approve', requirePermission('can_approve', 'Your user group cannot approve G-code'), (req, res) => {
     const gcode = db.prepare('SELECT * FROM gcodes WHERE id = ?').get(req.params.id);
     if (!gcode) return res.status(404).json({ error: 'G-code not found' });
 

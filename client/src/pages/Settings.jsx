@@ -49,7 +49,7 @@ export default function Settings() {
   // group registries is operator/admin work; uploaders only queue prints. The
   // server enforces this (auth.blockUploaderPrinterAdmin); hiding the sections
   // here just keeps uploaders from seeing controls that would 403.
-  const canManagePrinters = user?.role !== 'uploader';
+  const canManagePrinters = user?.permissions?.can_manage_printers ?? user?.role !== 'uploader';
   const [showToast, toastEl] = useToast();
   const [confirm, confirmModal] = useConfirm();
   const [importing, setImporting] = useState(false);

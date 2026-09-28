@@ -47,6 +47,19 @@ A separate, per-account setting from the one above: `require_uploader_approval` 
 - Approving is `POST /api/gcodes/:id/approve`, admin-or-operator (`auth.requireAnyRole(['admin', 'operator'])`), the same day-to-day-work bar as approving a pending account above. Idempotent: approving an already-approved G-code is a no-op `200`. Shown as a "Pending approval" badge with an Approve button next to the G-code on the Projects page's part detail (`client/src/pages/Projects.jsx`), visible to whoever can approve it.
 - Toggling the flag only affects G-code uploaded from that point on; an uploader's past G-codes keep whatever `approved` value they were created with.
 
+## User groups
+
+An admin can bundle permissions into named **user groups** (Users page, "User groups"; `/api/user-groups`, see [api.md](api.md#user-groups)). Every account belongs to at most one group. Three built-in groups (Admin, Operator, Uploader) mirror the roles and are created on first start; existing accounts join the one matching their role, so nothing changes until an admin edits a group or creates a new one.
+
+- A group has a **base role** (`operator` or `uploader` for a custom group). Joining a group sets the member's role to it, so every hard role gate (admin-only user management, settings, and so on) keeps working exactly as before.
+- On top of the base role, a group's flags decide what a non-admin member may do: `can_set_ready` (Set Ready and Set Ready batch), `can_manage_printers` (add, edit, decommission, delete printers, the model and group registries, backup restore), `can_approve` (approve pending accounts and pending G-code), `can_quick_print`, and `requires_approval` (every upload from a member starts unapproved, like the per-account `requires_print_approval`). Role defaults when an account has no group are the previous behavior: operators can do everything, uploaders cannot set ready, manage printers, or approve.
+- `max_plates_per_upload` caps `parts_per_plate` on `POST /api/gcodes/upload`, the slicer endpoint, and Quick Print (`403` over the cap).
+- **Allowed printers.** `allowed_printer_ids` and `allowed_printer_groups` (both empty means every printer) limit where a member's uploads may run. Enforced in the scheduler's candidate query with a live join on the uploader, so tightening a group also applies to work already queued, and mirrored in `GET /api/parts/:id/dispatch-status`. The slicer endpoint and Quick Print also refuse up front when no allowed printer could take the file.
+- The **Admin** group is always fully open and cannot be edited. Admin accounts ignore group restrictions. Built-in groups cannot be renamed, re-roled, or deleted (their flags can be edited); a group with members cannot be deleted; moving the last admin out of the Admin group is refused. Managing users, groups, settings, and API keys stays admin-only: a group cannot grant it.
+- Priority override (`PUT /api/parts/:id/priority-override`, `PUT /api/projects/:id/priority-override`) stays tied to the operator and admin roles, not a group flag.
+
+The signed-in user's resolved permissions are on `req.user.permissions` (and in `GET /api/auth/me`); the client uses them to hide controls the server would 403.
+
 ## First run: bootstrap
 
 A fresh install has zero users. `GET /api/auth/status` reports `needsBootstrap: true`, and the login page shows a "create the admin account" form instead of a login form. `POST /api/auth/bootstrap` is only accepted while the `users` table is empty: once any account exists, it always 403s. The account it creates is always `admin`; there is no other way to create the first account.
@@ -88,6 +101,6 @@ An admin can turn on the `auto_sso_redirect` setting (Settings → Single Sign-O
 
 ## What this does not do (yet)
 
-- No general per-route permission scoping: `blockRole('uploader')` on the two set-ready routes is a single, specific carve-out, not a broader permission system. An operator has the same farm-operation access an admin does, and an uploader has the same access as an operator apart from that one carve-out.
+- Permission scoping is limited to the group flags listed under User groups above: there is no per-route permission editor, so everything else follows the role (admin-only user management, settings, and API keys).
 - No API key scoping (read-only keys, route-restricted keys): every key is full access, matching its owner's role.
 - No "forgot password" email flow, since this app has no outbound email integration: a locked-out user needs an admin to reset their password (`PUT /api/users/:id`, Users page) rather than a self-service reset link. Changing a known password, self-service with the current one or an admin reset without it, is covered above (`PUT /api/account/password`, `PUT /api/users/:id`).

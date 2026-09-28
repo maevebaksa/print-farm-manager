@@ -258,6 +258,30 @@ CREATE TABLE IF NOT EXISTS users (
 );
 ```
 
+### user_groups
+
+Named permission bundles managed by an admin; see [docs/auth.md](auth.md#user-groups). `users.user_group_id` points at one (nullable, no foreign key; null means the role's defaults). Three `is_system = 1` rows (Admin, Operator, Uploader) are seeded at startup and existing users are attached to the one matching their role.
+
+```sql
+CREATE TABLE IF NOT EXISTS user_groups (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  name                   TEXT NOT NULL UNIQUE,
+  role                   TEXT NOT NULL DEFAULT 'uploader',  -- base role members get
+  can_approve            INTEGER NOT NULL DEFAULT 0,
+  can_set_ready          INTEGER NOT NULL DEFAULT 0,
+  can_manage_printers    INTEGER NOT NULL DEFAULT 0,
+  can_quick_print        INTEGER NOT NULL DEFAULT 1,
+  requires_approval      INTEGER NOT NULL DEFAULT 0,
+  max_plates_per_upload  INTEGER,                           -- null = no cap
+  allowed_printer_ids    TEXT,                              -- JSON array of printers.id; null = unrestricted
+  allowed_printer_groups TEXT,                              -- JSON array of group names; null = unrestricted
+  is_system              INTEGER NOT NULL DEFAULT 0,
+  created_at             INTEGER NOT NULL
+);
+```
+
+`gcodes.target_printer_id` (nullable INTEGER) pins a G-code to one printer, set by Quick Print. The scheduler and `GET /api/parts/:id/dispatch-status` both honor it, and both also apply the uploader's group printer limits. Neither table is part of backup export or restore (users are not backed up either).
+
 ### sessions
 
 A logged-in browser session. The `token` itself is the opaque value stored in the `pfm_session` httpOnly cookie; the row is looked up on every authenticated request rather than trusting a signed/stateless token, so revoking a session (logout, user deletion) takes effect immediately.

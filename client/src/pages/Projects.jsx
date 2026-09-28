@@ -998,7 +998,7 @@ export default function Projects() {
   const { user }                          = useAuth();
   // Same admin-or-operator bar as POST /api/gcodes/:id/approve itself: day-to-day
   // review work, not a permissions change.
-  const canApprove                        = user.role === 'admin' || user.role === 'operator';
+  const canApprove                        = user.permissions?.can_approve ?? (user.role === 'admin' || user.role === 'operator');
   const [showToast, toastEl]              = useToast();
   const [confirm, confirmModal]           = useConfirm();
   const [projects, setProjects]           = useState([]);

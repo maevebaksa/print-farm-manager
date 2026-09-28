@@ -86,13 +86,15 @@ function makeDb({ printerGroup = null, printerMaterial = null, printerColor = nu
       status TEXT DEFAULT 'open', sort_order INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT, user_group_id INTEGER);
+    CREATE TABLE user_groups (id INTEGER PRIMARY KEY, allowed_printer_ids TEXT, allowed_printer_groups TEXT);
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
       filename TEXT NOT NULL, filepath TEXT NOT NULL,
       parts_per_plate INTEGER NOT NULL, ams_slot INTEGER,
       allowed_groups TEXT, required_material TEXT, required_color TEXT,
-      approved INTEGER NOT NULL DEFAULT 1,
+      approved INTEGER NOT NULL DEFAULT 1, target_printer_id INTEGER, uploaded_by_user_id INTEGER,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE jobs (
@@ -511,5 +513,59 @@ describe('scheduler: color tolerance', () => {
     const jobId = await scheduler._dispatchToPrinter({ ...printer, loaded_material: 'PETG', loaded_color: 'Charcoal' });
     expect(jobId).toBeNull();
     expect(mockDriver.uploadAndPrint).not.toHaveBeenCalled();
+  });
+});
+
+// ── Quick print target printer and user-group printer restriction ─────────────
+
+describe('scheduler: target printer and user-group printer limits', () => {
+  function addGroupedUploader(db, { ids = null, groups = null, role = 'uploader' } = {}) {
+    db.prepare('INSERT INTO user_groups (id, allowed_printer_ids, allowed_printer_groups) VALUES (1, ?, ?)')
+      .run(ids && JSON.stringify(ids), groups && JSON.stringify(groups));
+    db.prepare('INSERT INTO users (id, role, user_group_id) VALUES (7, ?, 1)').run(role);
+    db.prepare('UPDATE gcodes SET uploaded_by_user_id = 7').run();
+  }
+
+  test('a gcode pinned to another printer is skipped', async () => {
+    const db = makeDb();
+    db.prepare('UPDATE gcodes SET target_printer_id = 99').run();
+    const jobId = await new JobScheduler(db, { on: () => {} })._dispatchToPrinter(printer);
+    expect(jobId).toBeNull();
+  });
+
+  test('a gcode pinned to this printer dispatches', async () => {
+    const db = makeDb();
+    db.prepare('UPDATE gcodes SET target_printer_id = 1').run();
+    const jobId = await new JobScheduler(db, { on: () => {} })._dispatchToPrinter(printer);
+    expect(jobId).not.toBeNull();
+  });
+
+  test('uploader whose group lists this printer id dispatches', async () => {
+    const db = makeDb();
+    addGroupedUploader(db, { ids: [1] });
+    const jobId = await new JobScheduler(db, { on: () => {} })._dispatchToPrinter(printer);
+    expect(jobId).not.toBeNull();
+  });
+
+  test('uploader whose group lists only other printers is skipped', async () => {
+    const db = makeDb();
+    addGroupedUploader(db, { ids: [2, 3] });
+    const jobId = await new JobScheduler(db, { on: () => {} })._dispatchToPrinter(printer);
+    expect(jobId).toBeNull();
+    expect(mockDriver.uploadAndPrint).not.toHaveBeenCalled();
+  });
+
+  test('uploader whose group lists this printer group dispatches', async () => {
+    const db = makeDb({ printerGroup: 'Rack A' });
+    addGroupedUploader(db, { groups: ['Rack A'] });
+    const jobId = await new JobScheduler(db, { on: () => {} })._dispatchToPrinter({ ...printer, group_name: 'Rack A' });
+    expect(jobId).not.toBeNull();
+  });
+
+  test('a group with no printer lists is unrestricted', async () => {
+    const db = makeDb();
+    addGroupedUploader(db, {});
+    const jobId = await new JobScheduler(db, { on: () => {} })._dispatchToPrinter(printer);
+    expect(jobId).not.toBeNull();
   });
 });

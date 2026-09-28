@@ -529,4 +529,50 @@ try { db.exec('ALTER TABLE users ADD COLUMN requires_print_approval INTEGER NOT 
 // a G-code with no matching printer, no new job/hold state needed.
 try { db.exec('ALTER TABLE gcodes ADD COLUMN approved INTEGER NOT NULL DEFAULT 1'); } catch (_) {}
 
+// User groups: named permission bundles an admin manages (Users page). Every
+// user belongs to at most one; NULL means "use the role's built-in defaults"
+// (see server/auth.js ROLE_PERMISSIONS). user_groups.role is the base role
+// members get, so the hard admin/operator/uploader gates keep working; the flag
+// columns refine what a non-admin member may do, and the two allowed_* JSON
+// arrays (printer ids, printer group names) restrict which printers their
+// uploads may dispatch to (NULL for both = every printer). is_system rows
+// (Admin, Operator, Uploader) are seeded here, cannot be deleted or renamed,
+// and Admin stays fully open.
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS user_groups (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                   TEXT NOT NULL UNIQUE,
+    role                   TEXT NOT NULL DEFAULT 'uploader',
+    can_approve            INTEGER NOT NULL DEFAULT 0,
+    can_set_ready          INTEGER NOT NULL DEFAULT 0,
+    can_manage_printers    INTEGER NOT NULL DEFAULT 0,
+    can_quick_print        INTEGER NOT NULL DEFAULT 1,
+    requires_approval      INTEGER NOT NULL DEFAULT 0,
+    max_plates_per_upload  INTEGER,
+    allowed_printer_ids    TEXT,
+    allowed_printer_groups TEXT,
+    is_system              INTEGER NOT NULL DEFAULT 0,
+    created_at             INTEGER NOT NULL
+  )`);
+} catch (_) {}
+try { db.exec('ALTER TABLE users ADD COLUMN user_group_id INTEGER'); } catch (_) {}
+try {
+  const seed = db.prepare(`INSERT OR IGNORE INTO user_groups
+    (name, role, can_approve, can_set_ready, can_manage_printers, can_quick_print, is_system, created_at)
+    VALUES (?, ?, ?, ?, ?, 1, 1, ?)`);
+  const now = Date.now();
+  seed.run('Admin',    'admin',    1, 1, 1, now);
+  seed.run('Operator', 'operator', 1, 1, 1, now);
+  seed.run('Uploader', 'uploader', 0, 0, 0, now);
+  // Existing accounts join the system group matching their role. Behavior is
+  // unchanged: the seeded flags equal the role defaults.
+  db.exec(`UPDATE users SET user_group_id = (SELECT id FROM user_groups WHERE is_system = 1 AND role = users.role)
+           WHERE user_group_id IS NULL`);
+} catch (_) {}
+
+// One-off quick prints (POST /api/quick-print) can name the single printer that
+// must run them. NULL = any eligible printer, the normal case. Checked in the
+// scheduler's candidate query and mirrored in GET /api/parts/:id/dispatch-status.
+try { db.exec('ALTER TABLE gcodes ADD COLUMN target_printer_id INTEGER'); } catch (_) {}
+
 module.exports = db;

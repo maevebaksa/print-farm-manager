@@ -17,7 +17,7 @@ export default function Decommissioned() {
   // /api/printers/:id) are printer management, blocked for uploaders
   // server-side (auth.blockUploaderPrinterAdmin): they see the list read-only.
   const { user } = useAuth();
-  const canManagePrinters = user?.role !== 'uploader';
+  const canManagePrinters = user?.permissions?.can_manage_printers ?? user?.role !== 'uploader';
   const navigate = useNavigate();
   const [confirm, confirmModal] = useConfirm();
   const [showToast, toastEl]    = useToast();

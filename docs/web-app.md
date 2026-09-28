@@ -13,7 +13,8 @@ The React single-page application served by Vite. In development, Vite runs on p
 - **Projects page** — project/part/G-code management and production tracking
 - **Jobs page** — live job queue with filters and cancel action
 - **Account page**: the signed-in user's own API keys: create one (shown once), revoke one; and the per-group slicer upload URLs
-- **Users page**: admin only: add accounts, change roles, remove access
+- **Users page**: admin only: add accounts, assign each to a user group, manage user groups (permissions and allowed printers), remove access
+- **Quick Print**: a button on the Fleet page header (`client/src/components/QuickPrint.jsx`); hidden when the user's group disallows it
 
 ## Key Files
 
@@ -25,6 +26,8 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/pages/Login.jsx` | Sign-in form, SSO button, first-run bootstrap form, automatic SSO redirect, `/backup-login` fallback |
 | `client/src/pages/Account.jsx` | Self-service API key management |
 | `client/src/pages/Users.jsx` | Admin-only account management |
+| `client/src/components/UserGroups.jsx` | Admin-only user group editor on the Users page |
+| `client/src/components/QuickPrint.jsx` | One-off upload and print modal (Fleet) |
 | `client/src/pages/Fleet.jsx` | Live printer grid, pinned-printers section, bulk material/color/group editing (absorbed the old Printers.jsx) |
 | `client/src/pages/Webcams.jsx` | Plain snapshot gallery, one still image per printer, no status highlighting |
 | `client/src/pages/PrinterDetail.jsx` | Per-printer event timeline, note form, camera card, catalog-print popup |

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useToast } from '../useToast';
 import { useConfirm } from '../useConfirm';
 import { useAuth } from '../AuthContext';
+import UserGroups from '../components/UserGroups';
 
 const inputStyle = {
   background: '#1e2433', border: '1px solid #2d3748',
@@ -67,9 +68,10 @@ export default function Users() {
   const isAdmin = me.role === 'admin';
   const [users, setUsers] = useState([]);
   const [pending, setPending] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ email: '', name: '', password: '', role: 'uploader' });
+  const [form, setForm] = useState({ email: '', name: '', password: '', user_group_id: '' });
   const [formError, setFormError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [showToast, toastEl] = useToast();
@@ -83,10 +85,11 @@ export default function Users() {
   // management UI below) as an admin. Every role can fetch /pending.
   const fetchUsers = useCallback(async () => {
     const requests = [fetch('/api/users/pending')];
-    if (isAdmin) requests.push(fetch('/api/users'));
-    const [pendingRes, usersRes] = await Promise.all(requests);
+    if (isAdmin) requests.push(fetch('/api/users'), fetch('/api/user-groups'));
+    const [pendingRes, usersRes, groupsRes] = await Promise.all(requests);
     if (pendingRes.ok) setPending(await pendingRes.json());
     if (usersRes?.ok) setUsers(await usersRes.json());
+    if (groupsRes?.ok) setGroups(await groupsRes.json());
     setLoading(false);
   }, [isAdmin]);
 
@@ -103,13 +106,13 @@ export default function Users() {
         body: JSON.stringify({
           email: form.email.trim(),
           name: form.name.trim(),
-          role: form.role,
+          user_group_id: form.user_group_id ? Number(form.user_group_id) : undefined,
           password: form.password || undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { setFormError(body.error || `Create failed (${res.status})`); return; }
-      setForm({ email: '', name: '', password: '', role: 'uploader' });
+      setForm({ email: '', name: '', password: '', user_group_id: '' });
       setShowAdd(false);
       showToast(`${body.name} added`, 'success');
       fetchUsers();
@@ -118,15 +121,15 @@ export default function Users() {
     }
   }
 
-  async function changeRole(u, role) {
+  async function changeGroup(u, groupId) {
     const res = await fetch(`/api/users/${u.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role }),
+      body: JSON.stringify({ user_group_id: Number(groupId) }),
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) { showToast(`Role change failed: ${body.error || res.status}`, 'error'); return; }
-    showToast(`${u.name} is now ${role}`, 'success');
+    if (!res.ok) { showToast(`Group change failed: ${body.error || res.status}`, 'error'); return; }
+    showToast(`${u.name} moved to ${groups.find(g => g.id === Number(groupId))?.name || 'the new group'}`, 'success');
     fetchUsers();
   }
 
@@ -221,10 +224,9 @@ export default function Users() {
             <input placeholder="Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} disabled={saving} style={inputStyle} required />
             <input type="email" placeholder="Email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} disabled={saving} style={inputStyle} required />
             <input type="password" placeholder="Password (optional: SSO-only if blank)" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} disabled={saving} style={inputStyle} minLength={8} />
-            <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} disabled={saving} style={{ ...inputStyle, cursor: 'pointer' }}>
-              <option value="uploader">Uploader</option>
-              <option value="operator">Operator</option>
-              <option value="admin">Admin</option>
+            <select value={form.user_group_id} onChange={e => setForm(f => ({ ...f, user_group_id: e.target.value }))} disabled={saving} style={{ ...inputStyle, cursor: 'pointer' }}>
+              <option value="">Group: Uploader (default)</option>
+              {groups.map(g => <option key={g.id} value={g.id}>Group: {g.name}</option>)}
             </select>
           </div>
           {formError && <div style={{ fontSize: 12, color: '#fca5a5', marginBottom: 10 }}>{formError}</div>}
@@ -233,6 +235,8 @@ export default function Users() {
           </button>
         </form>
       )}
+
+      {isAdmin && <UserGroups groups={groups} onChanged={fetchUsers} />}
 
       {isAdmin && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -271,13 +275,12 @@ export default function Users() {
               )}
               <RoleBadge role={u.role} />
               <select
-                value={u.role}
-                onChange={e => changeRole(u, e.target.value)}
+                value={u.user_group_id ?? ''}
+                onChange={e => changeGroup(u, e.target.value)}
                 style={{ ...inputStyle, cursor: 'pointer', fontSize: 12, padding: '4px 8px' }}
               >
-                <option value="uploader">Uploader</option>
-                <option value="operator">Operator</option>
-                <option value="admin">Admin</option>
+                {!u.user_group_id && <option value="" disabled>No group</option>}
+                {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
               <button
                 onClick={() => {

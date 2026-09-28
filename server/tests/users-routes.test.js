@@ -24,10 +24,16 @@ beforeAll(() => {
       role          TEXT NOT NULL DEFAULT 'uploader',
       approved      INTEGER NOT NULL DEFAULT 1,
       requires_print_approval INTEGER NOT NULL DEFAULT 0,
+      user_group_id INTEGER,
       oidc_subject  TEXT UNIQUE,
       created_at    INTEGER NOT NULL,
       last_login_at INTEGER
     );
+    CREATE TABLE user_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'uploader',
+      is_system INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO user_groups (name, role, is_system) VALUES ('Admin', 'admin', 1), ('Operator', 'operator', 1), ('Uploader', 'uploader', 1);
     CREATE TABLE sessions (
       token TEXT PRIMARY KEY, user_id INTEGER, created_at INTEGER, expires_at INTEGER
     );
@@ -294,5 +300,47 @@ describe('POST /api/users/:id/approve', () => {
   test('404s for an unknown id', async () => {
     const res = await request(app).post('/api/users/999/approve');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('user groups on accounts', () => {
+  let custom;
+  beforeAll(() => {
+    custom = db.prepare("INSERT INTO user_groups (name, role, is_system) VALUES ('Students', 'uploader', 0)").run().lastInsertRowid;
+  });
+
+  test('POST with a group gives the account that group and its role', async () => {
+    const res = await request(app).post('/api/users').send({ email: 's@farm.local', name: 'S', user_group_id: custom });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ role: 'uploader', user_group_id: custom });
+  });
+
+  test('POST without a group joins the system group for its role', async () => {
+    const res = await request(app).post('/api/users').send({ email: 'o@farm.local', name: 'O', role: 'operator' });
+    expect(res.body.user_group_id).toBe(db.prepare("SELECT id FROM user_groups WHERE name = 'Operator'").get().id);
+  });
+
+  test('POST 400s for an unknown group or a role that contradicts the group', async () => {
+    expect((await request(app).post('/api/users').send({ email: 'x@farm.local', name: 'X', user_group_id: 999 })).status).toBe(400);
+    expect((await request(app).post('/api/users').send({ email: 'y@farm.local', name: 'Y', user_group_id: custom, role: 'operator' })).status).toBe(400);
+  });
+
+  test('PUT moves a user to a group and sets the group role', async () => {
+    const op = insertUser({ email: 'op@farm.local', role: 'operator' });
+    const res = await request(app).put(`/api/users/${op.id}`).send({ user_group_id: custom });
+    expect(res.body).toMatchObject({ role: 'uploader', user_group_id: custom });
+  });
+
+  test('PUT cannot move the last admin into a non-admin group', async () => {
+    const res = await request(app).put(`/api/users/${currentUser.id}`).send({ user_group_id: custom });
+    expect(res.status).toBe(409);
+  });
+
+  test('PUT with a null group detaches without changing the role', async () => {
+    const up = insertUser({ email: 'u@farm.local', role: 'uploader' });
+    db.prepare('UPDATE users SET user_group_id = ? WHERE id = ?').run(custom, up.id);
+    const res = await request(app).put(`/api/users/${up.id}`).send({ user_group_id: null });
+    expect(res.body.user_group_id).toBeNull();
+    expect(res.body.role).toBe('uploader');
   });
 });

@@ -9,6 +9,7 @@ import { buildColorHexMap } from '../filamentColorHex';
 import ColorSwatch from '../components/ColorSwatch';
 import usePinnedPrinters from '../usePinnedPrinters';
 import { useAuth } from '../AuthContext';
+import QuickPrint from '../components/QuickPrint';
 
 // Widest a single model's chip is allowed to grow before wrapping its own
 // printers onto another row within the same chip, rather than stretching the
@@ -94,11 +95,11 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
   // queue (server/index.js blocks POST .../set-ready for it); disable rather
   // than hide the button, so it's clear why rather than silently missing.
   const { user } = useAuth();
-  const canSetReady = user.role !== 'uploader';
+  const canSetReady = user.permissions?.can_set_ready ?? user.role !== 'uploader';
   // Decommissioning is printer management, blocked for uploaders server-side
   // (auth.blockUploaderPrinterAdmin), so the button is not offered to them.
-  const canManagePrinters = user.role !== 'uploader';
-  const setReadyTitle = 'The uploader role cannot confirm a printer is ready for new work';
+  const canManagePrinters = user.permissions?.can_manage_printers ?? user.role !== 'uploader';
+  const setReadyTitle = 'Your user group cannot confirm a printer is ready for new work';
 
   // Confirmed-qty input — pre-filled from the last finished job's parts_per_plate.
   // Only shown when is_held and we know how many parts were on the plate.
@@ -433,10 +434,10 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
 export default function Fleet() {
   const navigate                              = useNavigate();
   const { user }                              = useAuth();
-  const canSetReady                           = user.role !== 'uploader';
+  const canSetReady                           = user.permissions?.can_set_ready ?? user.role !== 'uploader';
   // Bulk Edit changes printers' loaded material/color/group (PUT /api/printers/:id),
   // which uploaders cannot do; see PrinterCard's canManagePrinters.
-  const canManagePrinters                     = user.role !== 'uploader';
+  const canManagePrinters                     = user.permissions?.can_manage_printers ?? user.role !== 'uploader';
   const [confirm, confirmModal]               = useConfirm();
   const [showToast, toastEl]                  = useToast();
   const [printers, setPrinters]               = useState([]);
@@ -891,6 +892,7 @@ export default function Fleet() {
           <PollTimer lastPolled={lastPolled} intervalMs={15000} />
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <QuickPrint />
           {canManagePrinters && <button
             onClick={toggleBulkEditMode}
             title="Select printers to set their loaded material, color, or group all at once"
@@ -1045,7 +1047,7 @@ export default function Fleet() {
               <button
                 onClick={setReadyForSelected}
                 disabled={!canSetReady}
-                title={canSetReady ? undefined : 'The uploader role cannot confirm a printer is ready for new work'}
+                title={canSetReady ? undefined : 'Your user group cannot confirm a printer is ready for new work'}
                 style={{ background: '#15803d', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: canSetReady ? 'pointer' : 'not-allowed', opacity: canSetReady ? 1 : 0.5 }}
               >
                 ✓ Set Ready ({selectedForReady.size})

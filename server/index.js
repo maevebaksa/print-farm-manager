@@ -67,6 +67,7 @@ app.use('/api', auth.requireAuth(db));
 // admin-only, the pending-approval routes admin-or-operator). See its header
 // comment.
 app.use('/api/users',           usersRouter);
+app.use('/api/user-groups',     require('./routes/user-groups')(db));
 app.use('/api/api-keys',        apiKeysRouter);
 app.use('/api/account',         accountRouter);
 app.use('/api/printers',        printersRouter);
@@ -132,6 +133,7 @@ const server = app.listen(PORT, () => {
   app.use('/api/projects', require('./routes/projects')(db, scheduler));
   app.use('/api/parts',    require('./routes/parts')(db, scheduler));
   app.use('/api/gcodes',   require('./routes/gcodes')(db, scheduler));
+  app.use('/api/quick-print', require('./routes/quick-print')(db, scheduler));
 
   scheduler.start();
   poller.start();
@@ -158,7 +160,7 @@ const server = app.listen(PORT, () => {
   // Used by the "Set Ready (N)" action in the Fleet UI. Blocked for the uploader role:
   // confirming a printer is idle and ready for new work is an operator judgment call
   // about physical print quality, not something an uploader account should do.
-  app.post('/api/printers/set-ready-batch', auth.blockRole('uploader'), (req, res) => {
+  app.post('/api/printers/set-ready-batch', auth.blockWithoutPermission('can_set_ready', 'Your user group cannot confirm printers are ready'), (req, res) => {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ error: 'ids array required' });
@@ -206,7 +208,7 @@ const server = app.listen(PORT, () => {
   // Operator clicking Set Ready is the explicit success confirmation. We credit qty now
   // (using confirmed_qty if provided, otherwise the full parts_per_plate) and mark the
   // job finished. No assumptions are made without operator input.
-  app.post('/api/printers/:id/set-ready', auth.blockRole('uploader'), (req, res) => {
+  app.post('/api/printers/:id/set-ready', auth.blockWithoutPermission('can_set_ready', 'Your user group cannot confirm printers are ready'), (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
 

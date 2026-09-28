@@ -506,8 +506,8 @@ class JobScheduler extends EventEmitter {
         : '';
 
       const params = tolerant
-        ? [printer.model, printer.group_name, printer.loaded_material, printer.loaded_color, printerColorHex, tolerance, printer.id, tolerance, ...skippedPartIds]
-        : [printer.model, printer.group_name, printer.loaded_material, printer.loaded_color, printer.id, ...skippedPartIds];
+        ? [printer.model, printer.group_name, printer.loaded_material, printer.loaded_color, printerColorHex, tolerance, printer.id, tolerance, printer.id, printer.id, printer.group_name, ...skippedPartIds]
+        : [printer.model, printer.group_name, printer.loaded_material, printer.loaded_color, printer.id, printer.id, printer.id, printer.group_name, ...skippedPartIds];
 
       const candidate = this.db.prepare(`
         SELECT
@@ -559,6 +559,22 @@ class JobScheduler extends EventEmitter {
                 AND (COALESCE(gcodes.required_material, projects.required_material) IS NULL OR pl.material = COALESCE(gcodes.required_material, projects.required_material))
                 AND ${laneColorClause}
             )
+          )
+          -- A quick print (POST /api/quick-print) may name the one printer that must
+          -- run it. Mirrored in dispatch-status (see CLAUDE.md sync pairs).
+          AND (gcodes.target_printer_id IS NULL OR gcodes.target_printer_id = ?)
+          -- User-group printer restriction: if the uploader belongs to a (non-admin)
+          -- group with an allowed printer / printer group list, this printer must be
+          -- on it. Live join, so tightening a group takes effect on already-queued
+          -- uploads immediately. Mirrored in dispatch-status.
+          AND NOT EXISTS (
+            SELECT 1 FROM users up JOIN user_groups ug ON ug.id = up.user_group_id
+            WHERE up.id = gcodes.uploaded_by_user_id AND up.role <> 'admin'
+              AND (ug.allowed_printer_ids IS NOT NULL OR ug.allowed_printer_groups IS NOT NULL)
+              AND NOT (
+                EXISTS (SELECT 1 FROM json_each(COALESCE(ug.allowed_printer_ids, '[]')) WHERE value = ?)
+                OR EXISTS (SELECT 1 FROM json_each(COALESCE(ug.allowed_printer_groups, '[]')) WHERE value = ?)
+              )
           )
           ${excludeClause}
         ORDER BY overridden DESC, ${policy.fifo

@@ -124,6 +124,87 @@ function clearSessionCookie(req, res) {
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0`);
 }
 
+// ─── Permissions (user groups) ──────────────────────────────────────────────
+
+// What each built-in role may do when the account has no group (or in tests
+// that inject a bare req.user). A user group (user_groups table) overrides
+// these flags for a non-admin member; admin is always fully open so the farm
+// can never lock itself out of management.
+const ROLE_PERMISSIONS = {
+  admin:    { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, requires_approval: false },
+  operator: { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, requires_approval: false },
+  uploader: { can_approve: false, can_set_ready: false, can_manage_printers: false, can_quick_print: true, requires_approval: false },
+};
+
+function parseJsonArray(text) {
+  if (!text) return null;
+  try { const v = JSON.parse(text); return Array.isArray(v) ? v : null; } catch (_) { return null; }
+}
+
+// Effective permissions for a users row: the group's flags when the user has
+// one (and is not an admin), otherwise the role defaults. allowed_printer_ids /
+// allowed_printer_groups are both null when unrestricted.
+function resolvePermissions(db, user) {
+  const base = ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS.uploader;
+  const open = { ...base, max_plates_per_upload: null, allowed_printer_ids: null, allowed_printer_groups: null, group: null };
+  if (user.role === 'admin' || !user.user_group_id) return open;
+  const g = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(user.user_group_id);
+  if (!g) return open;
+  return {
+    can_approve: !!g.can_approve,
+    can_set_ready: !!g.can_set_ready,
+    can_manage_printers: !!g.can_manage_printers,
+    can_quick_print: !!g.can_quick_print,
+    requires_approval: !!g.requires_approval,
+    max_plates_per_upload: g.max_plates_per_upload ?? null,
+    allowed_printer_ids: parseJsonArray(g.allowed_printer_ids),
+    allowed_printer_groups: parseJsonArray(g.allowed_printer_groups),
+    group: { id: g.id, name: g.name },
+  };
+}
+
+// Reads req.user.permissions when requireAuth attached them, else falls back to
+// the role defaults so a bare { role } user (tests, scripts) behaves as before.
+function hasPermission(user, perm) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  const perms = user.permissions || ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS.uploader;
+  return !!perms[perm];
+}
+
+function requirePermission(perm, message) {
+  return (req, res, next) => {
+    if (!hasPermission(req.user, perm)) {
+      return res.status(403).json({ error: message || 'Your user group does not allow this' });
+    }
+    next();
+  };
+}
+
+// The "block" flavor of requirePermission, matching blockRole: it only rejects a
+// signed-in user who lacks the permission, and lets a request with no req.user
+// through (the global requireAuth gate in server/index.js guarantees one in
+// production; router-level tests mount routes without it). Used for the
+// printer-management and Set Ready gates, which were blockRole('uploader').
+function blockWithoutPermission(perm, message) {
+  return (req, res, next) => {
+    if (req.user && !hasPermission(req.user, perm)) {
+      return res.status(403).json({ error: message || 'Your user group does not allow this' });
+    }
+    next();
+  };
+}
+
+// True when this user's group allows dispatching to the given printer row
+// ({ id, group_name }). Unrestricted (no lists) allows everything.
+function printerAllowed(permissions, printer) {
+  if (!permissions) return true;
+  const ids = permissions.allowed_printer_ids;
+  const groups = permissions.allowed_printer_groups;
+  if (!ids && !groups) return true;
+  return (ids || []).includes(printer.id) || (groups || []).includes(printer.group_name);
+}
+
 // ─── Middleware ─────────────────────────────────────────────────────────────
 
 function publicUser(user) {
@@ -143,7 +224,7 @@ function requireAuth(db) {
     if (bearerMatch) {
       const user = getUserByApiKey(db, bearerMatch[1].trim());
       if (user) {
-        req.user = publicUser(user);
+        req.user = { ...publicUser(user), permissions: resolvePermissions(db, user) };
         req.authMethod = 'api_key';
         return next();
       }
@@ -153,7 +234,7 @@ function requireAuth(db) {
     const token = parseCookies(req)[SESSION_COOKIE];
     const user = getUserBySession(db, token);
     if (user) {
-      req.user = publicUser(user);
+      req.user = { ...publicUser(user), permissions: resolvePermissions(db, user) };
       req.authMethod = 'session';
       return next();
     }
@@ -201,13 +282,22 @@ function blockRole(role, message) {
 // uploader only queues prints. Applied per-route in routes/printers.js,
 // routes/models.js, routes/groups.js, routes/backup.js (restore replaces the
 // printer table), and server/index.js (recommission).
-const blockUploaderPrinterAdmin = blockRole(
-  'uploader',
+// Now driven by the can_manage_printers permission (role default: everyone but
+// uploader; a user group can grant or revoke it). The name is kept because it is
+// applied across many routes.
+const blockUploaderPrinterAdmin = blockWithoutPermission(
+  'can_manage_printers',
   'Uploaders cannot add, remove, or change printers or printer settings'
 );
 
 module.exports = {
   SESSION_COOKIE,
+  ROLE_PERMISSIONS,
+  resolvePermissions,
+  hasPermission,
+  requirePermission,
+  blockWithoutPermission,
+  printerAllowed,
   blockUploaderPrinterAdmin,
   hashPassword,
   verifyPassword,

@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-09-28: user groups with per-group printers and permissions, plus Quick Print
+
+Requested: custom user groups where an admin sets each group's own settings, including which printers members may upload to, an admin group and an operator group, and a quick way to upload one file and print it once.
+
+New `user_groups` table (additive) and `users.user_group_id`. Three built-in groups (Admin, Operator, Uploader) mirror the roles and existing accounts join the one for their role, so nothing changes until a group is edited. Custom groups are based on the operator or uploader role, and carry flags (Set Ready, printer management, approvals, Quick Print, uploads need approval), a max parts-per-plate cap, and an allowed printers and printer groups list. The old `blockRole('uploader')` gates (set-ready, printer management) and the approval routes now check these permissions. The printer limit is enforced in the scheduler candidate query with a live join on the uploader (so tightening a group applies to already queued work) and mirrored in dispatch-status. Admin stays fully open and user, settings, and API key management stay admin-only.
+
+Quick Print (`POST /api/quick-print`, Fleet page button) queues one plate through the same path as the slicer endpoint, optionally pinned to a printer via the new `gcodes.target_printer_id`. It does not touch `completed_qty`: credit still comes only from the normal Set Ready flow. The browser tab title is now "Print Farm Manager".
+
+Hardware validation: no driver code changed. The scheduler restriction and pinning are covered by tests against an in-memory schema, not validated by real dispatches on a farm.
+
+### Changes
+- `server/db.js`: `user_groups` table, seeded built-in groups, `users.user_group_id` and backfill, `gcodes.target_printer_id`.
+- `server/auth.js`: `resolvePermissions`, `hasPermission`, `requirePermission`, `blockWithoutPermission`, `printerAllowed`; `req.user.permissions`; `blockUploaderPrinterAdmin` is now permission based.
+- `server/routes/user-groups.js`: new, group CRUD (admin only writes).
+- `server/routes/quick-print.js`: new, `POST /api/quick-print`.
+- `server/routes/users.js`: `user_group_id` on create and update, approve routes use `can_approve`.
+- `server/routes/gcodes.js`, `server/routes/slicer-upload.js`: group `requires_approval`, plate cap, printer limit checks.
+- `server/scheduler.js`, `server/routes/parts.js`: target printer and group printer limit in the candidate query and its dispatch-status mirror.
+- `server/index.js`: mounts the new routes, set-ready gates use `can_set_ready`.
+- `client/src/components/UserGroups.jsx`, `client/src/components/QuickPrint.jsx`: new; `client/src/pages/Users.jsx`, `Fleet.jsx`, `Decommissioned.jsx`, `PrinterDetail.jsx`, `Settings.jsx`, `Projects.jsx`: group picker, Quick Print button, permission-based hiding.
+- `client/index.html`: page title is "Print Farm Manager".
+- `server/tests/user-groups.test.js`, `quick-print.test.js`: new; `users-routes.test.js`, `scheduler-*.test.js`: new cases and schema columns.
+- `docs/auth.md`, `api.md`, `database.md`, `web-app.md`: documented.
+
+Test status: `npm test` could not run on this machine (no better-sqlite3 build for Node 22.23.2 and no Visual Studio toolchain). The touched suites passed under a temporary shim over Node's built-in `node:sqlite`; a full run through the shim also showed failures that differ from run to run and also occur without these changes. Run `npm test` on a machine with a working build before merging.
+
+---
+
 ## 2026-09-29: self-service and admin password changes
 
 Requested: a way to change a password, admin included; previously there was no UI for changing an existing account's password anywhere, only setting one at creation.

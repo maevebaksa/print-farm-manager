@@ -44,9 +44,11 @@ function makeDb(settings = {}) {
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL,
       target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open',
       sort_order INTEGER DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT, user_group_id INTEGER);
+    CREATE TABLE user_groups (id INTEGER PRIMARY KEY, allowed_printer_ids TEXT, allowed_printer_groups TEXT);
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
       filename TEXT NOT NULL, filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL, ams_slot INTEGER,
-      allowed_groups TEXT, required_material TEXT, required_color TEXT, approved INTEGER NOT NULL DEFAULT 1,
+      allowed_groups TEXT, required_material TEXT, required_color TEXT, approved INTEGER NOT NULL DEFAULT 1, target_printer_id INTEGER, uploaded_by_user_id INTEGER,
       created_at INTEGER NOT NULL);
     CREATE TABLE jobs (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_id INTEGER NOT NULL,
       gcode_id INTEGER, parts_per_plate INTEGER NOT NULL, status TEXT DEFAULT 'queued',

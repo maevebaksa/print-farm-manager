@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAnyRole } = require('../auth');
+const { requireAnyRole, resolvePermissions, printerAllowed } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -154,6 +154,22 @@ module.exports = (db, scheduler = null) => {
         notes.push(`${gc.filename}: no printers in allowed group(s) ${allowedGroups.join(', ')}`);
         continue;
       }
+
+      // Mirrors the scheduler's target_printer_id and user-group printer
+      // restriction clauses (server/scheduler.js). Keep in sync.
+      let restrictions = null;
+      if (gc.uploaded_by_user_id) {
+        const uploader = db.prepare('SELECT * FROM users WHERE id = ?').get(gc.uploaded_by_user_id);
+        if (uploader) restrictions = resolvePermissions(db, uploader);
+      }
+      const restrictedOk = groupOk.filter(p =>
+        (!gc.target_printer_id || gc.target_printer_id === p.id) && printerAllowed(restrictions, p));
+      if (restrictedOk.length === 0) {
+        notes.push(`${gc.filename}: no eligible printer, restricted to ${gc.target_printer_id ? 'the printer chosen at upload' : "the uploader's user group printers"}`);
+        continue;
+      }
+      groupOk.length = 0;
+      groupOk.push(...restrictedOk);
 
       // Mirrors the scheduler's candidate query (server/scheduler.js): a printer
       // qualifies if its own loaded_material/loaded_color satisfies the requirement,

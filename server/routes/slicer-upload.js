@@ -77,7 +77,7 @@ module.exports = (db, getScheduler = () => null) => {
     const user = auth.getUserByApiKey(db, key);
     if (!user) return res.status(401).json({ error: 'Invalid API key' });
     if (user.approved === 0) return res.status(403).json({ error: 'This account is pending approval' });
-    req.user = auth.publicUser(user);
+    req.user = { ...auth.publicUser(user), permissions: auth.resolvePermissions(db, user) };
     next();
   }
 
@@ -147,11 +147,26 @@ module.exports = (db, getScheduler = () => null) => {
           return reject(400, `Could not tell which printer model this file is for (group "${req.groupName}" has ${groupModels.join(', ')}). Slice with a printer profile whose printer_model matches one of them.`);
         }
 
+        // User-group limits: an allowed-printer list must include at least one
+        // active printer in this group, and max_plates_per_upload caps the plate size.
+        const perms = req.user.permissions;
+        if (perms && (perms.allowed_printer_ids || perms.allowed_printer_groups)) {
+          const groupPrinters = db.prepare(
+            'SELECT id, group_name FROM printers WHERE group_name = ? AND is_active = 1'
+          ).all(req.groupName);
+          if (!groupPrinters.some(p => auth.printerAllowed(perms, p))) {
+            return reject(403, `Your user group is not allowed to print on any printer in group "${req.groupName}"`);
+          }
+        }
+        if (perms && perms.max_plates_per_upload && partsPerPlateFromName(displayName) > perms.max_plates_per_upload) {
+          return reject(403, `Your user group allows at most ${perms.max_plates_per_upload} parts per plate per upload`);
+        }
+
         const stats = readPrintStats(displayName, buf); // print time, grams, filament type from the header
         const user = req.user;
         const now = Date.now();
         const partsPerPlate = partsPerPlateFromName(displayName);
-        const approved = user.requires_print_approval ? 0 : 1;
+        const approved = (user.requires_print_approval || (perms && perms.requires_approval)) ? 0 : 1;
         const projectName = `Uploads: ${user.name}`;
 
         let gcodeId;

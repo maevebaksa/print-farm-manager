@@ -82,7 +82,7 @@ export default function PrinterDetail() {
   // printer management, blocked for uploaders server-side
   // (auth.blockUploaderPrinterAdmin), so the Rename and Edit buttons are hidden.
   const { user } = useAuth();
-  const canManagePrinters = user?.role !== 'uploader';
+  const canManagePrinters = user?.permissions?.can_manage_printers ?? user?.role !== 'uploader';
   const { id } = useParams();
   const navigate = useNavigate();
 
