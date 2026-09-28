@@ -10,7 +10,6 @@
 // access is equivalent to root on the host) before enabling it.
 
 const express = require('express');
-const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -57,6 +56,12 @@ function canTrigger() {
 }
 
 module.exports = (db) => {
+  // A fresh router per factory call, not one at module level: a shared
+  // module-level router accumulates one handler per call, and the first one
+  // (bound to the first db it was given) answers every request after it.
+  // Harmless with one production call, wrong in tests that build a new app
+  // and database per test (and the reason this route's tests failed in CI).
+  const router = express.Router();
   router.get('/status', auth.requireRole('admin'), async (req, res) => {
     const repoSetting = db.prepare("SELECT value FROM settings WHERE key = 'update_repo'").get();
     const repo = repoSetting?.value || null;

@@ -3,10 +3,15 @@
 // your own password.
 
 const express = require('express');
-const router = express.Router();
 const auth = require('../auth');
 
 module.exports = (db) => {
+  // A fresh router per factory call, not one at module level: a shared
+  // module-level router accumulates one handler per call, and the first one
+  // (bound to the first db it was given) answers every request after it.
+  // Harmless with one production call, wrong in tests that build a new app
+  // and database per test (and the reason this route's tests failed in CI).
+  const router = express.Router();
   // PUT /api/account/password { current_password, new_password }: requires
   // proving you still know the current one, same reasoning bank/email account
   // settings use it for, before letting a live session silently take over the

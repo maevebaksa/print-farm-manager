@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-09-28: fix CI: account and update route tests hitting a stale router
+
+CI went red on `main` after the Software Update / account branch merged (run for `8d16146`): three tests in `account-routes.test.js` and `update-routes.test.js` failed (a 401 and a 404 where 400 was expected, and `latestCommit: null`). They failed on that branch's own commit before the merge too (`c012a62`), so they were not caused by the merge.
+
+Cause: `server/routes/account.js` and `server/routes/update.js` created their Express router once at module level but registered handlers inside the factory. Each test builds a fresh app and database, calling the factory again, which added another handler to the same shared router; the first one, bound to the first test's database, answered every later request. So a later test saw the password changed by an earlier one, or a database without its `update_repo` setting. Harmless in production (one factory call), but wrong. Both routers are now created inside the factory, like `routes/groups.js` and `routes/models.js`.
+
+### Changes
+- `server/routes/account.js`, `server/routes/update.js`: router created per factory call.
+
+---
+
 ## 2026-09-29: self-service and admin password changes
 
 Requested: a way to change a password, admin included; previously there was no UI for changing an existing account's password anywhere, only setting one at creation.
