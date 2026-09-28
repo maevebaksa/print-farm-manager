@@ -539,6 +539,14 @@ Returns `201` with created project (`status` defaults to `"draft"`).
 
 Records the signed-in user as `created_by_user_id`/`created_by_name` on the new project (returned in the `201` body).
 
+### `PUT /api/projects/:id/priority-override`
+
+Operator/admin only (`403` for an uploader). Body `{ "enabled": true }` or `{ "enabled": false }` (`400` if not a boolean, `404` if the project does not exist). Sets `projects.priority_override`: the scheduler dispatches overridden work ahead of the normal queue order (either `queue_order`) and exempts it from the printer caps; see Dispatch order under Scheduler. Setting it triggers a sweep for idle printers. Returns the updated row. The general `PUT /api/projects/:id` never changes this flag.
+
+```json
+{ "enabled": true }
+```
+
 ### `PUT /api/projects/:id`
 
 Partial update. Accepts: `name`, `description`, `status` (`draft` | `active` | `paused` | `completed`).
@@ -599,6 +607,14 @@ Required: `project_id`, `name`, `target_qty`.
 A new part always starts `open` with `completed_qty: 0`. If the parent project's status is `completed`, it's reactivated to `active` immediately (same as `POST /api/projects/:id/reactivate`) without a separate manual reactivate step. A scheduler sweep also runs at this point, but it can't dispatch the new part itself yet: the scheduler's candidate query requires a matching G-code, and a brand-new part has none. The part becomes an actual dispatch candidate once G-code is uploaded for it (see `POST /api/gcodes/upload`, which triggers its own sweep).
 
 Records the signed-in user as `created_by_user_id`/`created_by_name` on the new part (returned in the `201` body and on `GET /api/parts`).
+
+### `PUT /api/parts/:id/priority-override`
+
+Operator/admin only (`403` for an uploader). Body `{ "enabled": true }` or `{ "enabled": false }` (`400` if not a boolean, `404` if the part does not exist). Sets `parts.priority_override`: the scheduler dispatches overridden work ahead of the normal queue order (either `queue_order`) and exempts it from the printer caps; see Dispatch order under Scheduler. Setting it triggers a sweep for idle printers. Returns the updated row. The general `PUT /api/parts/:id` never changes this flag.
+
+```json
+{ "enabled": true }
+```
 
 ### `PUT /api/parts/:id`
 
@@ -827,7 +843,7 @@ Called by the Projects UI when a project is activated or resumed.
 
 ### Dispatch order
 
-When a printer is free, the scheduler (`server/scheduler.js` `_reserveCandidate`) walks the eligible parts (open part, active project, approved G-code for this printer's model, group/material/color match) in queue order and takes the first one that still needs prints:
+When a printer is free, the scheduler (`server/scheduler.js` `_reserveCandidate`) walks the eligible parts (open part, active project, approved G-code for this printer's model, group/material/color match) in queue order and takes the first one that still needs prints. Work with a priority override (`parts.priority_override` or its project's, set by an operator or admin) always comes first and is not limited by the caps below; within each group:
 
 - `queue_order = "priority"` (default): `projects.priority`, then `projects.created_at`, then `parts.sort_order`, then `parts.created_at`. This is the drag order on the Projects page.
 - `queue_order = "fifo"`: `gcodes.created_at` of the part's G-code for this printer's model, oldest first. A duplicated project's G-codes count from when they were duplicated.

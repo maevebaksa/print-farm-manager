@@ -20,7 +20,7 @@ beforeAll(() => {
       name TEXT NOT NULL,
       status TEXT DEFAULT 'draft',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +31,7 @@ beforeAll(() => {
       status TEXT DEFAULT 'open',
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE printers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

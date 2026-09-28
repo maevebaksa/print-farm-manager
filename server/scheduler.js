@@ -519,7 +519,10 @@ class JobScheduler extends EventEmitter {
           gcodes.filename,
           gcodes.filepath,
           gcodes.parts_per_plate,
-          gcodes.ams_slot
+          gcodes.ams_slot,
+          -- Operator/admin priority override on the part or its project: always
+          -- first in line, whatever queue_order says, and exempt from the caps.
+          (parts.priority_override = 1 OR projects.priority_override = 1) AS overridden
         FROM parts
         JOIN gcodes   ON gcodes.part_id    = parts.id
         JOIN projects ON projects.id       = parts.project_id
@@ -558,7 +561,7 @@ class JobScheduler extends EventEmitter {
             )
           )
           ${excludeClause}
-        ORDER BY ${policy.fifo
+        ORDER BY overridden DESC, ${policy.fifo
           ? 'gcodes.created_at ASC, gcodes.id ASC'
           : 'projects.priority ASC, projects.created_at ASC, parts.sort_order ASC, parts.created_at ASC'}
         LIMIT 1
@@ -569,7 +572,7 @@ class JobScheduler extends EventEmitter {
       // Over its printer cap while other work may be waiting: skip it for now,
       // before taking any dispatch lock. _reserveJob retries with caps ignored
       // if nothing uncapped turns up, so this never idles a printer.
-      if (respectCaps) {
+      if (respectCaps && !candidate.overridden) {
         const capped = this._atPrinterCap(candidate, policy);
         if (capped) {
           console.log(`[scheduler] ${printer.name}: skipping, ${capped}`);

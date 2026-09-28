@@ -1,4 +1,5 @@
 const express = require('express');
+const { requireAnyRole } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -90,6 +91,21 @@ module.exports = (db, scheduler = null) => {
       UPDATE projects SET allowed_groups = ?, updated_at = ? WHERE id = ?
     `).run(value, Date.now(), project.id);
     res.json(db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id));
+  });
+
+  // PUT /:id/priority-override: { "enabled": true|false }. Operator/admin only
+  // (the project jumps the whole queue, so an uploader cannot set it; the
+  // general PUT /:id never touches this column). Sweeps so an idle printer
+  // picks the work up now.
+  router.put('/:id/priority-override', requireAnyRole(['admin', 'operator']), (req, res) => {
+    const row = db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Project not found' });
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) is required' });
+    db.prepare('UPDATE projects SET priority_override = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), row.id);
+    console.log(`[projects] ${req.user?.name ?? 'unknown'} ${enabled ? 'set' : 'cleared'} priority override on project ${row.id}`);
+    if (enabled && scheduler) scheduler.sweepIdlePrinters();
+    res.json(db.prepare('SELECT * FROM projects WHERE id = ?').get(row.id));
   });
 
   router.put('/:id', (req, res) => {

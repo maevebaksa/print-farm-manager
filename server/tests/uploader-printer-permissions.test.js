@@ -22,7 +22,7 @@ beforeAll(() => {
     CREATE TABLE printer_groups (name TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
     CREATE TABLE printers (id INTEGER PRIMARY KEY, name TEXT, model TEXT, group_name TEXT, is_active INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, allowed_groups TEXT);
-    CREATE TABLE projects (id INTEGER PRIMARY KEY, allowed_groups TEXT);
+    CREATE TABLE projects (id INTEGER PRIMARY KEY, allowed_groups TEXT, priority_override INTEGER NOT NULL DEFAULT 0);
   `);
   db.prepare("INSERT INTO printer_models VALUES ('mk4s', 'MK4S', 'prusa')").run();
   db.prepare("INSERT INTO printer_groups VALUES ('Rack A', 1)").run();

@@ -2,6 +2,20 @@
 
 ---
 
+## 2026-09-28: operator/admin priority override
+
+Requested: alongside first in, first out, a way to put specific work ahead of the queue that only an operator or admin can use. New additive `priority_override` flags on `parts` and `projects`, set through new `PUT /api/parts/:id/priority-override` and `PUT /api/projects/:id/priority-override` routes gated to operator/admin (`403` for an uploader); the general `PUT /:id` routes never change them, so an uploader cannot set one indirectly. The scheduler dispatches overridden work (the part's flag or its project's) first under either queue order and exempts it from the per-part/per-project printer caps. `GET /api/parts/:id/dispatch-status` notes an override (scheduler sync pair). The Projects page shows a Priority badge, and a toggle for operators and admins.
+
+### Changes
+- `server/db.js`: `parts.priority_override`, `projects.priority_override` migrations.
+- `server/routes/parts.js`, `server/routes/projects.js`: the operator/admin-only override routes; dispatch-status note.
+- `server/scheduler.js`: overridden candidates sort first and skip the cap check.
+- `client/src/pages/Projects.jsx`: Priority badge and toggle on projects and parts.
+- `server/tests/priority-override.test.js`: new (operator/admin allowed, uploader 403 with nothing changed, validation, general PUT cannot set it). `scheduler-queue-policy.test.js`: override jumps FIFO and priority order and ignores caps. Inline test schemas gained the columns.
+- `docs/api.md`, `docs/database.md`, `docs/web-app.md`.
+
+---
+
 ## 2026-09-28: never use a client-supplied upload filename raw on disk
 
 Reported (found while building the slicer endpoint): `POST /api/gcodes/upload` named stored files `Date.now() + "_" + file.originalname`, trusting the client's filename, and stored it verbatim as the display name. Checked before fixing: the feared `../` path traversal is not reachable today, because multer 2.2.0's default `preservePath: false` has busboy strip directory parts (both `/` and `\`) before the route sees the name; a raw multipart request with `filename="../../evil.gcode"` arrives as `evil.gcode`. What does arrive intact are characters NTFS treats specially, which matters on the Windows farm machine: `part:1.gcode` would be written as an alternate data stream on a file named `<timestamp>_part` rather than a normal file, and `?`, `*`, `|`, `"` make the write fail.

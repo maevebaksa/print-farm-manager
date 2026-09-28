@@ -42,7 +42,7 @@ beforeAll(() => {
       status TEXT DEFAULT 'active',
       priority INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +53,7 @@ beforeAll(() => {
       status        TEXT DEFAULT 'open',
       sort_order    INTEGER DEFAULT 0,
       created_at    INTEGER NOT NULL,
-      updated_at    INTEGER NOT NULL
+      updated_at    INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,

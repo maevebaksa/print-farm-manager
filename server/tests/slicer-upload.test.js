@@ -29,10 +29,10 @@ beforeAll(() => {
     CREATE TABLE printers (id INTEGER PRIMARY KEY, name TEXT, model TEXT, group_name TEXT, is_active INTEGER DEFAULT 1);
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL, description TEXT, status TEXT DEFAULT 'draft',
       priority INTEGER DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      created_by_user_id INTEGER, created_by_name TEXT);
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL, target_qty INTEGER NOT NULL,
       completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open', sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, created_by_user_id INTEGER, created_by_name TEXT);
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_model TEXT NOT NULL, filename TEXT NOT NULL,
       filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL, est_print_secs INTEGER, material_grams REAL,
       allowed_groups TEXT, approved INTEGER NOT NULL DEFAULT 1, uploaded_by_user_id INTEGER, uploaded_by_name TEXT,

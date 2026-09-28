@@ -40,10 +40,10 @@ function makeDb(settings = {}) {
       material TEXT, color TEXT, updated_at INTEGER NOT NULL);
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL, status TEXT DEFAULT 'active',
       priority INTEGER DEFAULT 0, required_material TEXT, required_color TEXT, allowed_groups TEXT,
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL,
       target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open',
-      sort_order INTEGER DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      sort_order INTEGER DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
       filename TEXT NOT NULL, filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL, ams_slot INTEGER,
       allowed_groups TEXT, required_material TEXT, required_color TEXT, approved INTEGER NOT NULL DEFAULT 1,
@@ -135,5 +135,26 @@ describe('printer caps', () => {
     await dispatchedPartId(db);
     const rows = db.prepare("SELECT part_id, printer_id FROM jobs WHERE printer_id = 1").all();
     expect(rows).toEqual([{ part_id: 1, printer_id: 1 }]);
+  });
+});
+
+describe('priority override', () => {
+  test('an overridden part jumps FIFO order', async () => {
+    const db = makeDb({ queue_order: 'fifo' });
+    db.prepare('UPDATE parts SET priority_override = 1 WHERE id = 1').run(); // E, uploaded last
+    expect(await dispatchedPartId(db)).toBe(1);
+  });
+
+  test('an overridden project jumps project priority order', async () => {
+    const db = makeDb();
+    db.prepare('UPDATE projects SET priority_override = 1 WHERE id = 2').run(); // Late
+    expect(await dispatchedPartId(db)).toBe(2);
+  });
+
+  test('overridden work is exempt from the printer caps', async () => {
+    const db = makeDb({ queue_order: 'fifo', max_printers_per_part: 1 });
+    addActiveJob(db, 2);
+    db.prepare('UPDATE parts SET priority_override = 1 WHERE id = 2').run();
+    expect(await dispatchedPartId(db)).toBe(2); // not skipped for E despite being at its cap
   });
 });

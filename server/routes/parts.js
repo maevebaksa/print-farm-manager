@@ -1,4 +1,5 @@
 const express = require('express');
+const { requireAnyRole } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -39,7 +40,8 @@ module.exports = (db, scheduler = null) => {
              projects.status            AS project_status,
              projects.required_material AS project_material,
              projects.required_color    AS project_color,
-             projects.allowed_groups    AS project_allowed_groups
+             projects.allowed_groups    AS project_allowed_groups,
+             projects.priority_override AS project_priority_override
       FROM parts JOIN projects ON projects.id = parts.project_id
       WHERE parts.id = ?
     `).get(req.params.id);
@@ -72,8 +74,14 @@ module.exports = (db, scheduler = null) => {
       const n = parseInt(db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value, 10);
       return Number.isFinite(n) && n > 0 ? n : 0;
     };
-    const maxPerPart = capSetting('max_printers_per_part');
-    const maxPerProject = capSetting('max_printers_per_project');
+    // Priority override (part or project) puts this ahead of the normal queue
+    // and exempts it from the caps, mirroring the scheduler's "overridden".
+    const overridden = part.priority_override === 1 || part.project_priority_override === 1;
+    if (overridden) {
+      notes.push('Priority override: dispatched ahead of the normal queue and not limited by the printer caps');
+    }
+    const maxPerPart = overridden ? 0 : capSetting('max_printers_per_part');
+    const maxPerProject = overridden ? 0 : capSetting('max_printers_per_project');
     if (maxPerPart > 0) {
       const n = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE part_id = ? AND status IN ('uploading', 'printing')").get(part.id).n;
       if (n >= maxPerPart) {
@@ -258,6 +266,21 @@ module.exports = (db, scheduler = null) => {
       ids.forEach((id, index) => update.run(index, now, id));
     })();
     res.json({ success: true });
+  });
+
+  // PUT /:id/priority-override: { "enabled": true|false }. Operator/admin only
+  // (the part jumps the whole queue, so an uploader cannot set it; the
+  // general PUT /:id never touches this column). Sweeps so an idle printer
+  // picks the work up now.
+  router.put('/:id/priority-override', requireAnyRole(['admin', 'operator']), (req, res) => {
+    const row = db.prepare('SELECT id FROM parts WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Part not found' });
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) is required' });
+    db.prepare('UPDATE parts SET priority_override = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), row.id);
+    console.log(`[parts] ${req.user?.name ?? 'unknown'} ${enabled ? 'set' : 'cleared'} priority override on part ${row.id}`);
+    if (enabled && scheduler) scheduler.sweepIdlePrinters();
+    res.json(db.prepare('SELECT * FROM parts WHERE id = ?').get(row.id));
   });
 
   router.put('/:id', (req, res) => {

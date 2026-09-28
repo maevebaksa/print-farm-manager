@@ -18,7 +18,7 @@ beforeAll(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT,
       status TEXT DEFAULT 'draft', priority INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      created_by_user_id INTEGER, created_by_name TEXT
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id),
@@ -26,7 +26,7 @@ beforeAll(() => {
       status TEXT DEFAULT 'open', sort_order INTEGER NOT NULL DEFAULT 0,
       print_time_seconds INTEGER, material_grams REAL,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      created_by_user_id INTEGER, created_by_name TEXT
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT, part_id INTEGER NOT NULL REFERENCES parts(id),

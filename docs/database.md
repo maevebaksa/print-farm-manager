@@ -111,9 +111,12 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
   created_by_user_id INTEGER,               -- migration; who created it (no FK)
-  created_by_name   TEXT                    -- migration; snapshot, not joined at read time
+  created_by_name   TEXT,                   -- migration; snapshot, not joined at read time
+  priority_override INTEGER NOT NULL DEFAULT 0 -- migration; operator/admin "print next" flag (also on parts)
 );
 ```
+
+**`priority_override`** (migration, on `projects` and `parts`, 0/1): set only through `PUT /api/{projects,parts}/:id/priority-override`, operator/admin only. Overridden work (the part's flag or its project's) is dispatched ahead of the normal queue order and exempt from the printer caps.
 
 **`created_by_user_id`/`created_by_name`** (migration, also on `parts`; `gcodes` has the equivalent `uploaded_by_user_id`/`uploaded_by_name`): which signed-in user created the project or part, or uploaded the G-code, so the Projects and Jobs pages can show whose parts everything belongs to. Same convention as `printer_events.user_id`/`user_name`: no FK, and the name is a snapshot taken at insert time, so attribution survives the user being renamed or deleted. `NULL` on rows created before this migration. Duplicating a project (`POST /api/projects/:id/duplicate`) attributes the new project and parts to whoever duplicated it, while each copied G-code keeps its original uploader. Jobs have no owner column: the scheduler creates job rows, so `GET /api/jobs` joins the owner from the job's part and G-code instead.
 
@@ -135,7 +138,8 @@ CREATE TABLE IF NOT EXISTS parts (
   created_at          INTEGER NOT NULL,
   updated_at          INTEGER NOT NULL,
   created_by_user_id  INTEGER,               -- migration; see projects above
-  created_by_name     TEXT                   -- migration; snapshot
+  created_by_name     TEXT,                  -- migration; snapshot
+  priority_override   INTEGER NOT NULL DEFAULT 0 -- migration; see projects above
 );
 ```
 

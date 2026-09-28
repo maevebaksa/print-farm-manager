@@ -76,7 +76,7 @@ beforeEach(() => {
       required_material TEXT,
       required_color    TEXT,
       allowed_groups    TEXT,
-      created_by_user_id INTEGER, created_by_name TEXT
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,7 +90,7 @@ beforeEach(() => {
       sort_order          INTEGER NOT NULL DEFAULT 0,
       print_time_seconds  INTEGER,
       material_grams      REAL,
-      created_by_user_id INTEGER, created_by_name TEXT
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,

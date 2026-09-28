@@ -21,11 +21,11 @@ beforeAll(() => {
       is_active INTEGER DEFAULT 1, created_at INTEGER);
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, status TEXT DEFAULT 'draft',
       created_at INTEGER, updated_at INTEGER,
-      created_by_user_id INTEGER, created_by_name TEXT);
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER, name TEXT,
       target_qty INTEGER, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open',
       created_at INTEGER, updated_at INTEGER,
-      created_by_user_id INTEGER, created_by_name TEXT);
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER, filename TEXT,
       uploaded_by_user_id INTEGER, uploaded_by_name TEXT);
     CREATE TABLE jobs (id INTEGER PRIMARY KEY, part_id INTEGER, printer_id INTEGER,

@@ -86,6 +86,28 @@ function isFileDrag(e) {
   return Array.from(e.dataTransfer?.types || []).includes('Files');
 }
 
+// "Priority" marker for work an operator/admin has put ahead of the queue
+// (parts/projects.priority_override). As a button when the viewer can toggle
+// it, a plain badge otherwise; nothing at all when off and not toggleable.
+function PriorityOverride({ on, canToggle, onToggle }) {
+  if (!on && !canToggle) return null;
+  const style = {
+    background: on ? '#78350f' : 'none', color: on ? '#fbbf24' : '#64748b',
+    border: `1px solid ${on ? '#b45309' : '#2d3748'}`, borderRadius: 4,
+    padding: '1px 7px', fontSize: 11, fontWeight: 700, flexShrink: 0, lineHeight: 1.5,
+  };
+  if (!canToggle) return <span title="Put ahead of the normal queue by an operator" style={style}>Priority</span>;
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onToggle(!on); }}
+      title={on ? 'Priority override on: prints ahead of the normal queue and ignores printer caps. Click to clear.' : 'Give priority: print ahead of the normal queue (operators and admins only)'}
+      style={{ ...style, cursor: 'pointer' }}
+    >
+      {on ? 'Priority' : '+ Priority'}
+    </button>
+  );
+}
+
 function StatusDropdown({ project, onTransition }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -1215,6 +1237,24 @@ export default function Projects() {
     }
   }
 
+  // Operator/admin priority override (PUT .../priority-override). Refetch after,
+  // like every other mutation on this page.
+  async function setPriorityOverride(kind, id, enabled) {
+    const res = await fetch(`/api/${kind}/${id}/priority-override`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showToast('Priority change failed: ' + (body.error || res.status), 'error');
+      return;
+    }
+    showToast(enabled ? 'Priority override on' : 'Priority override cleared');
+    await fetchProjects();
+    if (selectedId != null) await fetchDetail(selectedId);
+  }
+
   async function handleDuplicate() {
     if (!dupName.trim() || duplicating) return;
     setDuplicating(true);
@@ -1681,8 +1721,9 @@ export default function Projects() {
 
                 {/* Name + description — clicking here navigates */}
                 <div style={{ minWidth: 0, flex: 1, cursor: 'pointer' }} onClick={() => setSelectedId(p.id)}>
-                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {p.name}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 15, marginBottom: 2, minWidth: 0 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+                    <PriorityOverride on={p.priority_override === 1} canToggle={false} />
                   </div>
                   {p.description && (
                     <div style={{ color: '#64748b', fontSize: 12 }}>{p.description}</div>
@@ -1792,6 +1833,11 @@ export default function Projects() {
           </>
         )}
         <StatusDropdown project={detailProject} onTransition={handleStatusTransition} />
+        <PriorityOverride
+          on={detailProject.priority_override === 1}
+          canToggle={canApprove}
+          onToggle={(v) => setPriorityOverride('projects', detailProject.id, v)}
+        />
         {detailEta && detailEta.remaining_seconds != null && (
           <span style={{ fontSize: 12, color: '#94a3b8' }}>
             {detailEta.remaining_seconds > 0
@@ -1919,7 +1965,14 @@ export default function Projects() {
                   style={{ color: '#334155', fontSize: 16, cursor: 'grab', flexShrink: 0, userSelect: 'none', lineHeight: 1 }}
                 >⠿</span>
                 <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{part.name}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{part.name}</span>
+                    <PriorityOverride
+                      on={part.priority_override === 1}
+                      canToggle={canApprove}
+                      onToggle={(v) => setPriorityOverride('parts', part.id, v)}
+                    />
+                  </span>
                   {/* Who added this part (parts.created_by_name, a snapshot taken at
                       creation). Absent on parts that predate user tracking. */}
                   {part.created_by_name && (
