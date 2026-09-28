@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-09-28: log the actual error when the camera proxy can't reach a printer
+
+Reported: a camera proxy request failing with a 502, but the only diagnostic available was the bare status code (seen via the browser's own error toast/console), not the specific reason (connection refused, DNS failure, timeout, etc.) needed to actually fix anything. The JSON response body already carries that detail, but reading it requires the browser's Network tab, which isn't always convenient to walk through remotely.
+
+### Changes
+- `server/routes/printers.js`: both camera proxy routes now `console.error` the printer id, the upstream URL, and the error code/message on a 502, so `docker logs` alone is enough to see why, no browser DevTools needed.
+
+No automated test: purely a logging addition, no behavior change. Verified `node --check`; could not run the server locally to see the log line for real, same `better-sqlite3` limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-28: Dashboard fleet grid cells grow to fill their chip instead of staying a fixed size
 
 Requested: the Dashboard's per-model cell grid looked great on a mixed 9-printer fleet (many small chips already packing the page) but small on a fleet with 10 printers of one model (one wide chip leaving most of the page empty). Asked to touch up the sizing generally and make it scale better.

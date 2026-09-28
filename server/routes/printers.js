@@ -621,6 +621,7 @@ module.exports = (db) => {
       res.set('Content-Type', upstream.headers['content-type'] || 'image/jpeg');
       upstream.data.pipe(res);
     } catch (err) {
+      console.error(`[printers] camera snapshot proxy: printer ${req.params.id}, ${camera.snapshotUrl}: ${err.code || ''} ${err.message}`.trim());
       if (!res.headersSent) res.status(502).json({ error: 'Could not reach camera: ' + err.message });
     }
   });
@@ -644,6 +645,7 @@ module.exports = (db) => {
       upstream.data.pipe(res);
       upstream.data.on('error', () => { if (!res.writableEnded) res.end(); });
     } catch (err) {
+      console.error(`[printers] camera stream proxy: printer ${req.params.id}, ${camera.streamUrl}: ${err.code || ''} ${err.message}`.trim());
       if (!res.headersSent) res.status(502).json({ error: 'Could not reach camera: ' + err.message });
     }
   });
