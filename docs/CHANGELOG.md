@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-09-28: fix .bgcode thumbnails compressed with Deflate never showing
+
+Found while writing the OctoPrint .bgcode converter (entry below): `fromBgcode` decoded Deflate-compressed (compression type 1) blocks as raw Deflate, but Prusa's reference implementation libbgcode (src/LibBGCode/binarize/binarize.cpp) writes them with `deflateInit`, a zlib-wrapped stream. A real Deflate-compressed thumbnail therefore failed to decode and was skipped silently, so the G-code list showed no thumbnail. PrusaSlicer usually stores thumbnails uncompressed, which is likely why nobody noticed. The test fixture builder made the same raw-Deflate assumption, so the existing test passed against the bug.
+
+Now decodes zlib-wrapped Deflate, falling back to raw Deflate only when the stream has no valid zlib header.
+
+### Changes
+- `server/gcode-thumbnail.js`: Deflate thumbnail blocks decode as zlib-wrapped (`inflateSync`), with a raw fallback for headerless streams.
+- `server/tests/support/gcode-fixtures.js`: `buildBgcode` writes compression 1 as zlib-wrapped Deflate, matching libbgcode.
+- `server/tests/gcode-thumbnail.test.js`: regression test with a zlib-wrapped thumbnail (fails on the previous decoder), plus a raw-fallback test.
+
+No hardware or real slicer output involved: verified against hand-built fixtures following libbgcode's source; `npm test` passes in full.
+
+---
+
 ## 2026-09-28: OctoPrint prints .bgcode and sliced .3mf, and no longer reports a print that never started
 
 Reported: jobs dispatched to an OctoPrint printer stayed on "Uploading" in Fleet and no print ever appeared in OctoPrint. Two causes, both confirmed from OctoPrint's own API docs and source (docs/api/files.rst, src/octoprint/server/api/files.py, src/octoprint/filemanager), not guessed:

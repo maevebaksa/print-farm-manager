@@ -23,9 +23,10 @@ function buildBgcode(blocks, { checksumType = 0 } = {}) {
       params.writeUInt16LE(b.encoding ?? 0, 0);
     }
     const uncompressed = b.data || Buffer.alloc(0);
-    // compressedData lets a test supply exact compressed bytes (a zlib-wrapped
-    // Deflate stream or a hand-built Heatshrink stream) instead of this default.
-    const compressed = b.compressedData ?? (compression === 1 ? zlib.deflateRawSync(uncompressed) : uncompressed);
+    // Deflate (compression 1) is zlib-wrapped, as libbgcode writes it (deflateInit).
+    // compressedData lets a test supply exact compressed bytes (raw Deflate or
+    // a hand-built Heatshrink stream) instead of this default.
+    const compressed = b.compressedData ?? (compression === 1 ? zlib.deflateSync(uncompressed) : uncompressed);
 
     const header = Buffer.alloc(compression === 0 ? 8 : 12);
     header.writeUInt16LE(b.type, 0);

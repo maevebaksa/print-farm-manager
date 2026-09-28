@@ -4,6 +4,7 @@
 // these fixtures follow. Fixture builders are shared with
 // gcodes-thumbnail-route.test.js via tests/support/gcode-fixtures.js.
 
+const zlib = require('zlib');
 const { extractThumbnail, fromBgcode, fromThreeMf } = require('../gcode-thumbnail');
 const { buildBgcode, buildZip } = require('./support/gcode-fixtures');
 
@@ -31,13 +32,25 @@ describe('fromBgcode', () => {
     expect(result.data).toEqual(png);
   });
 
-  test('extracts a Deflate-compressed thumbnail block', () => {
+  test('extracts a Deflate-compressed thumbnail block (zlib-wrapped, as libbgcode writes it)', () => {
+    // Regression: Deflate blocks were decoded as raw Deflate, so a real
+    // libbgcode-written (deflateInit, zlib-wrapped) thumbnail failed to decode
+    // and was silently skipped.
     const png = Buffer.from('FAKE_PNG_BYTES_LONGER_TO_ACTUALLY_COMPRESS'.repeat(5));
     const buf = buildBgcode([
-      { type: 5, format: 0, width: 200, height: 200, compression: 1, data: png },
+      { type: 5, format: 0, width: 200, height: 200, compression: 1, data: png, compressedData: zlib.deflateSync(png) },
     ]);
     const result = fromBgcode(buf);
+    expect(result).not.toBeNull();
     expect(result.data).toEqual(png);
+  });
+
+  test('still decodes a raw (headerless) Deflate thumbnail block', () => {
+    const png = Buffer.from('FAKE_PNG_BYTES_LONGER_TO_ACTUALLY_COMPRESS'.repeat(5));
+    const buf = buildBgcode([
+      { type: 5, format: 0, width: 200, height: 200, compression: 1, data: png, compressedData: zlib.deflateRawSync(png) },
+    ]);
+    expect(fromBgcode(buf).data).toEqual(png);
   });
 
   test('prefers the largest thumbnail when more than one is present', () => {
