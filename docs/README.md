@@ -57,6 +57,7 @@ print-farm-manager/
 │       ├── jobs.js       # Job listing, filtering, cancel
 │       ├── models.js     # Printer model registry CRUD
 │       ├── settings.js   # Key/value operator settings (dispatch_batch_size)
+│       ├── account.js    # Self-service account actions (change own password)
 │       ├── backup.js     # Farm export + restore
 │       └── dashboard.js  # TV command center — single-endpoint fleet summary
 ├── client/
