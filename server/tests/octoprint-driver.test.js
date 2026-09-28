@@ -250,32 +250,32 @@ describe('getCameraUrl', () => {
   });
 
   // A webcam not set up through OctoPrint's recommended HAProxy passthrough
-  // reports an absolute http://127.0.0.1:<port>/... (or localhost), meaningful
-  // only from the printer's own Pi. Confirmed via a live ECONNREFUSED
-  // 127.0.0.1:8080 report from this server's camera proxy trying to fetch it.
-  // fakePrinter.ip already carries its own :5000 for OctoPrint's own API, so
-  // the substituted host must drop that port, not glue the webcam's :8080
-  // onto it (which would produce an invalid double-port URL).
-  test('substitutes the printer host for an absolute 127.0.0.1 stream/snapshot URL', async () => {
+  // reports an absolute http://127.0.0.1:<port>/... (or localhost): mjpg-
+  // streamer's own loopback address, not reachable from outside the Pi at all
+  // (confirmed live: the printer's real IP on that same port also refused the
+  // connection). The only externally-reachable path is OctoPi's own /webcam/
+  // HAProxy passthrough on the printer's normal address, confirmed live
+  // against a real printer (http://<ip>/webcam/?action=snapshot worked).
+  // fakePrinter.ip already carries its own :5000 for OctoPrint's own API,
+  // which must not appear in the rebuilt URL: the passthrough lives on the
+  // printer's normal (non-loopback) address, not OctoPrint's own API port.
+  test('rebuilds an absolute 127.0.0.1 stream/snapshot URL through the /webcam/ passthrough', async () => {
     axios.get.mockResolvedValueOnce({
       data: { webcam: { streamUrl: 'http://127.0.0.1:8080/?action=stream', snapshotUrl: 'http://127.0.0.1:8080/?action=snapshot' } },
     });
     const result = await octoprint.getCameraUrl(fakePrinter);
     expect(result).toEqual({
-      streamUrl: 'http://192.168.1.240:8080/?action=stream',
-      snapshotUrl: 'http://192.168.1.240:8080/?action=snapshot',
+      streamUrl: 'http://192.168.1.240/webcam/?action=stream',
+      snapshotUrl: 'http://192.168.1.240/webcam/?action=snapshot',
     });
   });
 
-  test('substitutes the printer host for an absolute localhost URL with no port', async () => {
+  test('rebuilds an absolute localhost URL (no port) through the /webcam/ passthrough too', async () => {
     axios.get.mockResolvedValueOnce({
       data: { webcam: { streamUrl: 'http://localhost/?action=stream', snapshotUrl: null } },
     });
     const result = await octoprint.getCameraUrl(fakePrinter);
-    // No port in the source URL means none in the result either (defaults to
-    // 80, standard URL semantics), not OctoPrint's own :5000: that port is
-    // specific to OctoPrint's API, unrelated to wherever the webcam listens.
-    expect(result.streamUrl).toBe('http://192.168.1.240/?action=stream');
+    expect(result.streamUrl).toBe('http://192.168.1.240/webcam/?action=stream');
   });
 
   test('returns null when no webcam is configured', async () => {

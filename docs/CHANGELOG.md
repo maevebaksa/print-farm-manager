@@ -2,6 +2,20 @@
 
 ---
 
+## 2026-09-28: fix OctoPrint loopback webcam fix: real IP, wrong port
+
+Reported: after the previous entry's fix shipped (substitute the printer's real host for a `127.0.0.1` webcam URL, keeping OctoPrint's own reported port), the resulting URL still failed: `ECONNREFUSED <printer's real IP>:8080`. A live test confirmed `http://<ip>:8080/...` refused from outside the Pi entirely (mjpg-streamer there is bound to `127.0.0.1` only, not the Pi's real interface), while `http://<ip>/webcam/?action=snapshot`, no port, does work.
+
+That's OctoPi's standard HAProxy passthrough: `/webcam/<path>` on the printer's normal address is proxied internally to the same loopback mjpg-streamer instance OctoPrint reports in its settings. The previous fix substituted the host but kept the reported port and path, reconstructing a URL that only ever worked from inside the Pi. Now rebuilds through the `/webcam/` passthrough instead: the loopback URL's path and query are kept, but prefixed with `/webcam` and put on the printer's normal address with no forced port, matching what the live test confirmed actually works.
+
+### Changes
+- `server/drivers/octoprint.js`: `getCameraUrl`'s loopback substitution now rebuilds through `/webcam/<path>` on the printer's host instead of reusing the reported port and path directly.
+- `server/tests/octoprint-driver.test.js`: regression tests updated to expect the `/webcam/` passthrough URL instead of the (confirmed broken) same-port substitution.
+
+Confirmed via two live tests against a real printer in this session (`http://<ip>:8080/...` refused, `http://<ip>/webcam/...` works), not guessed; the specific `/webcam/` prefix is OctoPi's well-known default HAProxy convention. `node --check` and the regex verified in isolation; still could not run `npm test` or the server itself locally, same `better-sqlite3` limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-28: fix OctoPrint webcam URLs reported as an unreachable loopback address
 
 Reported: webcams still failing after the camera proxy shipped, on a server with no reverse proxy or CDN involved (ruling out caching), with the proxy's own error log showing `Could not reach camera: connect ECONNREFUSED 127.0.0.1:8080`.

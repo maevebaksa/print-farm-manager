@@ -156,20 +156,24 @@ async function getCameraUrl(printer) {
     // proxied through the same host OctoPrint itself is served on. When the
     // webcam isn't set up through OctoPrint's recommended HAProxy passthrough,
     // OctoPrint instead reports an absolute http://127.0.0.1:<port>/... (or
-    // localhost): where mjpg-streamer actually listens from the Pi's own point
-    // of view, meaningless to anything fetching it from outside the Pi (this
-    // server's camera proxy included: confirmed via a live ECONNREFUSED
-    // 127.0.0.1:8080 report). Substitute the printer's real host in that one
-    // case, keeping the webcam's own port (mjpg-streamer is commonly on a
-    // different port than OctoPrint itself, e.g. 8080 vs. OctoPrint's 5000)
-    // and path. hostOnly, not ip: printer.ip (and so ip, after resolveHost)
-    // may itself already carry a :port for OctoPrint's own API, which must
-    // not be glued onto the webcam's separate port too. A genuinely different
-    // absolute URL (an actual external webcam server) is left untouched.
+    // localhost): mjpg-streamer's own loopback address from the Pi's point of
+    // view. That port is not reachable from outside the Pi at all (confirmed
+    // live: connecting to the printer's real IP on that same port still
+    // refused, mjpg-streamer there is bound to 127.0.0.1 only): the only
+    // externally-reachable path to it is OctoPi's own HAProxy passthrough,
+    // which proxies /webcam/<path> on the printer's normal (non-loopback,
+    // no special port) address through to that same loopback instance
+    // internally. Rebuilding through that passthrough instead of hitting the
+    // reported port directly is what a live test against a real printer
+    // confirmed actually works (http://<ip>/webcam/?action=snapshot). A
+    // genuinely different absolute URL (an actual external webcam server) is
+    // left untouched.
     const hostOnly = ip.replace(/:\d+$/, '');
     const resolve = (u) => {
       if (!/^https?:\/\//i.test(u)) return `http://${ip}${u}`;
-      return u.replace(/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i, `http://${hostOnly}$2`);
+      const loopback = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(\/.*)?$/i.exec(u);
+      if (!loopback) return u;
+      return `http://${hostOnly}/webcam${loopback[1] || '/'}`;
     };
     return {
       streamUrl: resolve(webcam.streamUrl),
