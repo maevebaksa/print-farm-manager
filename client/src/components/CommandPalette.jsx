@@ -151,7 +151,11 @@ export default function CommandPalette() {
     // (score 0) always outranks a typo'd one, same ordering a plain
     // .includes() filter always gave for the exact-match case, with
     // fuzzy matches now filling in below rather than being absent entirely.
-    list.sort((a, b) => a.score - b.score);
+    // Tied scores (e.g. two exact matches) fall back to a natural-sort
+    // comparison of the label, not plain string order: without { numeric:
+    // true }, "mini10" sorts before "mini9" (lexicographic: '1' < '9'),
+    // which reads as wrong to anyone looking for a printer by number.
+    list.sort((a, b) => a.score - b.score || a.label.localeCompare(b.label, undefined, { numeric: true }));
     return list.slice(0, 30); // cap: a jump-to tool, not a report
   }, [query, printers, projects, parts, projectNameById, navigate]);
 

@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-09-28: fix command palette sorting "mini10" before "mini9"
+
+Reported: printer search results in the command palette (Cmd/Ctrl+K) sorted "mini10" ahead of "mini9".
+
+Tied fuzzy-match scores (two exact substring matches, both score 0) fell back to whatever order the underlying `printers`/`projects`/`parts` arrays were already in, which for printers is `GET /api/printers`'s plain SQL `ORDER BY p.name`, lexicographic: `"mini10" < "mini9"` byte-wise since `'1' < '9'`. Added a natural-sort tiebreaker (`localeCompare` with `{ numeric: true }`) so a tie between two matches orders by the label the way a person actually reading printer names expects.
+
+### Changes
+- `client/src/components/CommandPalette.jsx`: results sort gains a `localeCompare(..., { numeric: true })` tiebreaker after the existing score comparison.
+
+No automated test: this repo has no client-side test framework. Verified `npm run build` succeeds; could not exercise the real page in a live browser, same limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-25: camera proxy routes may have aborted the upstream fetch on every request
 
 Reported: webcams (both snapshots and live view) not working after updating to the build with the camera proxy.
