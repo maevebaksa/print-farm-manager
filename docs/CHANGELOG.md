@@ -47,6 +47,21 @@ The Docker CLI and Compose plugin are now installed in the production image (sta
 - `server/tests/update-routes.test.js`: new file, covering the status check (no repo configured, up to date, update available, GitHub unreachable, non-200) and the trigger (role gating, `409` when not opted in, success path with `spawn`/`fs` mocked).
 
 Driver-adjacent but not a driver: the Docker CLI/Compose binary versions (27.3.1 / 2.29.7) are pinned but not validated against a real Docker daemon from this session, same as the trigger mechanism as a whole; `node --check` and the mocked test suite are what's actually been run here. This machine's `better-sqlite3` native binding still fails to load, so neither the server nor `npm test` can run locally, the same limitation disclosed on every test this session.
+## 2026-09-28: Fleet model groups grow to fill the page
+
+Reported (with a screenshot): a farm whose printers are all one model (9 Prusa MINIs) showed them in a single group only half the page wide, two cards per row, with the right half of a large screen empty. The previous entry capped each model's chip at half the container so two groups fit side by side, but applied that cap even when there is nothing to sit beside. Reproduced at the reporter's window size (2000x1180): a 12-printer single-model fleet got an 846px chip in a 1717px area.
+
+That cap is now only each chip's starting size: chips grow into whatever space their row has left, up to their natural width, so a single-model fleet (or a big model alone on its row) fills the page, while small groups stay exactly as wide as their cards. The Dashboard's printer grid gets the same rule.
+
+### Changes
+- `client/src/pages/Fleet.jsx`: model chips `flexGrow: 1` with `maxWidth: min(100%, naturalWidth)`; the old width becomes the starting size.
+- `client/src/components/FleetStatusGrid.jsx`: same for the Dashboard's per-model chips, capped at `CELL_GROWTH` times the cells' natural width.
+- `docs/web-app.md`: chip sizing rules.
+
+Measured in headless Chromium on the built app: single-model fleet goes from 2 columns to 6 at 2000px, 4 at 1440px, 2 at 1024px, no horizontal scroll; a mixed fleet keeps small groups at their natural size with the large group taking the rest of its row.
+
+---
+
 ## 2026-09-28: completion estimates simulate the real queue, whole plates, and operator hours
 
 Reported: the project completion estimate (Dashboard "Remaining", Projects "~X remaining") was a mess. It was a formula, not a schedule: it added up the remaining time of every printer currently printing the project even though they run in parallel, spread the project's queued part-time evenly over every printer of a matching model whether or not they were busy with other work, ignored the queue ahead of it entirely (other projects' work, queue order, printer caps), counted per-part time rather than whole plates, and assumed a finished printer is reset instantly. With no printer able to take the work it even reported a "serial time" as if one could.

@@ -129,10 +129,13 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
           // parent), which one or more browsers collapsed to the grid's
           // intrinsic minimum: a single column, stacking every cell vertically.
           const chipWidth = `min(${CELL_MAX_PCT}%, ${naturalWidth * CELL_GROWTH}px)`;
+          // chipWidth is the starting size; like Fleet.jsx's chips, each one
+          // then grows into its row's leftover space, never past CELL_GROWTH
+          // times what its cells need, so a single-model fleet uses the width.
           return (
           <div key={model} style={{
             display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
-            width: chipWidth,
+            width: chipWidth, flexGrow: 1, maxWidth: `min(100%, ${naturalWidth * CELL_GROWTH}px)`,
             background: '#0d1117', border: '1px solid #1a2030', borderRadius: 8,
             padding: '8px 10px',
           }}>

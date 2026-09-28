@@ -1176,7 +1176,12 @@ export default function Fleet() {
           monitor, fewer on a laptop, with no JS resize listener needed), and
           never wider than the container itself (100%, so a chip still
           shrinks correctly on a narrow/mobile viewport, same as the
-          uncapped grid always did). */}
+          uncapped grid always did).
+          That width is only the chip's starting size (flex-basis): each chip
+          then grows (flexGrow) into whatever space its row has left, up to
+          its natural width, so a fleet that is one model (or one big model
+          alone on its row) fills the page instead of stopping at half of it,
+          while small groups never stretch past the cards they hold. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: CHIP_ROW_GAP_PX, alignItems: 'flex-start' }}>
         {Object.entries(grouped).map(([model, group]) => {
           const naturalWidth = `${group.length * 230 - 10 + CHIP_PADDING_X}px`;
@@ -1191,7 +1196,8 @@ export default function Fleet() {
           const chipWidth = `max(${220 + CHIP_PADDING_X}px, min(100%, ${naturalWidth}, max(${CHIP_MAX_WIDTH}, ${TWO_UP_MIN_PX}px)))`;
           return (
             <div key={model} style={{
-              width: chipWidth, background: '#111827', border: '1px solid #1e2433',
+              width: chipWidth, flexGrow: 1, maxWidth: `min(100%, ${naturalWidth})`,
+              background: '#111827', border: '1px solid #1e2433',
               borderRadius: 10, padding: '12px 14px',
             }}>
               <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, margin: '0 0 10px' }}>
