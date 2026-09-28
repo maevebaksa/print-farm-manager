@@ -55,10 +55,10 @@ beforeAll(() => {
       created_at INTEGER NOT NULL
     );
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, status TEXT DEFAULT 'draft',
-      priority INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER);
+      priority INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER, name TEXT,
       target_qty INTEGER, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open',
-      sort_order INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER);
+      sort_order INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER, printer_model TEXT,
       filename TEXT, filepath TEXT, parts_per_plate INTEGER, est_print_secs INTEGER,
       material_grams REAL, ams_slot INTEGER, allowed_groups TEXT,

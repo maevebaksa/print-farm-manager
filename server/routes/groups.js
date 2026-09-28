@@ -1,4 +1,5 @@
 const express = require('express');
+const { blockUploaderPrinterAdmin } = require('../auth');
 
 module.exports = (db) => {
   const router = express.Router();
@@ -14,7 +15,7 @@ module.exports = (db) => {
   });
 
   // POST /api/groups: register a new group
-  router.post('/', (req, res) => {
+  router.post('/', blockUploaderPrinterAdmin, (req, res) => {
     const name = (req.body?.name || '').trim();
     if (!name) {
       return res.status(400).json({ error: 'name is required' });
@@ -37,7 +38,7 @@ module.exports = (db) => {
   // This is what stops the original bug from recurring via deletion: a
   // group a restriction still depends on can't be removed just because no
   // printer currently carries it.
-  router.delete('/:name', (req, res) => {
+  router.delete('/:name', blockUploaderPrinterAdmin, (req, res) => {
     const { name } = req.params;
     const usage = db.prepare(`
       SELECT

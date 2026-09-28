@@ -45,6 +45,11 @@ const CREDENTIAL_HELP = {
 
 export default function Settings() {
   const { user } = useAuth();
+  // Adding, importing, or removing printers and editing the printer model and
+  // group registries is operator/admin work; uploaders only queue prints. The
+  // server enforces this (auth.blockUploaderPrinterAdmin); hiding the sections
+  // here just keeps uploaders from seeing controls that would 403.
+  const canManagePrinters = user?.role !== 'uploader';
   const [showToast, toastEl] = useToast();
   const [confirm, confirmModal] = useConfirm();
   const [importing, setImporting] = useState(false);
@@ -375,6 +380,17 @@ export default function Settings() {
   // Color tolerance: RGB-distance fallback the scheduler uses only when no printer
   // has the exact required color loaded (server/color-distance.js, server/scheduler.js).
   const [colorTolerance, setColorTolerance] = useState('');
+  // Print queue policy (admin-only keys; see server/scheduler.js _queuePolicy)
+  const [queueOrder, setQueueOrder] = useState('priority');
+  const [maxPerPart, setMaxPerPart] = useState('0');
+  const [maxPerProject, setMaxPerProject] = useState('0');
+  const [queueError, setQueueError] = useState(null);
+  const [savingQueue, setSavingQueue] = useState(false);
+  // Operator hours (admin-only; feed the completion estimates in
+  // server/project-eta.js). Empty start/end = always staffed.
+  const [opStart, setOpStart] = useState('');
+  const [opEnd, setOpEnd] = useState('');
+  const [opDays, setOpDays] = useState([0, 1, 2, 3, 4, 5, 6]);
   const [colorToleranceError, setColorToleranceError] = useState(null);
 
   // Upload retry window: how long the scheduler keeps retrying a failing upload on
@@ -421,6 +437,12 @@ export default function Settings() {
         if (data.farm_name) setFarmName(data.farm_name);
         setAutoSsoRedirect(data.auto_sso_redirect === '1');
         setColorTolerance(data.color_tolerance ?? '0');
+        setQueueOrder(data.queue_order || 'priority');
+        setMaxPerPart(data.max_printers_per_part ?? '0');
+        setMaxPerProject(data.max_printers_per_project ?? '0');
+        setOpStart(data.operator_hours_start && data.operator_hours_start !== 'off' ? data.operator_hours_start : '');
+        setOpEnd(data.operator_hours_end && data.operator_hours_end !== 'off' ? data.operator_hours_end : '');
+        if (data.operator_days) setOpDays(data.operator_days.split(',').map(Number));
         setRetryWindow(data.upload_retry_window_min ?? '15');
         setRequireUploaderApproval(data.require_uploader_approval === '1');
         setUpdateRepo(data.update_repo || '');
@@ -534,6 +556,34 @@ export default function Settings() {
       showToast('Saved');
     } catch (err) {
       setBatchSizeError(err.message);
+    }
+  }
+
+  async function handleSaveQueuePolicy() {
+    setQueueError(null);
+    setSavingQueue(true);
+    try {
+      if (opDays.length === 0) throw new Error('Pick at least one operator day');
+      if (!!opStart !== !!opEnd) throw new Error('Set both operator start and end, or leave both empty for always staffed');
+      for (const [key, value] of [
+        ['queue_order', queueOrder], ['max_printers_per_part', maxPerPart], ['max_printers_per_project', maxPerProject],
+        ['operator_hours_start', opStart || 'off'], ['operator_hours_end', opEnd || 'off'],
+        ['operator_days', [...opDays].sort().join(',')],
+      ]) {
+        const res = await fetch(`/api/settings/${key}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: String(value).trim() === '' ? '0' : value }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Save failed (${res.status})`);
+      }
+      showToast('Saved');
+    } catch (err) {
+      setQueueError(err.message);
+      showToast('Save failed: ' + err.message, 'error');
+    } finally {
+      setSavingQueue(false);
     }
   }
 
@@ -774,6 +824,7 @@ export default function Settings() {
       )}
 
       {/* Printer Models */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Printer Models</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -860,8 +911,10 @@ export default function Settings() {
           <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{modelFormError}</div>
         )}
       </section>
+      )}
 
       {/* Groups */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Groups</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -926,6 +979,7 @@ export default function Settings() {
           <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{groupFormError}</div>
         )}
       </section>
+      )}
 
       {/* Filament Library */}
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
@@ -1152,6 +1206,7 @@ export default function Settings() {
       </section>
 
       {/* Add Single Printer */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Add Printer</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 12 }}>
@@ -1459,8 +1514,10 @@ export default function Settings() {
           </div>
         )}
       </section>
+      )}
 
       {/* CSV Import */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Import Printer Registry</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -1572,6 +1629,7 @@ export default function Settings() {
           </div>
         )}
       </section>
+      )}
 
       {/* Farm Name */}
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
@@ -1738,6 +1796,89 @@ export default function Settings() {
         </section>
       )}
 
+      {/* Print Queue (admin-only settings; read-only for everyone else) */}
+      <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Print Queue</h2>
+        <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
+          Decides which waiting print a free printer takes next. <strong style={{ color: '#94a3b8' }}>Project priority</strong> follows
+          the project order on the Projects page, then part order within each project.{' '}
+          <strong style={{ color: '#94a3b8' }}>First in, first out</strong> ignores both and runs prints in the order their G-code
+          was uploaded (upload time, not print time), so nobody's project jumps the line.
+          {user?.role !== 'admin' && ' Only an admin can change these.'}
+        </p>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Queue order</label>
+            <select
+              value={queueOrder}
+              disabled={user?.role !== 'admin'}
+              onChange={e => setQueueOrder(e.target.value)}
+              style={{ ...inputStyle, width: 220 }}
+            >
+              <option value="priority">Project priority</option>
+              <option value="fifo">First in, first out (upload time)</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Max printers per part</label>
+            <input type="number" min={0} value={maxPerPart} disabled={user?.role !== 'admin'}
+              onChange={e => setMaxPerPart(e.target.value)} style={{ ...inputStyle, width: 90 }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Max printers per project</label>
+            <input type="number" min={0} value={maxPerProject} disabled={user?.role !== 'admin'}
+              onChange={e => setMaxPerProject(e.target.value)} style={{ ...inputStyle, width: 90 }} />
+          </div>
+          {user?.role === 'admin' && (
+            <button
+              onClick={handleSaveQueuePolicy}
+              disabled={savingQueue}
+              style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: savingQueue ? 'not-allowed' : 'pointer', opacity: savingQueue ? 0.7 : 1 }}
+            >
+              {savingQueue ? 'Saving…' : 'Save'}
+            </button>
+          )}
+        </div>
+        <p style={{ color: '#64748b', fontSize: 12, marginTop: 10 }}>
+          Printer caps (0 = unlimited) stop one part or project from taking over the farm while other prints are waiting:
+          once it has that many printers busy, its next print waits for other queued work first. If nothing else is
+          waiting, it still gets the printer, so no printer sits idle because of a cap.
+        </p>
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid #2d3748' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>Operator hours</div>
+          <p style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
+            Every print finishes held until someone confirms it, so a printer that finishes outside these hours sits
+            until the next shift. Used only for the completion estimates on the Dashboard and Projects pages (server
+            time). Leave both times empty if someone is always around. Saved with the button above.
+          </p>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Shift starts</label>
+              <input type="time" value={opStart} disabled={user?.role !== 'admin'} onChange={e => setOpStart(e.target.value)} style={{ ...inputStyle, width: 120 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Shift ends</label>
+              <input type="time" value={opEnd} disabled={user?.role !== 'admin'} onChange={e => setOpEnd(e.target.value)} style={{ ...inputStyle, width: 120 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingBottom: 6 }}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label, d) => (
+                <label key={d} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 12, color: opDays.includes(d) ? '#e2e8f0' : '#64748b', cursor: user?.role === 'admin' ? 'pointer' : 'default' }}>
+                  <input
+                    type="checkbox"
+                    checked={opDays.includes(d)}
+                    disabled={user?.role !== 'admin'}
+                    onChange={e => setOpDays(prev => e.target.checked ? [...prev, d] : prev.filter(x => x !== d))}
+                    style={{ accentColor: '#3b82f6' }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        {queueError && <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{queueError}</div>}
+      </section>
+
       {/* Dispatch Settings */}
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Dispatch Settings</h2>
@@ -1893,8 +2034,9 @@ export default function Settings() {
             Export Farm
           </button>
 
-          {/* Restore */}
-          <form onSubmit={handleRestore} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Restore replaces the printer table, so it is printer management:
+              hidden from uploaders (the server 403s it for them too). */}
+          {canManagePrinters && <form onSubmit={handleRestore} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               ref={restoreFileRef}
               type="file"
@@ -1927,7 +2069,7 @@ export default function Settings() {
             >
               {restoring ? 'Restoring…' : 'Restore Farm'}
             </button>
-          </form>
+          </form>}
         </div>
 
         {restoreError && (

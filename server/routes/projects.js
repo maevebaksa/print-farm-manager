@@ -1,4 +1,5 @@
 const express = require('express');
+const { requireAnyRole } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -29,6 +30,7 @@ module.exports = (db, scheduler = null) => {
     const eta = estimateProjectRemaining(db, project.id);
     res.json({
       remaining_seconds: eta.remaining_seconds,
+      completion_at: eta.completion_at,
       incomplete: eta.incomplete,
       eligible_printer_count: eta.eligible_printer_count,
     });
@@ -39,9 +41,9 @@ module.exports = (db, scheduler = null) => {
     if (!name) return res.status(400).json({ error: 'name is required' });
     const now = Date.now();
     const result = db.prepare(`
-      INSERT INTO projects (name, description, created_at, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(name, description || null, now, now);
+      INSERT INTO projects (name, description, created_at, updated_at, created_by_user_id, created_by_name)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(name, description || null, now, now, req.user?.id ?? null, req.user?.name ?? null);
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(project);
   });
@@ -90,6 +92,21 @@ module.exports = (db, scheduler = null) => {
       UPDATE projects SET allowed_groups = ?, updated_at = ? WHERE id = ?
     `).run(value, Date.now(), project.id);
     res.json(db.prepare('SELECT * FROM projects WHERE id = ?').get(project.id));
+  });
+
+  // PUT /:id/priority-override: { "enabled": true|false }. Operator/admin only
+  // (the project jumps the whole queue, so an uploader cannot set it; the
+  // general PUT /:id never touches this column). Sweeps so an idle printer
+  // picks the work up now.
+  router.put('/:id/priority-override', requireAnyRole(['admin', 'operator']), (req, res) => {
+    const row = db.prepare('SELECT id FROM projects WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Project not found' });
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) is required' });
+    db.prepare('UPDATE projects SET priority_override = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), row.id);
+    console.log(`[projects] ${req.user?.name ?? 'unknown'} ${enabled ? 'set' : 'cleared'} priority override on project ${row.id}`);
+    if (enabled && scheduler) scheduler.sweepIdlePrinters();
+    res.json(db.prepare('SELECT * FROM projects WHERE id = ?').get(row.id));
   });
 
   router.put('/:id', (req, res) => {
@@ -232,19 +249,21 @@ module.exports = (db, scheduler = null) => {
 
     db.transaction(() => {
       const projResult = db.prepare(`
-        INSERT INTO projects (name, description, status, priority, created_at, updated_at)
-        VALUES (?, ?, 'draft', 0, ?, ?)
-      `).run(name, source.description ?? null, now, now);
+        INSERT INTO projects (name, description, status, priority, created_at, updated_at, created_by_user_id, created_by_name)
+        VALUES (?, ?, 'draft', 0, ?, ?, ?, ?)
+      `).run(name, source.description ?? null, now, now, req.user?.id ?? null, req.user?.name ?? null);
       newProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(projResult.lastInsertRowid);
 
       for (const part of sourceParts) {
         const partResult = db.prepare(`
           INSERT INTO parts (project_id, name, target_qty, completed_qty, status, sort_order,
-                             print_time_seconds, material_grams, created_at, updated_at)
-          VALUES (?, ?, ?, 0, 'open', ?, ?, ?, ?, ?)
+                             print_time_seconds, material_grams, created_at, updated_at,
+                             created_by_user_id, created_by_name)
+          VALUES (?, ?, ?, 0, 'open', ?, ?, ?, ?, ?, ?, ?)
         `).run(
           newProject.id, part.name, part.target_qty, part.sort_order,
-          part.print_time_seconds ?? null, part.material_grams ?? null, now, now
+          part.print_time_seconds ?? null, part.material_grams ?? null, now, now,
+          req.user?.id ?? null, req.user?.name ?? null
         );
         copiedParts++;
 
@@ -267,12 +286,15 @@ module.exports = (db, scheduler = null) => {
 
           db.prepare(`
             INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate,
-                                est_print_secs, material_grams, ams_slot, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                est_print_secs, material_grams, ams_slot, created_at,
+                                uploaded_by_user_id, uploaded_by_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             partResult.lastInsertRowid, gcode.printer_model, gcode.filename, newFilepath,
             gcode.parts_per_plate, gcode.est_print_secs ?? null, gcode.material_grams ?? null,
-            gcode.ams_slot ?? null, now
+            // The copied file was still uploaded by the original uploader, not
+            // whoever duplicated the project (they own the new parts instead).
+            gcode.ams_slot ?? null, now, gcode.uploaded_by_user_id ?? null, gcode.uploaded_by_name ?? null
           );
           copiedGcodes++;
         }

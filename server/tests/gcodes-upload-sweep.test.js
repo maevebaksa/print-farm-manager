@@ -45,14 +45,16 @@ beforeEach(() => {
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL, status TEXT DEFAULT 'draft',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL REFERENCES projects(id),
       name TEXT NOT NULL, target_qty INTEGER NOT NULL,
       completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +65,8 @@ beforeEach(() => {
       est_print_secs INTEGER, material_grams REAL, ams_slot INTEGER,
       allowed_groups TEXT, required_material TEXT, required_color TEXT,
       approved INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT, material_type TEXT
     );
     CREATE TABLE printer_models (
       model_id TEXT PRIMARY KEY, label TEXT NOT NULL, connector TEXT NOT NULL

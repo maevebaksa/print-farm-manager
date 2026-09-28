@@ -15,7 +15,7 @@ beforeAll(() => {
       status TEXT DEFAULT 'draft',
       priority INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +26,7 @@ beforeAll(() => {
       status TEXT DEFAULT 'open',
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,11 +148,44 @@ describe('GET /api/dashboard: per-project ETA fields', () => {
       VALUES (?, 'mk4s', 'f.bgcode', 'f.bgcode', 1, 300, ?)
     `).run(partId, now);
 
-    const res = await request(app).get('/api/dashboard');
+    // With no printer that can take it, the time is unknown (not "serial time").
+    let res = await request(app).get('/api/dashboard');
     expect(res.status).toBe(200);
-    const proj = res.body.active_projects.find(p => p.id === projectId);
-    // No eligible printers registered: serial time (2 * 300s) with no parallelism to divide by.
-    expect(proj.estimated_remaining_secs).toBe(600);
-    expect(proj.estimated_remaining_incomplete).toBe(false);
+    let proj = res.body.active_projects.find(p => p.id === projectId);
+    expect(proj.estimated_remaining_secs).toBeNull();
+    expect(proj.estimated_remaining_incomplete).toBe(true);
+
+    // One idle MK4S: two 300s plates back to back (operators always on shift
+    // when no hours are configured).
+    const printerId = db.prepare(`
+      INSERT INTO printers (name, ip, api_key, model, status, is_held, created_at)
+      VALUES ('ETA_MK4S', '10.0.0.9', '', 'mk4s', 'IDLE', 0, ?)
+    `).run(now).lastInsertRowid;
+    try {
+      res = await request(app).get('/api/dashboard');
+      proj = res.body.active_projects.find(p => p.id === projectId);
+      expect(proj.estimated_remaining_secs).toBeGreaterThanOrEqual(599);
+      expect(proj.estimated_remaining_secs).toBeLessThanOrEqual(600);
+      expect(proj.estimated_remaining_incomplete).toBe(false);
+    } finally {
+      db.prepare('DELETE FROM printers WHERE id = ?').run(printerId);
+    }
   });
 });
+
+describe('GET /api/dashboard: printer ordering', () => {
+  test('sorts printer names naturally (mini2 before mini10), not as plain text', async () => {
+    const now = Date.now();
+    const insert = db.prepare("INSERT INTO printers (name, ip, api_key, model, created_at) VALUES (?, '10.0.0.1', '', 'mini', ?)");
+    const ids = ['mini10', 'mini1', 'mini2', 'Mini3'].map(n => insert.run(n, now).lastInsertRowid);
+    try {
+      const res = await request(app).get('/api/dashboard');
+      expect(res.status).toBe(200);
+      const names = res.body.printers.map(p => p.name).filter(n => /^mini/i.test(n));
+      expect(names).toEqual(['mini1', 'mini2', 'Mini3', 'mini10']);
+    } finally {
+      db.prepare(`DELETE FROM printers WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+    }
+  });
+});
+

@@ -119,6 +119,31 @@ try { db.exec('ALTER TABLE projects ADD COLUMN allowed_groups TEXT'); } catch (_
 // deleted later: the event still shows who did it at the time.
 try { db.exec('ALTER TABLE printer_events ADD COLUMN user_id INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE printer_events ADD COLUMN user_name TEXT'); } catch (_) {}
+// Who created a project or part, and who uploaded a G-code, so the Projects and
+// Jobs pages can show whose parts everything belongs to. Same convention as
+// printer_events above: no FK, and the name is a snapshot taken at insert time,
+// so attribution survives the user being renamed or deleted. NULL on rows that
+// predate this (and on a project/part created without a signed-in user).
+// Jobs carry no owner column of their own: GET /api/jobs joins it from the
+// job's part and G-code, since the scheduler (not a person) creates job rows.
+try { db.exec('ALTER TABLE projects ADD COLUMN created_by_user_id INTEGER'); } catch (_) {}
+try { db.exec('ALTER TABLE projects ADD COLUMN created_by_name TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE parts ADD COLUMN created_by_user_id INTEGER'); } catch (_) {}
+try { db.exec('ALTER TABLE parts ADD COLUMN created_by_name TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE gcodes ADD COLUMN uploaded_by_user_id INTEGER'); } catch (_) {}
+try { db.exec('ALTER TABLE gcodes ADD COLUMN uploaded_by_name TEXT'); } catch (_) {}
+// Filament type(s) the slicer recorded in the file's own header ("PLA", or
+// "PETG, PLA" for a multi-material print), read on upload by
+// server/gcode-metadata.js readPrintStats. Display only: deliberately not
+// copied into required_material, which would stop the print dispatching to
+// any printer without that material set as loaded.
+try { db.exec('ALTER TABLE gcodes ADD COLUMN material_type TEXT'); } catch (_) {}
+// Priority override (0/1): operator/admin-only "print this next" flag on a
+// part or a whole project. The scheduler dispatches overridden work ahead of
+// the normal queue order (priority or FIFO) and exempts it from the printer
+// caps. Set only through the dedicated PUT .../priority-override routes.
+try { db.exec('ALTER TABLE parts ADD COLUMN priority_override INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+try { db.exec('ALTER TABLE projects ADD COLUMN priority_override INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
 // Printer models — source of truth for which models this farm supports.
 // New installs start empty; operator adds models in Settings.

@@ -18,7 +18,8 @@ beforeAll(() => {
       name TEXT NOT NULL,
       status TEXT DEFAULT 'draft',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +29,8 @@ beforeAll(() => {
       completed_qty INTEGER DEFAULT 0,
       status TEXT DEFAULT 'open',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +46,8 @@ beforeAll(() => {
       required_material TEXT,
       required_color TEXT,
       approved INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT, material_type TEXT
     );
     CREATE TABLE printers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +85,10 @@ beforeAll(() => {
   db.exec(`INSERT INTO printer_models VALUES ('a1',   'A1',         'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('p1s',  'P1S',        'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('a1m',  'A1 Mini',    'bambu')`); // requires_print_approval tests only, kept unused elsewhere so (part_id, printer_model) never collides
+  db.exec(`INSERT INTO printer_models VALUES ('mini', 'MINI+',      'prusa')`); // uploaded_by attribution test only, same reason
+  db.exec(`INSERT INTO printer_models VALUES ('hdr',  'Header Test', 'prusa')`); // header print-stats test only, same reason
+  db.exec(`INSERT INTO printer_models VALUES ('fnm',  'Filename 1', 'prusa')`);  // filename-safety tests only, same reason
+  db.exec(`INSERT INTO printer_models VALUES ('fnm2', 'Filename 2', 'prusa')`);
 
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
 
@@ -333,6 +340,84 @@ describe('POST /api/gcodes/upload: requires_print_approval', () => {
     expect(res.status).toBe(201);
     expect(res.body.approved).toBe(0);
     uploadedPath = res.body.filepath;
+  });
+
+  test('records who uploaded the G-code (id and name snapshot)', async () => {
+    currentUser = { id: 3, name: 'Casey', role: 'operator', requires_print_approval: 0 };
+    const tmpFile = makeTempGcode('attributed.bgcode');
+
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', tmpFile)
+      .field('part_id', '1')
+      .field('parts_per_plate', '1')
+      .field('printer_model', 'mini');
+
+    fs.unlinkSync(tmpFile);
+
+    expect(res.status).toBe(201);
+    expect(res.body.uploaded_by_user_id).toBe(3);
+    expect(res.body.uploaded_by_name).toBe('Casey');
+    uploadedPath = res.body.filepath;
+  });
+});
+
+describe('POST /api/gcodes/upload: print stats from the file header', () => {
+  let uploadedPath;
+  afterEach(() => {
+    if (uploadedPath && fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
+    uploadedPath = null;
+  });
+
+  test('header print time, grams, and filament type win over form values', async () => {
+    const tmp = path.join(os.tmpdir(), `hdr_${Date.now()}.gcode`);
+    fs.writeFileSync(tmp, 'G28\n; filament used [g] = 12.5\n; estimated printing time (normal mode) = 2h 0m 0s\n; filament_type = PETG\n');
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', tmp)
+      .field('part_id', '1').field('parts_per_plate', '1').field('printer_model', 'hdr')
+      .field('est_print_secs', '60').field('material_grams', '1');
+    fs.unlinkSync(tmp);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ est_print_secs: 7200, material_grams: 12.5, material_type: 'PETG', required_material: null });
+    uploadedPath = res.body.filepath;
+  });
+});
+
+describe('POST /api/gcodes/upload: client filename is never used raw on disk', () => {
+  // multer's default preservePath: false already strips directory parts from
+  // the multipart filename (busboy), so "../" traversal cannot arrive through
+  // this route today. What does arrive intact is a character NTFS treats
+  // specially: "part:1.gcode" on the Windows farm machine would write an
+  // alternate data stream instead of a file, and ?, *, |, " fail outright.
+  let uploadedPath;
+  afterEach(() => {
+    if (uploadedPath && fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
+    uploadedPath = null;
+  });
+
+  test('stored filepath is a plain safe basename inside server/gcode/, display name keeps the readable name', async () => {
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', Buffer.from('G28\n'), { filename: 'part:1?*|x.gcode' })
+      .field('part_id', '1').field('parts_per_plate', '1').field('printer_model', 'fnm');
+    expect(res.status).toBe(201);
+    uploadedPath = res.body.filepath;
+    expect(res.body.filepath).not.toMatch(/[\\/:?*|"<>]/);
+    expect(path.dirname(path.resolve(GCODE_DIR, res.body.filepath))).toBe(path.resolve(GCODE_DIR));
+    expect(fs.existsSync(path.join(GCODE_DIR, res.body.filepath))).toBe(true);
+    expect(res.body.filename).toBe('part:1?*|x.gcode');
+  });
+
+  test('a traversal filename is reduced to its basename', async () => {
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', Buffer.from('G28\n'), { filename: '../../evil.gcode' })
+      .field('part_id', '1').field('parts_per_plate', '1').field('printer_model', 'fnm2');
+    expect(res.status).toBe(201);
+    uploadedPath = res.body.filepath;
+    expect(res.body.filepath).not.toMatch(/[\\/]/);
+    expect(res.body.filename).toBe('evil.gcode');
   });
 });
 

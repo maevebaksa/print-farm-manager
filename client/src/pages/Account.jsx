@@ -37,6 +37,23 @@ export default function Account() {
 
   useEffect(() => { fetchKeys(); }, [fetchKeys]);
 
+  // One slicer upload URL per printer group (server/routes/slicer-upload.js).
+  // Static list, fetched once; a failure just leaves the section empty.
+  const [groups, setGroups] = useState([]);
+  useEffect(() => {
+    fetch('/api/groups').then(r => r.json()).then(setGroups).catch(() => {});
+  }, []);
+  const slicerUrl = (g) => `${window.location.origin}/slicer/${encodeURIComponent(g.name)}`;
+
+  async function copyUrl(url) {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Copied');
+    } catch (_) {
+      showToast('Copy failed: select the URL and copy it by hand', 'warning');
+    }
+  }
+
   async function createKey(e) {
     e.preventDefault();
     if (!name.trim()) return;
@@ -229,6 +246,41 @@ export default function Account() {
                   Revoke
                 </button>
               )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', margin: '28px 0 10px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        Upload from your slicer
+      </div>
+      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 12, lineHeight: 1.6 }}>
+        Send prints straight from PrusaSlicer or OrcaSlicer. Add a physical printer with host type{' '}
+        <strong style={{ color: '#94a3b8' }}>OctoPrint</strong> (Orca: <strong style={{ color: '#94a3b8' }}>Octo/Klipper</strong>{' '}
+        or <strong style={{ color: '#94a3b8' }}>Moonraker</strong>), paste the URL for the group you want to print on as the
+        hostname, and one of your API keys above as the API key. Each upload joins the print queue in your own
+        "Uploads" project and runs on a printer from that group. The printer model is read from the file, so slice with
+        the right printer profile.
+      </p>
+      {groups.length === 0 ? (
+        <p style={{ color: '#475569', fontSize: 13 }}>No printer groups yet: an operator creates them in Settings.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {groups.map(g => (
+            <div key={g.name} style={{
+              background: '#131720', border: '1px solid #1e2433', borderRadius: 7,
+              padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, color: '#e2e8f0', fontWeight: 600 }}>{g.name}</div>
+                <code style={{ fontSize: 12, color: '#7dd3fc', wordBreak: 'break-all', userSelect: 'all' }}>{slicerUrl(g)}</code>
+              </div>
+              <button
+                onClick={() => copyUrl(slicerUrl(g))}
+                style={{ background: 'none', border: '1px solid #2d3748', color: '#94a3b8', borderRadius: 5, padding: '5px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Copy
+              </button>
             </div>
           ))}
         </div>

@@ -29,7 +29,7 @@ beforeAll(() => {
   db.exec(`
     CREATE TABLE projects (
       id             INTEGER PRIMARY KEY,
-      allowed_groups TEXT
+      allowed_groups TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     )
   `);
 

@@ -21,6 +21,13 @@ function formatDurationForInput(secs) {
 // Read-only display for the project ETA badge, day-aware, unlike
 // formatDurationForInput above (which round-trips into an editable field and
 // deliberately stays in the same h/m shape a person would type).
+// Clock time a project's last plate should finish (estimated_completion_at /
+// completion_at from server/project-eta.js), e.g. "Tue 14:05".
+function formatCompletionAt(ms) {
+  if (!ms) return null;
+  return new Date(ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 function formatDurationDisplay(secs) {
   if (!secs) return null;
   const HOUR = 3600, DAY = 86400;
@@ -69,6 +76,44 @@ const STATUS_MENU = {
               { label: 'Mark complete',   action: 'complete', danger: true }],
   completed: [{ label: 'Re-activate',     action: 'reactivate' }],
 };
+
+// Row-reorder drag helpers, shared by the project list and part list rows.
+// Firefox refuses to start an HTML5 drag unless dragstart puts some data on
+// the DataTransfer, so reordering silently did nothing there; the id payload
+// itself is unused (state tracks the dragged row). A file dragged in from the
+// desktop is not a reorder: rows ignore it and let the window-level file drop
+// in Projects() handle it, rather than lighting up a row highlight that
+// nothing clears (dragend never fires for an external file drag).
+function startRowDrag(e, id) {
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(id));
+}
+
+function isFileDrag(e) {
+  return Array.from(e.dataTransfer?.types || []).includes('Files');
+}
+
+// "Priority" marker for work an operator/admin has put ahead of the queue
+// (parts/projects.priority_override). As a button when the viewer can toggle
+// it, a plain badge otherwise; nothing at all when off and not toggleable.
+function PriorityOverride({ on, canToggle, onToggle }) {
+  if (!on && !canToggle) return null;
+  const style = {
+    background: on ? '#78350f' : 'none', color: on ? '#fbbf24' : '#64748b',
+    border: `1px solid ${on ? '#b45309' : '#2d3748'}`, borderRadius: 4,
+    padding: '1px 7px', fontSize: 11, fontWeight: 700, flexShrink: 0, lineHeight: 1.5,
+  };
+  if (!canToggle) return <span title="Put ahead of the normal queue by an operator" style={style}>Priority</span>;
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onToggle(!on); }}
+      title={on ? 'Priority override on: prints ahead of the normal queue and ignores printer caps. Click to clear.' : 'Give priority: print ahead of the normal queue (operators and admins only)'}
+      style={{ ...style, cursor: 'pointer' }}
+    >
+      {on ? 'Priority' : '+ Priority'}
+    </button>
+  );
+}
 
 function StatusDropdown({ project, onTransition }) {
   const [open, setOpen] = useState(false);
@@ -371,7 +416,7 @@ function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, pro
       )}
 
       <p style={{ margin: 0, fontSize: 11, color: '#475569' }}>
-        Tip: filenames with a model, print time, and weight (e.g. <span className="mono">bracket_MK4S_2h30m_45g.gcode</span>) auto-fill these fields — you can adjust them after upload.
+        Print time, filament weight, and filament type are read from the file's own slicer header on upload (PrusaSlicer, OrcaSlicer, ideaMaker), overriding these fields. For a file without that header, a filename with a model, print time, and weight (e.g. <span className="mono">bracket_MK4S_2h30m_45g.gcode</span>) fills them instead. You can adjust them after upload.
       </p>
 
       {bambuNeedsThreemf && (
@@ -525,6 +570,24 @@ function GcodeEstimateRow({ gc, onDelete, onApprove, onSaved, filamentTypes, fil
         }}>
           {gc.printer_model}
         </span>
+        {/* Filament type the slicer recorded in the file header (display only,
+            see db.js's gcodes.material_type migration comment). */}
+        {gc.material_type && (
+          <span
+            title="Filament type from the file's slicer header"
+            style={{ background: '#0f172a', border: '1px solid #2d3748', color: '#94a3b8', borderRadius: 3, padding: '1px 6px', fontSize: 11, flexShrink: 0 }}
+          >
+            {gc.material_type}
+          </span>
+        )}
+        {gc.uploaded_by_name && (
+          <span
+            title={`Uploaded by ${gc.uploaded_by_name}`}
+            style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
+            {gc.uploaded_by_name}
+          </span>
+        )}
         {/* approved defaults to 1 for every G-code except one uploaded by an
             account flagged requires_print_approval (see Users page); the
             scheduler excludes it from dispatch until this is cleared. */}
@@ -942,6 +1005,9 @@ export default function Projects() {
   const [loading, setLoading]             = useState(true);
 
   // List filters: only Active shows by default (see SHOW_*_KEY above)
+  // Admin queue policy (Settings > Print Queue). In 'fifo' mode the project and
+  // part order below no longer decides what prints next, so the list says so.
+  const [queueOrder, setQueueOrder] = useState('priority');
   const [showDraft, setShowDraft] = useState(() => {
     try { return JSON.parse(localStorage.getItem(SHOW_DRAFT_KEY) || 'false'); }
     catch (_) { return false; }
@@ -1006,31 +1072,50 @@ export default function Projects() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardFile, setWizardFile] = useState(null); // pre-attached when opened by dropping a file; picked inside the wizard otherwise
   const [dragActive, setDragActive] = useState(false);
-  const dragDepthRef = useRef(0); // dragenter/dragleave fire on every child too; only the count hitting 0 means "left the page"
+  const dragDepthRef = useRef(0); // dragenter/dragleave fire on every child too; only the count hitting 0 means "left the window"
 
-  function handleDragEnter(e) {
-    if (!e.dataTransfer.types.includes('Files')) return; // don't react to the internal row-reorder drag
-    e.preventDefault();
-    dragDepthRef.current += 1;
-    setDragActive(true);
-  }
-  function handleDragOver(e) {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    e.preventDefault();
-  }
-  function handleDragLeave(e) {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) setDragActive(false);
-  }
-  function handleDrop(e) {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    e.preventDefault();
-    dragDepthRef.current = 0;
-    setDragActive(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) { setWizardFile(file); setWizardOpen(true); }
-  }
+  // File drops are caught on the whole window while this page is mounted, not
+  // just on the page's own content div: that div is only as tall as its
+  // content, so a file dropped on the sidebar or the empty space below the
+  // list used to miss every handler, and the browser's default action opened
+  // the file itself, navigating away from the app. Row-reorder drags carry no
+  // 'Files' type, so they are ignored here (see the row handlers below).
+  useEffect(() => {
+    const isFileDrag = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+    function onEnter(e) {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepthRef.current += 1;
+      setDragActive(true);
+    }
+    function onOver(e) {
+      if (!isFileDrag(e)) return;
+      e.preventDefault(); // required for the drop event to fire at all
+    }
+    function onLeave(e) {
+      if (!isFileDrag(e)) return;
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setDragActive(false);
+    }
+    function onDrop(e) {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setDragActive(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file) { setWizardFile(file); setWizardOpen(true); }
+    }
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
 
   function closeWizard() {
     setWizardOpen(false);
@@ -1057,6 +1142,7 @@ export default function Projects() {
     fetch('/api/filaments/types').then(r => r.json()).then(setFilamentTypes).catch(() => {});
     fetch('/api/filaments/colors').then(r => r.json()).then(setFilamentColors).catch(() => {});
     fetch('/api/groups').then(r => r.json()).then(groups => setAllGroups(groups.map(g => g.name))).catch(() => {});
+    fetch('/api/settings').then(r => r.json()).then(st => setQueueOrder(st.queue_order || 'priority')).catch(() => {});
   }, []);
 
   function toggleShowDraft(v)     { setShowDraft(v);     localStorage.setItem(SHOW_DRAFT_KEY, JSON.stringify(v)); }
@@ -1156,6 +1242,24 @@ export default function Projects() {
       await fetchProjects();
       showToast('Project created');
     }
+  }
+
+  // Operator/admin priority override (PUT .../priority-override). Refetch after,
+  // like every other mutation on this page.
+  async function setPriorityOverride(kind, id, enabled) {
+    const res = await fetch(`/api/${kind}/${id}/priority-override`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showToast('Priority change failed: ' + (body.error || res.status), 'error');
+      return;
+    }
+    showToast(enabled ? 'Priority override on' : 'Priority override cleared');
+    await fetchProjects();
+    if (selectedId != null) await fetchDetail(selectedId);
   }
 
   async function handleDuplicate() {
@@ -1382,12 +1486,12 @@ export default function Projects() {
     );
 
     return (
-      <div onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      <div>
         {toastEl}
         {confirmModal}
 
         {/* Full-page hint while a file is dragged over the page (not the internal
-            project/part row-reorder drag, which handleDragEnter ignores). Dropping
+            project/part row-reorder drag, which the window-level file handlers ignore). Dropping
             anywhere opens the upload wizard with that file already attached. */}
         {dragActive && createPortal(
           <div style={{
@@ -1501,6 +1605,12 @@ export default function Projects() {
           </div>
         </div>
 
+        {queueOrder === 'fifo' && (
+          <div style={{ background: '#131720', border: '1px solid #2d3748', borderRadius: 6, padding: '8px 12px', fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+            Prints run first in, first out by G-code upload time (Settings, Print Queue). Project and part order here do not change what prints next.
+          </div>
+        )}
+
         {(draftCount > 0 || pausedCount > 0 || completedCount > 0) && (
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
             {draftCount > 0 && (
@@ -1595,9 +1705,9 @@ export default function Projects() {
               <div
                 key={p.id}
                 draggable
-                onDragStart={() => setProjectDragSrc(p.id)}
-                onDragOver={e => { e.preventDefault(); if (!isDragging) setProjectDragOver(p.id); }}
-                onDrop={e => { e.preventDefault(); dropProject(p.id); }}
+                onDragStart={e => { startRowDrag(e, p.id); setProjectDragSrc(p.id); }}
+                onDragOver={e => { if (isFileDrag(e)) return; e.preventDefault(); if (!isDragging) setProjectDragOver(p.id); }}
+                onDrop={e => { if (isFileDrag(e)) return; e.preventDefault(); dropProject(p.id); }}
                 onDragEnd={() => { setProjectDragSrc(null); setProjectDragOver(null); }}
                 style={{
                   background: '#1e2433',
@@ -1618,8 +1728,9 @@ export default function Projects() {
 
                 {/* Name + description — clicking here navigates */}
                 <div style={{ minWidth: 0, flex: 1, cursor: 'pointer' }} onClick={() => setSelectedId(p.id)}>
-                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {p.name}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 15, marginBottom: 2, minWidth: 0 }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+                    <PriorityOverride on={p.priority_override === 1} canToggle={false} />
                   </div>
                   {p.description && (
                     <div style={{ color: '#64748b', fontSize: 12 }}>{p.description}</div>
@@ -1663,12 +1774,12 @@ export default function Projects() {
   try { projectGroups = detailProject.allowed_groups ? JSON.parse(detailProject.allowed_groups) : []; } catch (_) {}
 
   return (
-    <div onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <div>
       {toastEl}
       {confirmModal}
 
       {/* Drag-and-drop G-code upload works here too, not just the project list
-          (see the list view's return above for handleDragEnter/Over/Leave/Drop,
+          (see the window-level file drag handlers near the top of Projects(),
           dragActive, and wizardOpen/wizardFile: this view previously had none of
           this wiring at all, so dropping a file on an open project's part list,
           arguably the single most natural place to do it, silently did nothing). */}
@@ -1729,15 +1840,20 @@ export default function Projects() {
           </>
         )}
         <StatusDropdown project={detailProject} onTransition={handleStatusTransition} />
+        <PriorityOverride
+          on={detailProject.priority_override === 1}
+          canToggle={canApprove}
+          onToggle={(v) => setPriorityOverride('projects', detailProject.id, v)}
+        />
         {detailEta && detailEta.remaining_seconds != null && (
           <span style={{ fontSize: 12, color: '#94a3b8' }}>
             {detailEta.remaining_seconds > 0
-              ? <>~{formatDurationDisplay(detailEta.remaining_seconds)} remaining</>
+              ? <>~{formatDurationDisplay(detailEta.remaining_seconds)} remaining{detailEta.completion_at ? <>, done ~{formatCompletionAt(detailEta.completion_at)}</> : null}</>
               : 'nothing left to print'}
             {detailEta.incomplete && (
               <span
                 style={{ color: '#64748b' }}
-                title="Some remaining G-code files have no estimated print time set, so this is a lower bound"
+                title="Lower bound: some remaining G-code files have no print time, or some parts have no printer that can take them right now"
               > (at least)</span>
             )}
           </span>
@@ -1834,9 +1950,9 @@ export default function Projects() {
           <div
             key={part.id}
             draggable
-            onDragStart={() => setPartDragSrc(part.id)}
-            onDragOver={e => { e.preventDefault(); if (!isPartDragging) setPartDragOver(part.id); }}
-            onDrop={e => { e.preventDefault(); dropPart(part.id); }}
+            onDragStart={e => { startRowDrag(e, part.id); setPartDragSrc(part.id); }}
+            onDragOver={e => { if (isFileDrag(e)) return; e.preventDefault(); if (!isPartDragging) setPartDragOver(part.id); }}
+            onDrop={e => { if (isFileDrag(e)) return; e.preventDefault(); dropPart(part.id); }}
             onDragEnd={() => { setPartDragSrc(null); setPartDragOver(null); }}
             style={{
               background: '#1e2433',
@@ -1855,7 +1971,23 @@ export default function Projects() {
                   aria-hidden="true"
                   style={{ color: '#334155', fontSize: 16, cursor: 'grab', flexShrink: 0, userSelect: 'none', lineHeight: 1 }}
                 >⠿</span>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{part.name}</span>
+                <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{part.name}</span>
+                    <PriorityOverride
+                      on={part.priority_override === 1}
+                      canToggle={canApprove}
+                      onToggle={(v) => setPriorityOverride('parts', part.id, v)}
+                    />
+                  </span>
+                  {/* Who added this part (parts.created_by_name, a snapshot taken at
+                      creation). Absent on parts that predate user tracking. */}
+                  {part.created_by_name && (
+                    <span title="Added by" style={{ fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      by {part.created_by_name}
+                    </span>
+                  )}
+                </span>
               </div>
 
               {/* Progress */}

@@ -14,8 +14,13 @@
          styles: this codebase has no CSS variables or rem-based sizing to hook a
          root font-size scale into instead (see CLAUDE.md's client conventions).
          zoom, not transform: scale(), so the layout reflows at the scaled size
-         (100vh/100vw and fixed-position elements stay correct) instead of just
-         visually stretching a 100%-sized layout and clipping/leaving gaps. */
+         instead of just visually stretching a 100%-sized layout and clipping.
+         Caveat: under standardized CSS zoom (Chrome 128+, Firefox 126+), vh/vw
+         units inside the zoomed body are scaled too, so 100vh is 120% of the
+         real window. Full-height layouts therefore use height: 100% chained down
+         from html/body/#root below (percentages resolve against the real window
+         whatever the zoom), never 100vh. */
+      html, body, #root { height: 100%; }
       body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; zoom: 1.2; }
     </style>
   </head>

@@ -1,217 +1,211 @@
-// Tests for server/project-eta.js's estimateProjectRemaining, the shared logic
-// behind the Dashboard's per-project ETA and GET /api/projects/:id/eta.
+// Tests for server/project-eta.js: the farm simulation behind the Dashboard's
+// per-project ETA and GET /api/projects/:id/eta. Each test fixes "now" so
+// operator-hours cases are deterministic (server local time).
 
 const Database = require('better-sqlite3');
-const { estimateProjectRemaining } = require('../project-eta');
+const { estimateProjectRemaining, simulateFarm, nextOperatorTime, readOperatorHours } = require('../project-eta');
 
 let db;
+// Monday 2026-09-28 10:00 local time.
+const MON_10 = new Date(2026, 8, 28, 10, 0, 0).getTime();
+const H = 3600 * 1000;
 
 beforeEach(() => {
   db = new Database(':memory:');
   db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL, status TEXT DEFAULT 'active',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE parts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL, name TEXT NOT NULL,
-      target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'open',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-    );
-    CREATE TABLE gcodes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
-      filename TEXT NOT NULL, filepath TEXT NOT NULL,
-      parts_per_plate INTEGER NOT NULL, est_print_secs INTEGER,
-      created_at INTEGER NOT NULL
-    );
-    CREATE TABLE printers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL, ip TEXT NOT NULL, api_key TEXT NOT NULL,
-      model TEXT NOT NULL, status TEXT DEFAULT 'IDLE',
-      is_held INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1,
-      job_time_remaining INTEGER,
-      created_at INTEGER NOT NULL
-    );
-    CREATE TABLE jobs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      part_id INTEGER NOT NULL, printer_id INTEGER NOT NULL, gcode_id INTEGER,
-      parts_per_plate INTEGER NOT NULL, status TEXT DEFAULT 'queued',
-      started_at INTEGER, finished_at INTEGER, created_at INTEGER NOT NULL
-    );
+    CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL, status TEXT DEFAULT 'active',
+      priority INTEGER DEFAULT 0, allowed_groups TEXT, required_material TEXT, required_color TEXT,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL,
+      target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open', sort_order INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
+      filename TEXT NOT NULL, filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL, est_print_secs INTEGER,
+      allowed_groups TEXT, required_material TEXT, required_color TEXT, approved INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL);
+    CREATE TABLE printers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, model TEXT NOT NULL, status TEXT DEFAULT 'IDLE',
+      is_held INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, job_time_remaining INTEGER, group_name TEXT,
+      loaded_material TEXT, loaded_color TEXT, auto_advance INTEGER DEFAULT 0);
+    CREATE TABLE printer_lanes (id INTEGER PRIMARY KEY, printer_id INTEGER, lane_index INTEGER, material TEXT, color TEXT);
+    CREATE TABLE jobs (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_id INTEGER NOT NULL, gcode_id INTEGER,
+      parts_per_plate INTEGER NOT NULL, status TEXT DEFAULT 'queued', started_at INTEGER, created_at INTEGER NOT NULL);
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
 });
 
-const now = () => Date.now();
+const set = (k, v) => db.prepare('INSERT OR REPLACE INTO settings VALUES (?, ?)').run(k, String(v));
 
-function seedProject(name = 'Proj') {
-  return db.prepare('INSERT INTO projects (name, status, created_at, updated_at) VALUES (?, ?, ?, ?)')
-    .run(name, 'active', now(), now()).lastInsertRowid;
+function project({ priority = 0, created = 1, override = 0 } = {}) {
+  return db.prepare('INSERT INTO projects (name, priority, created_at, updated_at, priority_override) VALUES (?, ?, ?, ?, ?)')
+    .run('P', priority, created, created, override).lastInsertRowid;
+}
+function part(projectId, { target, completed = 0, status = 'open' }) {
+  return db.prepare('INSERT INTO parts (project_id, name, target_qty, completed_qty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1)')
+    .run(projectId, 'Part', target, completed, status).lastInsertRowid;
+}
+function gcode(partId, { model = 'mk4s', ppp = 1, secs = 3600, uploaded = 1 } = {}) {
+  return db.prepare('INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(partId, model, 'f.gcode', 'f.gcode', ppp, secs, uploaded).lastInsertRowid;
+}
+function printer({ model = 'mk4s', status = 'IDLE', held = 0, remaining = null, active = 1, autoAdvance = 0 } = {}) {
+  return db.prepare('INSERT INTO printers (name, model, status, is_held, is_active, job_time_remaining, auto_advance) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run('X', model, status, held, active, remaining, autoAdvance).lastInsertRowid;
+}
+function eta(projectId, now = MON_10) {
+  return estimateProjectRemaining(db, projectId, simulateFarm(db, now), now);
 }
 
-function seedPart(projectId, { targetQty, completedQty = 0, status = 'open' }) {
-  return db.prepare(`
-    INSERT INTO parts (project_id, name, target_qty, completed_qty, status, created_at, updated_at)
-    VALUES (?, 'Part', ?, ?, ?, ?, ?)
-  `).run(projectId, targetQty, completedQty, status, now(), now()).lastInsertRowid;
-}
-
-function seedGcode(partId, { model = 'mk4s', partsPerPlate = 1, estPrintSecs = null }) {
-  return db.prepare(`
-    INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, created_at)
-    VALUES (?, ?, 'f.bgcode', 'f.bgcode', ?, ?, ?)
-  `).run(partId, model, partsPerPlate, estPrintSecs, now()).lastInsertRowid;
-}
-
-function seedPrinter({ model = 'mk4s', isActive = 1, jobTimeRemaining = null } = {}) {
-  return db.prepare(`
-    INSERT INTO printers (name, ip, api_key, model, is_active, job_time_remaining, created_at)
-    VALUES (?, '1.1.1.1', 'k', ?, ?, ?, ?)
-  `).run(`P${Math.random()}`, model, isActive, jobTimeRemaining, now()).lastInsertRowid;
-}
-
-function seedJob(partId, printerId, gcodeId, { status = 'printing', partsPerPlate = 1 } = {}) {
-  return db.prepare(`
-    INSERT INTO jobs (part_id, printer_id, gcode_id, parts_per_plate, status, started_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(partId, printerId, gcodeId, partsPerPlate, status, now(), now()).lastInsertRowid;
-}
-
-describe('estimateProjectRemaining', () => {
-  test('returns 0 and complete when there is no remaining work', () => {
-    const projectId = seedProject();
-    seedPart(projectId, { targetQty: 5, completedQty: 5 });
-
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.remaining_seconds).toBe(0);
-    expect(eta.incomplete).toBe(false);
+describe('basics', () => {
+  test('no remaining work: 0, not incomplete', () => {
+    const p = project();
+    gcode(part(p, { target: 2, completed: 2, status: 'closed' }));
+    expect(eta(p)).toMatchObject({ remaining_seconds: 0, incomplete: false });
   });
 
-  test('estimates serial time for remaining plates with no eligible printers (divides by 1)', () => {
-    const projectId = seedProject();
-    const partId = seedPart(projectId, { targetQty: 4, completedQty: 0 });
-    // 2 plates of 2 parts each at 1000s/plate = 2000s total, no printers registered at all.
-    seedGcode(partId, { partsPerPlate: 2, estPrintSecs: 1000 });
-
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.remaining_seconds).toBe(2000);
-    expect(eta.incomplete).toBe(false);
-    expect(eta.eligible_printer_count).toBe(0);
+  test('one printer prints the plates back to back', () => {
+    const p = project(); gcode(part(p, { target: 3 }));
+    printer();
+    expect(eta(p)).toMatchObject({ remaining_seconds: 3 * 3600, incomplete: false, completion_at: MON_10 + 3 * H });
   });
 
-  test('divides queued time across every eligible active printer', () => {
-    const projectId = seedProject();
-    const partId = seedPart(projectId, { targetQty: 4, completedQty: 0 });
-    seedGcode(partId, { model: 'mk4s', partsPerPlate: 2, estPrintSecs: 1000 }); // 2000s total
-    seedPrinter({ model: 'mk4s' });
-    seedPrinter({ model: 'mk4s' });
-
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.eligible_printer_count).toBe(2);
-    expect(eta.remaining_seconds).toBe(1000); // 2000s / 2 printers
+  test('two printers run plates in parallel', () => {
+    const p = project(); gcode(part(p, { target: 4 }));
+    printer(); printer();
+    expect(eta(p).remaining_seconds).toBe(2 * 3600);
   });
 
-  test('does not count an inactive (decommissioned) printer as eligible', () => {
-    const projectId = seedProject();
-    const partId = seedPart(projectId, { targetQty: 2, completedQty: 0 });
-    seedGcode(partId, { model: 'mk4s', partsPerPlate: 1, estPrintSecs: 500 });
-    seedPrinter({ model: 'mk4s', isActive: 0 });
-
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.eligible_printer_count).toBe(0);
-    expect(eta.remaining_seconds).toBe(1000); // 2 * 500s / max(1, 0)
+  test('counts whole plates, not parts: 10 parts at 4 per plate is 3 plates', () => {
+    const p = project(); gcode(part(p, { target: 10 }), { ppp: 4 });
+    printer();
+    expect(eta(p).remaining_seconds).toBe(3 * 3600);
   });
 
-  test('subtracts completed_qty and active (uploading/printing) qty before estimating', () => {
-    const projectId = seedProject();
-    const partId = seedPart(projectId, { targetQty: 10, completedQty: 6 });
-    seedGcode(partId, { partsPerPlate: 1, estPrintSecs: 100 });
-    const printerId = seedPrinter({ model: 'mk4s' });
-    const gcodeId = db.prepare('SELECT id FROM gcodes WHERE part_id = ?').get(partId).id;
-    seedJob(partId, printerId, gcodeId, { status: 'uploading', partsPerPlate: 2 });
-
-    // remaining = 10 - 6 - 2 (in flight) = 2 plates of 1 part each at 100s = 200s,
-    // divided by the 1 eligible printer.
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.remaining_seconds).toBe(200);
+  test('subtracts completed and in-flight quantity', () => {
+    const p = project(); const pt = part(p, { target: 5, completed: 2 }); const g = gcode(pt);
+    const busy = printer({ status: 'PRINTING', remaining: 600 });
+    db.prepare("INSERT INTO jobs (part_id, printer_id, gcode_id, parts_per_plate, status, created_at) VALUES (?, ?, ?, 1, 'printing', 1)").run(pt, busy, g);
+    printer();
+    // 5 - 2 completed - 1 printing = 2 plates left. The idle printer takes one
+    // now (0 to 1h); the busy one is free at 10 min and takes the other (to 1h10m).
+    expect(eta(p).remaining_seconds).toBe(600 + 3600);
   });
 
-  test('ignores closed parts entirely', () => {
-    const projectId = seedProject();
-    const closedId = seedPart(projectId, { targetQty: 5, completedQty: 0, status: 'closed' });
-    seedGcode(closedId, { partsPerPlate: 1, estPrintSecs: 999999 });
-
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.remaining_seconds).toBe(0);
-    expect(eta.incomplete).toBe(false);
+  test('in-flight prints on several printers take the latest end, not the sum', () => {
+    const p = project(); const pt = part(p, { target: 2 }); const g = gcode(pt);
+    for (const secs of [500, 300]) {
+      const pr = printer({ status: 'PRINTING', remaining: secs });
+      db.prepare("INSERT INTO jobs (part_id, printer_id, gcode_id, parts_per_plate, status, created_at) VALUES (?, ?, ?, 1, 'printing', 1)").run(pt, pr, g);
+    }
+    expect(eta(p).remaining_seconds).toBe(500);
   });
 
-  test('flags incomplete and excludes a part with no est_print_secs on any gcode', () => {
-    const projectId = seedProject();
-    const knownPart = seedPart(projectId, { targetQty: 1, completedQty: 0 });
-    seedGcode(knownPart, { partsPerPlate: 1, estPrintSecs: 500 });
-    const unknownPart = seedPart(projectId, { targetQty: 1, completedQty: 0 });
-    seedGcode(unknownPart, { partsPerPlate: 1, estPrintSecs: null });
-
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.incomplete).toBe(true);
-    expect(eta.remaining_seconds).toBe(500); // only the known part counted
+  test('offline, errored, and decommissioned printers take no work', () => {
+    const p = project(); gcode(part(p, { target: 1 }));
+    printer({ status: 'OFFLINE' }); printer({ status: 'ERROR' }); printer({ active: 0 });
+    expect(eta(p)).toMatchObject({ remaining_seconds: null, incomplete: true });
   });
 
-  test('returns null (not 0) when there is remaining work but no time estimate exists anywhere', () => {
-    const projectId = seedProject();
-    const partId = seedPart(projectId, { targetQty: 1, completedQty: 0 });
-    seedGcode(partId, { partsPerPlate: 1, estPrintSecs: null });
-
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.remaining_seconds).toBeNull();
-    expect(eta.incomplete).toBe(true);
+  test('a printer of another model cannot take the part', () => {
+    const p = project(); gcode(part(p, { target: 1 }), { model: 'xl' });
+    printer({ model: 'mk4s' });
+    expect(eta(p)).toMatchObject({ remaining_seconds: null, incomplete: true });
   });
 
-  test('averages per-part time across a part with multiple gcodes (different printer models)', () => {
-    const projectId = seedProject();
-    const partId = seedPart(projectId, { targetQty: 1, completedQty: 0 });
-    seedGcode(partId, { model: 'mk4s', partsPerPlate: 1, estPrintSecs: 100 });
-    seedGcode(partId, { model: 'xl',   partsPerPlate: 1, estPrintSecs: 300 });
+  test('a G-code with no print time makes the estimate a lower bound', () => {
+    const p = project();
+    gcode(part(p, { target: 1 }));
+    gcode(part(p, { target: 1 }), { secs: null });
+    printer();
+    expect(eta(p)).toMatchObject({ remaining_seconds: 3600, incomplete: true });
+  });
+});
 
-    const eta = estimateProjectRemaining(db, projectId);
-    // average of 100 and 300 = 200s for the one remaining part, no eligible printers -> /1
-    expect(eta.remaining_seconds).toBe(200);
+describe('queue ahead of the project', () => {
+  test('priority order: a higher-priority project goes first', () => {
+    const a = project({ priority: 0 }); gcode(part(a, { target: 2 }));
+    const b = project({ priority: 1 }); gcode(part(b, { target: 1 }));
+    printer();
+    expect(eta(a).remaining_seconds).toBe(2 * 3600);
+    expect(eta(b).remaining_seconds).toBe(3 * 3600);
   });
 
-  test('adds real job_time_remaining telemetry for a currently-printing job on top of queued time', () => {
-    const projectId = seedProject();
-    const printingPart = seedPart(projectId, { targetQty: 1, completedQty: 0 });
-    const gcodeId = seedGcode(printingPart, { partsPerPlate: 1, estPrintSecs: 100 });
-    const printerId = seedPrinter({ model: 'mk4s', jobTimeRemaining: 42 });
-    seedJob(printingPart, printerId, gcodeId, { status: 'printing', partsPerPlate: 1 });
-
-    const queuedPart = seedPart(projectId, { targetQty: 1, completedQty: 0 });
-    seedGcode(queuedPart, { partsPerPlate: 1, estPrintSecs: 1000 });
-    seedPrinter({ model: 'mk4s' }); // a second eligible printer for the queued work
-
-    const eta = estimateProjectRemaining(db, projectId);
-    // printingPart's own plate is already in flight (active_qty covers it, contributes
-    // 0 to queued time); its real 42s remaining is added on top of the queued part's
-    // 1000s split across the 2 eligible printers (500s).
-    expect(eta.remaining_seconds).toBe(42 + 500);
+  test('FIFO: the earlier upload goes first regardless of project priority', () => {
+    set('queue_order', 'fifo');
+    const a = project({ priority: 0 }); gcode(part(a, { target: 2 }), { uploaded: 200 });
+    const b = project({ priority: 1 }); gcode(part(b, { target: 1 }), { uploaded: 100 });
+    printer();
+    expect(eta(b).remaining_seconds).toBe(3600);
+    expect(eta(a).remaining_seconds).toBe(3 * 3600);
   });
 
-  test('a project with only other projects\' printers/parts is unaffected by them', () => {
-    const projectId = seedProject('This one');
-    const otherProjectId = seedProject('Other');
-    const partId = seedPart(projectId, { targetQty: 1, completedQty: 0 });
-    seedGcode(partId, { model: 'mk4s', partsPerPlate: 1, estPrintSecs: 100 });
+  test('a priority override goes first', () => {
+    const a = project({ priority: 0 }); gcode(part(a, { target: 2 }));
+    const b = project({ priority: 1, override: 1 }); gcode(part(b, { target: 1 }));
+    printer();
+    expect(eta(b).remaining_seconds).toBe(3600);
+  });
 
-    const otherPartId = seedPart(otherProjectId, { targetQty: 1, completedQty: 0 });
-    seedGcode(otherPartId, { model: 'xl', partsPerPlate: 1, estPrintSecs: 999999 });
-    seedPrinter({ model: 'xl' });
+  test('printer caps spread printers across projects', () => {
+    set('max_printers_per_project', 1);
+    const a = project({ priority: 0 }); gcode(part(a, { target: 2 }));
+    const b = project({ priority: 1 }); gcode(part(b, { target: 2 }));
+    printer(); printer();
+    expect(eta(a).remaining_seconds).toBe(2 * 3600);
+    expect(eta(b).remaining_seconds).toBe(2 * 3600);
+  });
+});
 
-    const eta = estimateProjectRemaining(db, projectId);
-    expect(eta.remaining_seconds).toBe(100); // not diluted by the other project's huge estimate
-    expect(eta.eligible_printer_count).toBe(0); // the xl printer doesn't match this project's mk4s gcode
+describe('operator hours', () => {
+  beforeEach(() => { set('operator_hours_start', '08:00'); set('operator_hours_end', '17:00'); });
+
+  test('a printer that finishes after hours waits for the next shift before its next plate', () => {
+    const at16 = new Date(2026, 8, 28, 16, 0).getTime();
+    const p = project(); gcode(part(p, { target: 2 }));
+    printer();
+    // Plate 1: 16:00 to 17:00. Nobody to reset it until 08:00 Tuesday. Plate 2: 08:00 to 09:00.
+    expect(eta(p, at16).completion_at).toBe(new Date(2026, 8, 29, 9, 0).getTime());
+  });
+
+  test('an idle, unheld printer starts right away even outside hours (dispatch is automatic)', () => {
+    const at20 = new Date(2026, 8, 28, 20, 0).getTime();
+    const p = project(); gcode(part(p, { target: 1 }));
+    printer();
+    expect(eta(p, at20).remaining_seconds).toBe(3600);
+  });
+
+  test('a held printer waits for the shift to start', () => {
+    const at6 = new Date(2026, 8, 28, 6, 0).getTime();
+    const p = project(); gcode(part(p, { target: 1 }));
+    printer({ status: 'FINISHED', held: 1 });
+    expect(eta(p, at6).completion_at).toBe(new Date(2026, 8, 28, 9, 0).getTime());
+  });
+
+  test('weekdays only: a Friday evening finish resumes Monday morning', () => {
+    set('operator_days', '1,2,3,4,5');
+    const fri16 = new Date(2026, 9, 2, 16, 0).getTime(); // Friday 2026-10-02
+    const p = project(); gcode(part(p, { target: 2 }));
+    printer();
+    expect(eta(p, fri16).completion_at).toBe(new Date(2026, 9, 5, 9, 0).getTime());
+  });
+
+  test('auto-advance (belt) printers do not wait for an operator', () => {
+    const at16 = new Date(2026, 8, 28, 16, 0).getTime();
+    const p = project(); gcode(part(p, { target: 2 }));
+    printer({ autoAdvance: 1 });
+    expect(eta(p, at16).completion_at).toBe(new Date(2026, 8, 28, 18, 0).getTime());
+  });
+});
+
+describe('nextOperatorTime', () => {
+  test('unset hours: always staffed', () => {
+    expect(nextOperatorTime(MON_10, readOperatorHours(db))).toBe(MON_10);
+  });
+
+  test('an overnight shift (22:00 to 06:00) covers the early morning', () => {
+    set('operator_hours_start', '22:00'); set('operator_hours_end', '06:00');
+    const hours = readOperatorHours(db);
+    const at3 = new Date(2026, 8, 29, 3, 0).getTime();
+    expect(nextOperatorTime(at3, hours)).toBe(at3);
+    expect(nextOperatorTime(new Date(2026, 8, 29, 12, 0).getTime(), hours)).toBe(new Date(2026, 8, 29, 22, 0).getTime());
   });
 });

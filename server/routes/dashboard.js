@@ -1,6 +1,7 @@
 const express = require('express');
 const router  = express.Router();
-const { estimateProjectRemaining } = require('../project-eta');
+const { estimateProjectRemaining, simulateFarm } = require('../project-eta');
+const { sortByName } = require('../natural-sort');
 
 // Completed job statuses — 'done' is a legacy alias retained for backward compat with older data.
 const DONE_STATUSES = "('finished', 'done')";
@@ -26,6 +27,7 @@ module.exports = (db) => {
       WHERE p.is_active = 1
       ORDER BY p.name
     `).all();
+    sortByName(printers); // natural order: mini2 before mini10, same as GET /api/printers
 
     // Derive fleet stats from the live printer list
     const printing = printers.filter(p => p.status === 'PRINTING').length;
@@ -87,6 +89,9 @@ module.exports = (db) => {
       ORDER BY parts_printed DESC
     `);
 
+    // One farm simulation (server/project-eta.js) shared by every project's ETA
+    // below, rather than re-simulating the whole queue once per project.
+    const farmSim = simulateFarm(db);
     const projectsWithParts = activeProjects.map(proj => {
       const parts = db.prepare(`
         SELECT parts.*,
@@ -102,11 +107,12 @@ module.exports = (db) => {
       const elapsed_secs = Math.round((finishedMs + printingMs) / 1000);
       const material_used_grams = materialUsedStmt.get(proj.id).grams || null;
       const model_breakdown = modelBreakdownStmt.all(proj.id);
-      const eta = estimateProjectRemaining(db, proj.id);
+      const eta = estimateProjectRemaining(db, proj.id, farmSim);
 
       return {
         ...proj, parts, elapsed_secs, material_used_grams, model_breakdown,
         estimated_remaining_secs: eta.remaining_seconds,
+        estimated_completion_at: eta.completion_at,
         estimated_remaining_incomplete: eta.incomplete,
       };
     });

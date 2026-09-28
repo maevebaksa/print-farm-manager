@@ -104,12 +104,12 @@ beforeEach(() => {
     );
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, status TEXT DEFAULT 'active',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id),
       name TEXT NOT NULL, target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'open', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      status TEXT DEFAULT 'open', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT, part_id INTEGER NOT NULL REFERENCES parts(id),

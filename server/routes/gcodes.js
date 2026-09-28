@@ -4,13 +4,17 @@ const path = require('path');
 const fs = require('fs');
 const router = express.Router();
 const { extractThumbnail } = require('../gcode-thumbnail');
+const { readPrintStats } = require('../gcode-metadata');
+const { safeFilename, displayFilename } = require('../safe-filename');
 const { requireAnyRole } = require('../auth');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 
+// The client-supplied name is reduced to a safe basename before it is used on
+// disk (see server/safe-filename.js): the raw originalname could contain "../".
 const storage = multer.diskStorage({
   destination: GCODE_DIR,
-  filename: (_req, file, cb) => cb(null, Date.now() + '_' + file.originalname),
+  filename: (_req, file, cb) => cb(null, Date.now() + '_' + safeFilename(file.originalname)),
 });
 const upload = multer({ storage });
 
@@ -153,7 +157,15 @@ module.exports = (db, scheduler = null) => {
     // ams_slot: -1 = external spool, 0–N = AMS slot, null = not applicable (non-Bambu)
     const parsedAmsSlot = ams_slot !== undefined && ams_slot !== '' ? parseInt(ams_slot, 10) : null;
 
-    const parsedMaterialGrams = material_grams ? parseFloat(material_grams) : null;
+    // Print time, filament grams, and filament type come from the file's own
+    // header when the slicer wrote them (PrusaSlicer, OrcaSlicer, ideaMaker:
+    // see server/gcode-metadata.js); a value from the form (typically
+    // pre-filled from the filename) is only the fallback for a file that does
+    // not say. PUT /api/gcodes/:id can still correct either afterwards.
+    const displayName = displayFilename(req.file.originalname);
+    const headerStats = readPrintStats(displayName, fs.readFileSync(req.file.path));
+    const parsedEstPrintSecs = headerStats.est_print_secs ?? (est_print_secs ? parseInt(est_print_secs, 10) : null);
+    const parsedMaterialGrams = headerStats.material_grams ?? (material_grams ? parseFloat(material_grams) : null);
     // allowed_groups: JSON array string e.g. '["MK4S Farm","XL Farm"]', or null = all groups
     const parsedAllowedGroups = allowed_groups && allowed_groups !== '' ? allowed_groups : null;
     const parsedRequiredMaterial = required_material && required_material !== '' ? required_material.trim() : null;
@@ -168,21 +180,24 @@ module.exports = (db, scheduler = null) => {
     const approved = req.user.requires_print_approval ? 0 : 1;
 
     const gcode = db.prepare(`
-      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, ams_slot, allowed_groups, required_material, required_color, approved, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, material_type, ams_slot, allowed_groups, required_material, required_color, approved, uploaded_by_user_id, uploaded_by_name, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       part_id,
       printer_model,
-      req.file.originalname,
+      displayName,
       req.file.filename,
       parseInt(parts_per_plate, 10),
-      est_print_secs ? parseInt(est_print_secs, 10) : null,
+      parsedEstPrintSecs,
       parsedMaterialGrams,
+      headerStats.material_type,
       parsedAmsSlot,
       parsedAllowedGroups,
       parsedRequiredMaterial,
       parsedRequiredColor,
       approved,
+      req.user.id ?? null,
+      req.user.name ?? null,
       Date.now()
     );
 

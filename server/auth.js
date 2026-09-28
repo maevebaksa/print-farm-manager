@@ -195,8 +195,20 @@ function blockRole(role, message) {
   };
 }
 
+// Printer management (adding, importing, editing, decommissioning,
+// recommissioning, or deleting printers, plus the printer model registry and
+// group registry they are configured against) is operator/admin work. An
+// uploader only queues prints. Applied per-route in routes/printers.js,
+// routes/models.js, routes/groups.js, routes/backup.js (restore replaces the
+// printer table), and server/index.js (recommission).
+const blockUploaderPrinterAdmin = blockRole(
+  'uploader',
+  'Uploaders cannot add, remove, or change printers or printer settings'
+);
+
 module.exports = {
   SESSION_COOKIE,
+  blockUploaderPrinterAdmin,
   hashPassword,
   verifyPassword,
   createSession,

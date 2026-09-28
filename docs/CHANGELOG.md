@@ -47,6 +47,207 @@ The Docker CLI and Compose plugin are now installed in the production image (sta
 - `server/tests/update-routes.test.js`: new file, covering the status check (no repo configured, up to date, update available, GitHub unreachable, non-200) and the trigger (role gating, `409` when not opted in, success path with `spawn`/`fs` mocked).
 
 Driver-adjacent but not a driver: the Docker CLI/Compose binary versions (27.3.1 / 2.29.7) are pinned but not validated against a real Docker daemon from this session, same as the trigger mechanism as a whole; `node --check` and the mocked test suite are what's actually been run here. This machine's `better-sqlite3` native binding still fails to load, so neither the server nor `npm test` can run locally, the same limitation disclosed on every test this session.
+## 2026-09-28: completion estimates simulate the real queue, whole plates, and operator hours
+
+Reported: the project completion estimate (Dashboard "Remaining", Projects "~X remaining") was a mess. It was a formula, not a schedule: it added up the remaining time of every printer currently printing the project even though they run in parallel, spread the project's queued part-time evenly over every printer of a matching model whether or not they were busy with other work, ignored the queue ahead of it entirely (other projects' work, queue order, printer caps), counted per-part time rather than whole plates, and assumed a finished printer is reset instantly. With no printer able to take the work it even reported a "serial time" as if one could.
+
+`server/project-eta.js` is now a small farm simulation, run once per request: it replays the scheduler from now on, one plate at a time, in the scheduler's own order (priority override, then `queue_order`) with its eligibility rules and printer caps, using each printer's real time remaining for what is printing now and the per-plate print time (now read from the file header) for everything queued. New admin settings `operator_hours_start`, `operator_hours_end`, and `operator_days` model that every print finishes held until someone confirms it: a printer that finishes outside the shift waits for the next one (overnight shifts supported; auto-advance belt printers do not wait; unset means always staffed, the previous assumption). The estimate also returns the completion clock time, shown as "done ~Tue 14:05". A project with work no printer can take, or a G-code with no print time, is flagged as a lower bound; with nothing estimable at all it is unknown rather than a made-up number.
+
+### Changes
+- `server/project-eta.js`: rewritten as `simulateFarm()` plus `estimateProjectRemaining(db, id, sim)`; `nextOperatorTime()` / `readOperatorHours()`.
+- `server/routes/dashboard.js`: one simulation shared by every project; adds `estimated_completion_at`.
+- `server/routes/projects.js`: `GET /api/projects/:id/eta` adds `completion_at`.
+- `server/routes/settings.js`: `operator_hours_start`, `operator_hours_end`, `operator_days` (admin-only, validated).
+- `client/src/pages/Settings.jsx`: operator hours in the Print Queue section.
+- `client/src/pages/Dashboard.jsx`, `client/src/pages/Projects.jsx`: completion clock time next to the estimate; lower-bound tooltip explains both causes.
+- `server/tests/project-eta.test.js`: rewritten for the simulation (parallel printers, whole plates, in-flight prints, queue order, FIFO, override, caps, operator hours incl. weekdays, overnight shifts, and belt printers). `dashboard.test.js` updated (no eligible printer is now unknown, not "serial time"); `settings.test.js` extended.
+- `docs/api.md`, `docs/web-app.md`.
+
+Verified in the running demo farm: with 08:00 to 17:00 hours set at 20:30, estimates moved from about 6.5 h and 20 h to about 18 h and 43 h, with the simulation taking about 10 ms per Dashboard request.
+
+---
+
+## 2026-09-28: operator/admin priority override
+
+Requested: alongside first in, first out, a way to put specific work ahead of the queue that only an operator or admin can use. New additive `priority_override` flags on `parts` and `projects`, set through new `PUT /api/parts/:id/priority-override` and `PUT /api/projects/:id/priority-override` routes gated to operator/admin (`403` for an uploader); the general `PUT /:id` routes never change them, so an uploader cannot set one indirectly. The scheduler dispatches overridden work (the part's flag or its project's) first under either queue order and exempts it from the per-part/per-project printer caps. `GET /api/parts/:id/dispatch-status` notes an override (scheduler sync pair). The Projects page shows a Priority badge, and a toggle for operators and admins.
+
+### Changes
+- `server/db.js`: `parts.priority_override`, `projects.priority_override` migrations.
+- `server/routes/parts.js`, `server/routes/projects.js`: the operator/admin-only override routes; dispatch-status note.
+- `server/scheduler.js`: overridden candidates sort first and skip the cap check.
+- `client/src/pages/Projects.jsx`: Priority badge and toggle on projects and parts.
+- `server/tests/priority-override.test.js`: new (operator/admin allowed, uploader 403 with nothing changed, validation, general PUT cannot set it). `scheduler-queue-policy.test.js`: override jumps FIFO and priority order and ignores caps. Inline test schemas gained the columns.
+- `docs/api.md`, `docs/database.md`, `docs/web-app.md`.
+
+---
+
+## 2026-09-28: never use a client-supplied upload filename raw on disk
+
+Reported (found while building the slicer endpoint): `POST /api/gcodes/upload` named stored files `Date.now() + "_" + file.originalname`, trusting the client's filename, and stored it verbatim as the display name. Checked before fixing: the feared `../` path traversal is not reachable today, because multer 2.2.0's default `preservePath: false` has busboy strip directory parts (both `/` and `\`) before the route sees the name; a raw multipart request with `filename="../../evil.gcode"` arrives as `evil.gcode`. What does arrive intact are characters NTFS treats specially, which matters on the Windows farm machine: `part:1.gcode` would be written as an alternate data stream on a file named `<timestamp>_part` rather than a normal file, and `?`, `*`, `|`, `"` make the write fail.
+
+New `server/safe-filename.js`: `safeFilename()` (disk name: bare basename, only `[A-Za-z0-9_ .-()+]`, no leading dots) and `displayFilename()` (display name: bare basename with control characters removed, otherwise unchanged so accented names still read correctly). Both split on `/` and `\` explicitly rather than trusting multer's default to stay the same. Used by the G-code upload route and the slicer endpoint (which had its own copy). Backup restore and printer import were checked: restore's upload has a fixed server-chosen name and it already rejects any non-basename `gcode_files` key; import uses memory storage.
+
+### Changes
+- `server/safe-filename.js`: new.
+- `server/routes/gcodes.js`: disk name via `safeFilename`, stored display name via `displayFilename`.
+- `server/routes/slicer-upload.js`: uses the shared helpers; display name via `displayFilename`.
+- `server/tests/gcodes.test.js`: a Windows-special-character filename is stored as a plain safe basename inside `server/gcode/` (fails on the previous code); a `../` name is reduced to its basename (passes either way, since multer already strips it, and says so).
+
+---
+
+## 2026-09-28: read print time and filament from the file's slicer header (PrusaSlicer, OrcaSlicer, ideaMaker)
+
+Requested: for every uploaded file, take the print time and material from the file header rather than the filename. Until now `est_print_secs` and `material_grams` only came from a filename convention (`..._2h30m_45g.gcode`) or manual entry, so most real slicer output arrived with no estimate at all, which also starved the project ETA.
+
+`server/gcode-metadata.js` `readPrintStats()` now reads print time, filament grams, and filament type from the file itself on every upload (`POST /api/gcodes/upload` and the slicer endpoint), and the header value wins over the form's filename-derived value. Formats: PrusaSlicer `.gcode`/`.bgcode` (`estimated printing time (normal mode)`, `total filament used [g]` or the summed per-extruder `filament used [g]`, `filament_type`); OrcaSlicer (the same keys, or `total estimated time:` and `total filament weight [g] :` with a Bambu printer profile, including inside a sliced `.3mf`); ideaMaker (`;Print Time:` in seconds, and grams computed from `;Material#N Used:` length with the file's own filament diameter and density). The rules follow Moonraker's metadata parser and the slicers' own writer code (OrcaSlicer `GCodeProcessor.cpp` / `GCode.cpp`, `get_time_dhms` format). Only the head and tail of a plain G-code file are scanned, and `.bgcode` metadata is read without decompressing the G-code.
+
+The filament type is stored in a new additive column, `gcodes.material_type`, and shown on the Projects page. It is deliberately not copied into `required_material`, which would stop the print dispatching to any printer without that material set as loaded.
+
+### Changes
+- `server/gcode-metadata.js`: `readPrintStats()` and `parseDhms()`.
+- `server/db.js`: `gcodes.material_type` migration.
+- `server/routes/gcodes.js`, `server/routes/slicer-upload.js`: record header print time, grams, and type on upload.
+- `client/src/pages/Projects.jsx`: filament type chip on G-code rows; upload hint explains the header takes precedence.
+- `server/tests/gcode-metadata.test.js`: new (each slicer's format, `.bgcode` and `.3mf`, large-file tail, unreadable files). `gcodes.test.js` (header beats form values), `slicer-upload.test.js`, `backup-restore.test.js` (new column round-trips); inline schemas gained the column.
+- `docs/api.md`, `docs/database.md`, `docs/web-app.md`.
+
+PrusaSlicer parsing was checked against real PrusaSlicer 2.8.1 output (prusa3d/libbgcode's `tests/data`: 3m 41s, 0.75 g, PLA). OrcaSlicer and ideaMaker parsing was checked against lines built to their documented formats, not against files from those slicers; ideaMaker's format comes from Moonraker's parser since ideaMaker is closed source. Existing G-codes are not re-read; only new uploads get the header values.
+
+---
+
+## 2026-09-28: slicer upload endpoint (OctoPrint and Moonraker compatible), one URL per printer group
+
+Requested: upload straight from PrusaSlicer or OrcaSlicer, with each printer group having its own URL. New endpoint at `/slicer/<group>` emulates the parts of the OctoPrint API (PrusaSlicer "OctoPrint", OrcaSlicer "Octo/Klipper") and the Moonraker API (OrcaSlicer "Moonraker") those slicers call: the connection tests (`/api/version`, `/server/info`), the uploads (`/api/files/local`, `/server/files/upload`), and Moonraker's follow-up `/printer/print/start`. Each call was taken from the slicers' own client code (PrusaSlicer 2.9.0 and current OrcaSlicer `OctoPrint.cpp` / `Moonraker.cpp`), including PrusaSlicer's requirement that `/api/version` return `api` and a `text` starting with "OctoPrint", and that a base URL with a path is kept (so a per-group path works).
+
+Auth is a farm API key in the slicer's API key field (sent as `X-Api-Key`). An upload never goes straight to a printer: it becomes a queued Part in the uploader's own `Uploads: <name>` project, restricted to that group, attributed to them, subject to their print approval flag, and dispatched by the scheduler like anything else (so the queue order and printer caps apply). The printer model is read from the file's own `printer_model` metadata (new `server/gcode-metadata.js`, which the next change extends to print time and material), falling back to the group's model when the group is single-model; an ambiguous or mismatched model is rejected with a clear message rather than guessed. Stored filenames are sanitized to a safe basename.
+
+Found while building it: the existing `POST /api/gcodes/upload` stores files as `Date.now() + "_" + originalname` without sanitizing the client-supplied name. Not changed here; reported separately.
+
+### Changes
+- `server/routes/slicer-upload.js`: new.
+- `server/gcode-metadata.js`: new. Reads `; key = value` metadata from `.gcode` head/tail, `.bgcode` metadata blocks, and sliced `.3mf` plates; maps a slicer's printer model to the registry.
+- `server/gcode-convert.js`: `readBgcodeMetadata()` reads only the metadata blocks.
+- `server/index.js`: mounts `/slicer` before the SPA catch-all, with a lazy scheduler reference.
+- `client/src/pages/Account.jsx`: "Upload from your slicer" section with each group's URL.
+- `server/tests/slicer-upload.test.js`: new (both APIs' connection tests and uploads, auth, model detection, rejections leaving nothing behind, path traversal, print approval).
+- `docs/api.md` (new Slicer upload section), `docs/auth.md`, `docs/web-app.md`.
+
+Verified with scripted requests matching each slicer's calls, against the test suite and the running app (curl as PrusaSlicer would). Not yet validated with a real PrusaSlicer or OrcaSlicer install.
+
+---
+
+## 2026-09-28: admin print queue setting: first in, first out, and per-part/per-project printer caps
+
+Requested: for a shared (student) farm, prints should run first in, first out by when their G-code was uploaded, with no project getting priority, as an admin setting; plus limits on how many printers one piece of work can take while others are waiting, so the farm runs several people's prints in parallel.
+
+Until now the scheduler always walked candidates by project priority, then part order within the project (the Projects page drag order). A new admin-only `queue_order` setting keeps that as the default (`priority`) and adds `fifo`, which orders by the matching G-code's upload time (`gcodes.created_at`) and ignores project and part order entirely. New admin-only `max_printers_per_part` and `max_printers_per_project` settings (0 = unlimited) make a part or project that already has that many printers uploading or printing wait behind other eligible work. They are work-conserving: if nothing uncapped is waiting, the capped work still gets the printer rather than leaving it idle. The cap check runs before the dispatch lock (job row) is written, so a skipped candidate leaves nothing behind. No part-count path is touched: this only changes which eligible part is picked.
+
+### Changes
+- `server/scheduler.js`: `_queuePolicy()` and `_atPrinterCap()`; `_reserveCandidate` orders by upload time under `fifo` and skips capped candidates; `_reserveJob` runs the color passes with caps first, then without.
+- `server/routes/settings.js`: `queue_order`, `max_printers_per_part`, `max_printers_per_project` (admin-only, validated).
+- `server/routes/parts.js`: `dispatch-status` notes a part or project at its cap (sync pair with the scheduler).
+- `client/src/pages/Settings.jsx`: new Print Queue section.
+- `client/src/pages/Projects.jsx`: notice in the list view when the queue is first in, first out.
+- `server/tests/scheduler-queue-policy.test.js`: new (priority vs FIFO, part and project caps, work-conserving fallback, no stray job rows). `settings.test.js` and `dispatch-status.test.js` extended.
+- `docs/api.md` (settings keys and a new Dispatch order section), `docs/database.md`, `docs/web-app.md`.
+
+---
+
+## 2026-09-28: uploaders can no longer add, remove, or reconfigure printers; Fleet model chips fit two per row again
+
+Requested: the uploader role should not be able to add or remove printers or edit their settings. Until now an uploader was only kept from Set Ready; every printer management route was open to it. A new `auth.blockUploaderPrinterAdmin` (a `blockRole('uploader')`) now guards adding (single and CSV import), editing (`PUT /api/printers/:id`: rename, connection, camera, loaded filament, group, decommission note), deleting, decommissioning, and recommissioning printers, the add/edit form's connection and camera probes, the printer model and group registries, and backup restore (which replaces the whole printer table, so it was a back door to the same thing). Each returns `403`. The client hides the matching controls for uploaders so they never see a button that would fail. Reading printers, models, and groups stays open, and the uploader's existing abilities (Bad Print, linking or cataloguing a print, printer notes, all project and G-code work) are unchanged.
+
+Reported (flagged in the previous entry's summary): the Fleet page's per-model chips were capped at `42vw`, meant as "two chips side by side". Under the app-wide `zoom: 1.2`, `vw` is scaled too, so the cap came out near half the window and, with the sidebar taking its share, a large model's chip could never share a row (measured in Chromium: a 968px chip in a 1637px content area at a 1920px window). The cap is now half the chip container itself, `(100% - gap) / 2`, which is zoom-proof and is what the `vw` cap approximated in the first place; after the fix that chip is 806px. The Dashboard's `FleetStatusGrid` had the same `vw` ceiling (`60vw`) and now uses 70% of its container.
+
+### Changes
+- `server/auth.js`: `blockUploaderPrinterAdmin`.
+- `server/routes/printers.js`, `server/routes/models.js`, `server/routes/groups.js`, `server/routes/backup.js`, `server/index.js`: the gate on every printer management route listed above.
+- `client/src/pages/Settings.jsx`: Printer Models, Groups, Add Printer, Import, and Restore hidden for uploaders.
+- `client/src/pages/Fleet.jsx`: Bulk Edit and Decommission hidden for uploaders; chip cap is half the container instead of `42vw`.
+- `client/src/pages/PrinterDetail.jsx`: Rename and Edit hidden for uploaders.
+- `client/src/pages/Decommissioned.jsx`: Recommission hidden and the note read-only for uploaders.
+- `client/src/components/FleetStatusGrid.jsx`: chip ceiling 70% of the container instead of `60vw`.
+- `server/tests/uploader-printer-permissions.test.js`: new. Every gated route 403s for an uploader and changes nothing; operators keep access; reads stay open.
+- `docs/auth.md`, `docs/api.md`, `docs/web-app.md`: the new restrictions and the chip width rules.
+
+Verified in the built app in headless Chromium: logged in as a real uploader account, every listed control was absent and direct `PUT`/`DELETE`/`POST` calls to `/api/printers` returned `403`; chip widths measured before and after at 1440 and 1920px windows.
+
+---
+
+## 2026-09-28: fix Sign out and login screen pushed below the fold by the 120% scale, and drag-and-drop gaps
+
+Reported: after the whole-app 120% scale (`body { zoom: 1.2 }`, see "scale the whole app 120%" below), reaching the user name and Sign out button at the bottom of the sidebar needed a long scroll, and the login screen scrolled the same way. That entry assumed `100vh` stays correct under zoom; under standardized CSS zoom (Chrome 128+, Firefox 126+) it does not: `vh` inside the zoomed body is scaled too, so `#layout { height: 100vh }` was 120% of the real window. Reproduced in Chromium 141 at a 1440x850 window: the document was 1020px tall and Sign out sat at y=964. Full-height layouts now use `height: 100%` chained from `html`/`body`/`#root`, which resolves against the real window; after the fix the document is 850px and Sign out sits at y=794 to 831. Same for the login screen and the Dashboard.
+
+Reported: "drag and drop is broken". Could not reproduce a failure in Chromium, with or without the zoom: project and part row reordering and file drops onto the page content all worked in a scripted test. Two real gaps were found and fixed instead. Row reordering never put data on the drag in `dragstart`, which Firefox requires before it will start an HTML5 drag at all, so reordering did nothing in Firefox. And the G-code file drop only listened on the page's content div, which is only as tall as its content, so a file dropped on the sidebar or the empty space below the list was not caught, and the browser opened the file itself, navigating away from the app. File drops are now caught anywhere in the window while the Projects page is open. Rows also no longer light up for a file dragged over them (that highlight could stick, since `dragend` never fires for a file dragged in from the desktop). If drag-and-drop still fails for you, the browser and the exact drag (reordering or file drop) will pin it down.
+
+### Changes
+- `client/index.html`: `html, body, #root { height: 100% }`; corrected the zoom comment about `vh`.
+- `client/src/App.jsx`: `#layout` is `height: 100%`, not `100vh`.
+- `client/src/pages/Login.jsx`, `client/src/pages/Dashboard.jsx`: `100%` instead of `100vh`.
+- `client/src/pages/Projects.jsx`: window-level file drop listeners replace the per-view div handlers; row `dragstart` sets `text/plain` data; rows ignore file drags.
+- `docs/web-app.md`: the zoom `vh` caveat, window-wide file drop, and the Firefox drag note.
+
+Verified with the built app in headless Chromium 141 (layout measurements, screenshots at 1440x850, 1440x420, and 390x844, scripted row drags and file drops). Not tested in Firefox or Safari: none is available in this environment.
+
+---
+
+## 2026-09-28: natural printer name order, and track who owns parts and uploaded files
+
+Reported: printer lists put "mini10" between "mini1" and "mini2". The earlier command palette fix (see "command palette sorts mini10 before mini9" below) only patched that one component's tiebreak; the root cause is `GET /api/printers` and `GET /api/dashboard` sorting with SQLite's plain text `ORDER BY p.name`, which every page (Fleet, Dashboard, Webcams, the Jobs printer filter) inherits. SQLite has no natural collation, so both endpoints now re-sort in JS with a shared numeric-aware comparator (`Intl.Collator` with `numeric: true`).
+
+Requested: see whose parts everything belongs to. Projects and parts now record who created them, and G-codes record who uploaded them, as a user id plus a name snapshot (the same convention `printer_events` already uses: no foreign key, so attribution survives a user being renamed or deleted). Jobs are created by the scheduler rather than a person, so they get no column of their own; `GET /api/jobs` joins the owner from the job's part and G-code. Rows created before this change show no owner ("Unknown" on the Jobs page). Duplicating a project attributes the new project and parts to whoever duplicated it, while copied G-codes keep their original uploader.
+
+### Changes
+- `server/natural-sort.js`: new shared natural-order comparator.
+- `server/routes/printers.js`, `server/routes/dashboard.js`: printer lists in natural name order.
+- `server/db.js`: additive migrations for `projects.created_by_user_id/created_by_name`, `parts.created_by_user_id/created_by_name`, `gcodes.uploaded_by_user_id/uploaded_by_name`.
+- `server/routes/projects.js`, `server/routes/parts.js`, `server/routes/gcodes.js`, `server/index.js` (catalog-print placeholder G-code): record the signed-in user on create/upload/duplicate.
+- `server/routes/jobs.js`: `part_owner_*` and `gcode_uploaded_by_*` joined onto every job.
+- `client/src/pages/Projects.jsx`: "by <user>" under each part name, uploader name on each G-code row.
+- `client/src/pages/Jobs.jsx`: Owner column (and mobile card line), part creator with G-code uploader fallback, both in the tooltip.
+- `server/tests/natural-sort.test.js`, `server/tests/user-attribution.test.js`: new. `dashboard.test.js` (natural order), `gcodes.test.js` (uploader recorded), `jobs-route.test.js` (owner joins), `backup-restore.test.js` (new columns export and restore); other suites' inline schemas gained the new columns.
+- `docs/database.md`, `docs/api.md`, `docs/web-app.md`: new columns, response fields, and UI.
+
+---
+
+## 2026-09-28: fix .bgcode thumbnails compressed with Deflate never showing
+
+Found while writing the OctoPrint .bgcode converter (entry below): `fromBgcode` decoded Deflate-compressed (compression type 1) blocks as raw Deflate, but Prusa's reference implementation libbgcode (src/LibBGCode/binarize/binarize.cpp) writes them with `deflateInit`, a zlib-wrapped stream. A real Deflate-compressed thumbnail therefore failed to decode and was skipped silently, so the G-code list showed no thumbnail. PrusaSlicer usually stores thumbnails uncompressed, which is likely why nobody noticed. The test fixture builder made the same raw-Deflate assumption, so the existing test passed against the bug.
+
+Now decodes zlib-wrapped Deflate, falling back to raw Deflate only when the stream has no valid zlib header.
+
+### Changes
+- `server/gcode-thumbnail.js`: Deflate thumbnail blocks decode as zlib-wrapped (`inflateSync`), with a raw fallback for headerless streams.
+- `server/tests/support/gcode-fixtures.js`: `buildBgcode` writes compression 1 as zlib-wrapped Deflate, matching libbgcode.
+- `server/tests/gcode-thumbnail.test.js`: regression test with a zlib-wrapped thumbnail (fails on the previous decoder), plus a raw-fallback test.
+
+No hardware or real slicer output involved: verified against hand-built fixtures following libbgcode's source; `npm test` passes in full.
+
+---
+
+## 2026-09-28: OctoPrint prints .bgcode and sliced .3mf, and no longer reports a print that never started
+
+Reported: jobs dispatched to an OctoPrint printer stayed on "Uploading" in Fleet and no print ever appeared in OctoPrint. Two causes, both confirmed from OctoPrint's own API docs and source (docs/api/files.rst, src/octoprint/server/api/files.py, src/octoprint/filemanager), not guessed:
+
+1. OctoPrint only accepts plain G-code (`.gcode`, `.gco`, `.g`). The farm accepts `.bgcode` (PrusaSlicer's default for MK4/XL/MINI) and `.3mf`, and the driver sent them as-is. OctoPrint refused them, the driver threw a bare "Request failed with status code ...", and the scheduler kept retrying for the 15 minute upload window with Fleet showing "Uploading" the whole time. The driver now converts `.bgcode` and sliced `.3mf` to plain G-code before upload (new `server/gcode-convert.js`), and rejects file types it cannot print with a message that says why.
+2. OctoPrint answers `201 Created` even when it did not start the print (printer not connected/ready in OctoPrint, or an API key without the PRINT permission), reporting that only as `effectivePrint: false`. The driver treated any 2xx as success, so the job was marked printing while nothing ran. That is now an upload failure, so the normal retry-then-hold flow applies.
+
+HTTP errors from OctoPrint now carry OctoPrint's own error text in the log, and a 403 names the API key permissions needed (FILES_UPLOAD, PRINT, and FILES_DELETE to overwrite an existing file name, which a repeat print of the same part does).
+
+The `.bgcode` decoder is a dependency-free port of Prusa's libbgcode (MeatPack decoder, heatshrink v0.4.1 decoder, zlib-wrapped Deflate) and was checked byte for byte against libbgcode's own reference conversions (`tests/data/mini_cube_b` and `mini_cube_ps2.8.1`, which use PrusaSlicer's default Heatshrink 12/4 + MeatPack encoding). A sliced `.3mf` uses `Metadata/plate_1.gcode` (the entry name OrcaSlicer's bbs_3mf.cpp writes, and the plate the Bambu driver prints), or the only plate if there is just one. An unsliced model `.3mf` is rejected.
+
+Also closes out the earlier OctoPrint webcam entries below: `npm test` now runs in full in this environment (49 suites, 786 tests passing), including the webcam regression tests those entries could only check with `node --check`, and `npm run build` succeeds.
+
+Implemented from protocol docs and reference sources, not yet validated on hardware: no real OctoPrint printer was used in this session.
+
+### Changes
+- `server/gcode-convert.js`: new. `.bgcode` to G-code (mirrors libbgcode's from_binary_to_ascii output) and sliced `.3mf` plate G-code extraction.
+- `server/drivers/octoprint.js`: `uploadAndPrint` converts `.bgcode`/`.3mf` before upload, rejects unsupported types up front, treats `effectivePrint: false` as a failure, and puts OctoPrint's error text (plus a permission hint on 403) in the thrown error.
+- `server/gcode-thumbnail.js`: exports its ZIP reader helpers for reuse.
+- `server/tests/gcode-convert.test.js`: new. Heatshrink, MeatPack, bgcode and 3mf conversion tests.
+- `server/tests/octoprint-driver.test.js`: regression tests for conversion, unsupported types, `effectivePrint: false`, and the 403 message (all fail on the previous driver).
+- `server/tests/support/gcode-fixtures.js`: `buildBgcode` accepts a block encoding and exact pre-compressed bytes.
+- `docs/multi-brand.md`: OctoPrint notes cover accepted file types, conversion, and the `effectivePrint` check.
 
 ---
 

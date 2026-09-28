@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConfirm } from '../useConfirm';
 import { useToast } from '../useToast';
+import { useAuth } from '../AuthContext';
 
 function formatTimestamp(ms) {
   if (!ms) return 'Unknown';
@@ -12,6 +13,11 @@ function formatTimestamp(ms) {
 }
 
 export default function Decommissioned() {
+  // Recommissioning and editing a printer's decommission note (PUT
+  // /api/printers/:id) are printer management, blocked for uploaders
+  // server-side (auth.blockUploaderPrinterAdmin): they see the list read-only.
+  const { user } = useAuth();
+  const canManagePrinters = user?.role !== 'uploader';
   const navigate = useNavigate();
   const [confirm, confirmModal] = useConfirm();
   const [showToast, toastEl]    = useToast();
@@ -126,7 +132,8 @@ export default function Decommissioned() {
             onCancelEdit={cancelEdit}
             onChangeDraft={setDraftNote}
             onSave={saveNote}
-            onRecommission={() => recommission(printer)}
+            onRecommission={canManagePrinters ? () => recommission(printer) : null}
+            canEditNote={canManagePrinters}
             onViewHistory={() => navigate(`/printers/${printer.id}`)}
           />
         ))}
@@ -141,7 +148,7 @@ export default function Decommissioned() {
 function DecomCard({
   printer, isEditing, draftNote, saving,
   onBeginEdit, onCancelEdit, onChangeDraft, onSave,
-  onRecommission, onViewHistory,
+  onRecommission, onViewHistory, canEditNote,
 }) {
   const note = printer.decommission_note || '';
   const textareaRef = useRef(null);
@@ -205,13 +212,13 @@ function DecomCard({
 
         {/* Icon-style action buttons */}
         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-          <button
+          {onRecommission && <button
             onClick={onRecommission}
             title="Recommission"
             style={iconBtn('#60a5fa', '#1e3a5f')}
           >
             ↩
-          </button>
+          </button>}
           <button
             onClick={onViewHistory}
             title="View history"
@@ -258,6 +265,10 @@ function DecomCard({
             <span>Enter saves · Shift+Enter newline · Esc cancels</span>
             {saving && <span style={{ color: '#60a5fa' }}>Saving…</span>}
           </div>
+        </div>
+      ) : !canEditNote ? (
+        <div style={{ padding: '8px 10px', color: note ? '#cbd5e1' : '#475569', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {note || 'No investigation note.'}
         </div>
       ) : (
         <button

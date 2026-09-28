@@ -75,7 +75,8 @@ beforeEach(() => {
       updated_at        INTEGER NOT NULL,
       required_material TEXT,
       required_color    TEXT,
-      allowed_groups    TEXT
+      allowed_groups    TEXT,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,7 +89,8 @@ beforeEach(() => {
       updated_at          INTEGER NOT NULL,
       sort_order          INTEGER NOT NULL DEFAULT 0,
       print_time_seconds  INTEGER,
-      material_grams      REAL
+      material_grams      REAL,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,7 +105,8 @@ beforeEach(() => {
       material_grams    REAL,
       allowed_groups    TEXT,
       required_material TEXT,
-      required_color    TEXT
+      required_color    TEXT,
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT, material_type TEXT
     );
     CREATE TABLE jobs (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,22 +177,24 @@ beforeEach(() => {
   `).run(now);
 
   db.prepare(`
-    INSERT INTO projects (name, description, status, priority, created_at, updated_at, required_material, required_color, allowed_groups)
-    VALUES ('Targeted Project', 'test', 'active', 0, ?, ?, 'PETG', 'Red', '["Bambu Farm"]')
+    INSERT INTO projects (name, description, status, priority, created_at, updated_at, required_material, required_color, allowed_groups, created_by_user_id, created_by_name)
+    VALUES ('Targeted Project', 'test', 'active', 0, ?, ?, 'PETG', 'Red', '["Bambu Farm"]', 7, 'Joel')
   `).run(now, now);
 
   db.prepare(`
-    INSERT INTO parts (project_id, name, target_qty, completed_qty, status, created_at, updated_at, sort_order, print_time_seconds, material_grams)
-    VALUES (1, 'Estimated Part', 10, 0, 'open', ?, ?, 0, 7350, 42.5)
+    INSERT INTO parts (project_id, name, target_qty, completed_qty, status, created_at, updated_at, sort_order, print_time_seconds, material_grams, created_by_user_id, created_by_name)
+    VALUES (1, 'Estimated Part', 10, 0, 'open', ?, ?, 0, 7350, 42.5, 8, 'Maeve')
   `).run(now, now);
 
   db.prepare(`
     INSERT INTO gcodes
       (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, created_at,
-       ams_slot, material_grams, allowed_groups, required_material, required_color)
+       ams_slot, material_grams, allowed_groups, required_material, required_color,
+       uploaded_by_user_id, uploaded_by_name, material_type)
     VALUES
       (1, 'x1c', 'part.gcode', 'part_stub.gcode', 4, 3600, ?,
-       2, 45.5, '["Bambu Farm"]', 'PETG', 'Red')
+       2, 45.5, '["Bambu Farm"]', 'PETG', 'Red',
+       9, 'Casey', 'PETG')
   `).run(now);
 
   // Two types, two colors, and "Galaxy Black" linked to BOTH types (not just one) so a
@@ -250,10 +255,14 @@ describe('Backup export/restore — column round-trip regression', () => {
       required_material: 'PETG',
       required_color: 'Red',
       allowed_groups: '["Bambu Farm"]',
+      created_by_user_id: 7,
+      created_by_name: 'Joel',
     });
     expect(res.body.parts[0]).toMatchObject({
       print_time_seconds: 7350,
       material_grams: 42.5,
+      created_by_user_id: 8,
+      created_by_name: 'Maeve',
     });
     expect(res.body.gcodes[0]).toMatchObject({
       ams_slot: 2,
@@ -261,6 +270,9 @@ describe('Backup export/restore — column round-trip regression', () => {
       allowed_groups: '["Bambu Farm"]',
       required_material: 'PETG',
       required_color: 'Red',
+      uploaded_by_user_id: 9,
+      uploaded_by_name: 'Casey',
+      material_type: 'PETG',
     });
     expect(res.body.printer_events[0]).toMatchObject({
       user_id: 7,
@@ -280,9 +292,9 @@ describe('Backup export/restore — column round-trip regression', () => {
       // Wipe the columns under test so a false-positive (restore is a no-op / DB untouched)
       // can't slip through — restore must be what puts these values back.
       db.prepare("UPDATE printers SET serial_number = '', loaded_material = NULL, loaded_color = NULL, auto_advance = 0, camera_uid = NULL, camera_rotation = 0, camera_flip_h = 0").run();
-      db.prepare("UPDATE projects SET required_material = NULL, required_color = NULL, allowed_groups = NULL").run();
-      db.prepare("UPDATE parts SET print_time_seconds = NULL, material_grams = NULL").run();
-      db.prepare("UPDATE gcodes SET ams_slot = NULL, material_grams = NULL, allowed_groups = NULL, required_material = NULL, required_color = NULL").run();
+      db.prepare("UPDATE projects SET required_material = NULL, required_color = NULL, allowed_groups = NULL, created_by_user_id = NULL, created_by_name = NULL").run();
+      db.prepare("UPDATE parts SET print_time_seconds = NULL, material_grams = NULL, created_by_user_id = NULL, created_by_name = NULL").run();
+      db.prepare("UPDATE gcodes SET ams_slot = NULL, material_grams = NULL, allowed_groups = NULL, required_material = NULL, required_color = NULL, uploaded_by_user_id = NULL, uploaded_by_name = NULL, material_type = NULL").run();
       db.prepare("UPDATE jobs SET upload_first_failed_at = NULL").run();
 
       const restoreRes = await request(app)
@@ -313,10 +325,12 @@ describe('Backup export/restore — column round-trip regression', () => {
       expect(project.required_material).toBe('PETG');
       expect(project.required_color).toBe('Red');
       expect(project.allowed_groups).toBe('["Bambu Farm"]');
+      expect(project).toMatchObject({ created_by_user_id: 7, created_by_name: 'Joel' });
 
       const part = db.prepare('SELECT * FROM parts WHERE id = 1').get();
       expect(part.print_time_seconds).toBe(7350);
       expect(part.material_grams).toBe(42.5);
+      expect(part).toMatchObject({ created_by_user_id: 8, created_by_name: 'Maeve' });
 
       const gcode = db.prepare('SELECT * FROM gcodes WHERE id = 1').get();
       expect(gcode.ams_slot).toBe(2);
@@ -324,6 +338,7 @@ describe('Backup export/restore — column round-trip regression', () => {
       expect(gcode.allowed_groups).toBe('["Bambu Farm"]');
       expect(gcode.required_material).toBe('PETG');
       expect(gcode.required_color).toBe('Red');
+      expect(gcode).toMatchObject({ uploaded_by_user_id: 9, uploaded_by_name: 'Casey', material_type: 'PETG' });
 
       // restore explicitly wipes and reinserts printer_events (no FK to printers to
       // cascade through, unlike printer_lanes), so this proves that reinsert step

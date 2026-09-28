@@ -142,9 +142,15 @@ Change your own password. **Body:** `{ "current_password": "...", "new_password"
 
 ## Printers
 
+Printer management routes return `403` for the `uploader` role (see [auth.md](auth.md#roles)): `POST /api/printers`, `POST /api/printers/import`, `PUT /api/printers/:id`, `DELETE /api/printers/:id`, `POST /api/printers/:id/decommission`, `POST /api/printers/:id/complete-and-decommission`, `POST /api/printers/:id/recommission`, `POST /api/printers/test-connection`, `POST /api/printers/list-cameras`, plus `POST`/`DELETE /api/models`, `POST`/`DELETE /api/groups`, and `POST /api/backup/restore`:
+
+```json
+{ "error": "Uploaders cannot add, remove, or change printers or printer settings" }
+```
+
 ### `GET /api/printers`
 
-Returns all active printers (`is_active = 1`) ordered by name.
+Returns all active printers (`is_active = 1`) in natural name order (`mini2` before `mini10`, case-insensitive; `server/natural-sort.js`). `GET /api/dashboard`'s `printers` uses the same order.
 
 ```json
 [
@@ -523,23 +529,42 @@ Returns a single project. `404` if not found.
 
 ### `GET /api/projects/:id/eta`
 
-Rough estimated time remaining for the project's whole queue, not just whatever is currently printing. `404` if the project doesn't exist.
+Estimated completion of the project's whole remaining queue. `404` if the project doesn't exist.
 
 ```json
-{ "remaining_seconds": 5400, "incomplete": false, "eligible_printer_count": 2 }
+{ "remaining_seconds": 64014, "completion_at": 1790688000000, "incomplete": false, "eligible_printer_count": 2 }
 ```
 
-- `remaining_seconds`: real telemetry (`printers.job_time_remaining`) for whatever is printing right now on this project, plus the estimated time for everything not yet started or in flight, spread across `eligible_printer_count`. `null` if there is remaining work but no G-code in the project has `est_print_secs` set anywhere, so no estimate is possible at all. `0` once nothing remains.
-- `incomplete`: `true` if some remaining part has no `est_print_secs` on any of its G-codes, meaning `remaining_seconds` (when non-null) undercounts rather than being wrong outright.
-- `eligible_printer_count`: how many active printers have a model matching at least one of this project's G-codes. This is a coarse capacity figure, not a live schedule: it doesn't account for material/color/group eligibility or whether those printers are currently busy with something else.
+Computed by a simulation of the whole farm (`server/project-eta.js` `simulateFarm`), replaying what the scheduler would do from now on, one plate at a time:
 
-This is deliberately a rough estimate, not a scheduling simulation. See `server/project-eta.js`. The Dashboard's Active Projects panel includes the same numbers per project as `estimated_remaining_secs` / `estimated_remaining_incomplete` in `GET /api/dashboard` (see below), computed by the same shared function.
+- **Printers:** every active printer. One printing now is free when its print ends (`printers.job_time_remaining`); an idle, unheld one is free now; one held for sign-off is free once an operator is on shift. OFFLINE, ERROR, and UNKNOWN printers take no work.
+- **Queue:** open parts of active projects in the scheduler's order (priority override first, then `queue_order`), with the same model, group, and exact material/color eligibility (the optional color tolerance is not modeled) and the same work-conserving printer caps. So another project's work ahead in the queue delays this one.
+- **Plates:** each dispatch prints one whole plate of the G-code for that printer's model (`parts_per_plate` parts in `est_print_secs`); remaining plates come from `target_qty - completed_qty -` what is already printing.
+- **Operators:** every print finishes held, so a printer that finishes only takes its next plate at the next moment an operator is on shift (`operator_hours_start` / `operator_hours_end` / `operator_days`, server local time; unset means always staffed). Printers with `auto_advance` do not wait.
+
+Fields:
+- `remaining_seconds`: until the project's last plate finishes printing. `0` when nothing is left; `null` when there is work left but none of it can be estimated.
+- `completion_at`: that moment as epoch milliseconds, or `null`.
+- `incomplete`: `true` when the estimate is a lower bound: a G-code without `est_print_secs`, a part no current printer can take, or the simulation's safety limit (20000 plates) reached.
+- `eligible_printer_count`: active printers whose model matches one of this project's G-codes (informational).
+
+The Dashboard's Active Projects panel includes the same numbers per project in `GET /api/dashboard` (`estimated_remaining_secs`, `estimated_completion_at`, `estimated_remaining_incomplete`), from one shared simulation per request.
 
 ### `POST /api/projects`
 
 Required: `name`. Optional: `description`.
 
 Returns `201` with created project (`status` defaults to `"draft"`).
+
+Records the signed-in user as `created_by_user_id`/`created_by_name` on the new project (returned in the `201` body).
+
+### `PUT /api/projects/:id/priority-override`
+
+Operator/admin only (`403` for an uploader). Body `{ "enabled": true }` or `{ "enabled": false }` (`400` if not a boolean, `404` if the project does not exist). Sets `projects.priority_override`: the scheduler dispatches overridden work ahead of the normal queue order (either `queue_order`) and exempts it from the printer caps; see Dispatch order under Scheduler. Setting it triggers a sweep for idle printers. Returns the updated row. The general `PUT /api/projects/:id` never changes this flag.
+
+```json
+{ "enabled": true }
+```
 
 ### `PUT /api/projects/:id`
 
@@ -599,6 +624,16 @@ If no printer has the exact required color and the `color_tolerance` setting is 
 Required: `project_id`, `name`, `target_qty`.
 
 A new part always starts `open` with `completed_qty: 0`. If the parent project's status is `completed`, it's reactivated to `active` immediately (same as `POST /api/projects/:id/reactivate`) without a separate manual reactivate step. A scheduler sweep also runs at this point, but it can't dispatch the new part itself yet: the scheduler's candidate query requires a matching G-code, and a brand-new part has none. The part becomes an actual dispatch candidate once G-code is uploaded for it (see `POST /api/gcodes/upload`, which triggers its own sweep).
+
+Records the signed-in user as `created_by_user_id`/`created_by_name` on the new part (returned in the `201` body and on `GET /api/parts`).
+
+### `PUT /api/parts/:id/priority-override`
+
+Operator/admin only (`403` for an uploader). Body `{ "enabled": true }` or `{ "enabled": false }` (`400` if not a boolean, `404` if the part does not exist). Sets `parts.priority_override`: the scheduler dispatches overridden work ahead of the normal queue order (either `queue_order`) and exempts it from the printer caps; see Dispatch order under Scheduler. Setting it triggers a sweep for idle printers. Returns the updated row. The general `PUT /api/parts/:id` never changes this flag.
+
+```json
+{ "enabled": true }
+```
 
 ### `PUT /api/parts/:id`
 
@@ -680,8 +715,8 @@ Upload a G-code file and create a DB record. `Content-Type: multipart/form-data`
 - `part_id` (required)
 - `parts_per_plate` (required)
 - `printer_model` (required) — must be a registered model ID
-- `est_print_secs` (optional) — per-plate print time in seconds
-- `material_grams` (optional) — per-plate material weight in grams
+- `est_print_secs` (optional): per-plate print time in seconds. Used only when the file's own header has no print time (see below)
+- `material_grams` (optional): per-plate material weight in grams. Used only when the file's own header has no filament weight
 - `ams_slot` (optional) — Bambu only
 - `allowed_groups` (optional): JSON array string e.g. `'["Rack A","Rack B"]'`; restricts dispatch to printers in one of these groups. Omitted or empty means unrestricted at the G-code level (falls back to the project's `allowed_groups`, if any; see `PUT /api/projects/:id/groups`)
 - `required_material` / `required_color` (optional): overrides the project's defaults for this G-code specifically
@@ -689,6 +724,10 @@ Upload a G-code file and create a DB record. `Content-Type: multipart/form-data`
 Returns `201` with created G-code record. Returns `409` if a G-code for this `(part_id, printer_model)` combination already exists.
 
 A part only becomes a real dispatch candidate once it has at least one matching, *approved* G-code (the scheduler's candidate query joins on `gcodes` and checks `approved = 1`). The created record's `approved` field is `0`, not the usual `1`, if the uploading account (`req.user`) has `requires_print_approval` set; see [docs/auth.md](auth.md)'s Print approval section and `POST /api/gcodes/:id/approve` below. A successful upload triggers a scheduler sweep immediately regardless, so an idle printer can pick up the part right away instead of waiting for a manual dispatch or the next printer status transition; an unapproved G-code just won't be a candidate that sweep finds anything for yet.
+
+Records the uploading user as `uploaded_by_user_id`/`uploaded_by_name` on the new G-code (returned in the `201` body and on `GET /api/gcodes`).
+
+**Print stats from the file header:** `est_print_secs`, `material_grams`, and `material_type` are read from the uploaded file's own slicer metadata (`server/gcode-metadata.js` `readPrintStats`) and take precedence over the form fields above, which stay as the fallback for a file that does not say. Supported: PrusaSlicer (`.gcode` and `.bgcode`: `estimated printing time (normal mode)`, `total filament used [g]` or the summed `filament used [g]`, `filament_type`), OrcaSlicer (same keys, or with a Bambu profile `total estimated time:` and `total filament weight [g] :`; also inside a sliced `.3mf`), and ideaMaker (`;Print Time:` seconds, grams computed from `;Material#N Used:` length, `;Filament Diameter #N:` and `;Filament Density #N:`, and `;Filament Type #N:`). Rules follow Moonraker's metadata parser and the slicers' own writer code. `material_type` is display only: it is never copied into `required_material`. The slicer upload endpoint records the same three fields.
 
 ### `PUT /api/gcodes/:id`
 
@@ -738,7 +777,22 @@ Historical jobs (`finished`, `failed`, `cancelled`) are retained with their `gco
 
 Returns jobs with part/project/printer names joined. Supports query params: `?printer_id=N`, `?part_id=N`, `?project_id=N`, `?status=printing`.
 
-Each job includes: `part_name`, `project_id`, `project_name`, `printer_name`, `printer_model`, `printer_is_held`, `printer_status`.
+Each job includes: `part_name`, `project_id`, `project_name`, `printer_name`, `printer_model`, `printer_is_held`, `printer_status`, `part_owner_user_id`, `part_owner_name`, `gcode_uploaded_by_user_id`, `gcode_uploaded_by_name`.
+
+The owner fields are joined from the job's part (`parts.created_by_*`) and G-code (`gcodes.uploaded_by_*`); any of them is `null` for rows created before user tracking, and the uploader fields are `null` if the job's G-code row no longer exists.
+
+```json
+{
+  "id": 42,
+  "status": "printing",
+  "part_name": "Clip",
+  "project_name": "Brackets",
+  "part_owner_user_id": 3,
+  "part_owner_name": "Alice",
+  "gcode_uploaded_by_user_id": 5,
+  "gcode_uploaded_by_name": "Bob"
+}
+```
 
 Job statuses: `uploading` | `printing` | `queued` | `finished` | `failed` | `cancelled`.
 
@@ -754,6 +808,46 @@ Cancels a job. Returns `409` if status is not `queued` (only queued jobs can be 
 
 ---
 
+## Slicer upload (OctoPrint and Moonraker compatible)
+
+`server/routes/slicer-upload.js`. One base URL per printer group, outside `/api`:
+
+```
+http://<farm-host>:3000/slicer/<group name, URL-encoded>
+```
+
+PrusaSlicer and OrcaSlicer upload to it as a physical printer: host type **OctoPrint** (PrusaSlicer) or **Octo/Klipper** or **Moonraker** (OrcaSlicer), with the base URL as the hostname and a farm API key (Account > API Keys) as the API key. Implemented from the slicers' own client code (PrusaSlicer 2.9.0 `src/slic3r/Utils/OctoPrint.cpp`, OrcaSlicer `src/slic3r/Utils/OctoPrint.cpp` and `Moonraker.cpp`), not yet validated with a real slicer.
+
+**Auth:** `X-Api-Key: <farm API key>` (what both slicers send) or `Authorization: Bearer <key>`. `401` with no or an invalid key, `403` for an account pending approval. **Group:** must exist in `printer_groups`, else `404`.
+
+| Method and path (under the base URL) | Emulates | Response |
+|---|---|---|
+| `GET /api/version` | OctoPrint connection test | `{ "api": "0.1", "server": "1.10.0", "text": "OctoPrint 1.10.0 (Print Farm Manager)" }` (PrusaSlicer requires `api` and a `text` starting with `OctoPrint`) |
+| `GET /api/server` | OctoPrint | `{ "version": "1.10.0", "safemode": null }` |
+| `POST /api/files/local` | OctoPrint upload | multipart `file` (required), `print`, `path`, `select` (accepted, see below). `201`, OctoPrint's upload response shape |
+| `GET /server/info` | Moonraker connection test | `{ "result": { "klippy_state": "ready", ... } }` |
+| `GET /server/files/roots` | Moonraker | `{ "result": [{ "name": "gcodes", "path": "/gcodes", "permissions": "rw" }] }` |
+| `POST /server/files/upload` | Moonraker upload | multipart `file`, `root`, `plateindex` (accepted). `201`, `{ "result": { "item": { "path": "<name>", "root": "gcodes" }, "print_started": false, "print_queued": true, ... } }` |
+| `POST /printer/print/start` | Moonraker start | `{ "result": "ok" }`: a no-op, the upload already queued the print |
+
+**What an upload does:** it never goes straight to a printer. In one transaction it creates (on first use) the uploader's own active project `Uploads: <user name>`, a Part named after the file (one plate: `target_qty` = parts per plate, read from a `4x Name` filename prefix, else 1), and a G-code restricted to this group (`allowed_groups = ["<group>"]`), attributed to the uploader, `approved = 0` if the account has `requires_print_approval`. Then it sweeps for idle printers. "Upload" and "Upload and print" behave the same: the scheduler decides when it runs (queue order, caps). A `completed` uploads project is reopened, like `POST /api/parts`.
+
+**Printer model:** read from the file's own `printer_model` metadata (`server/gcode-metadata.js`: `.gcode` comment lines, `.bgcode` metadata blocks, or a sliced `.3mf`'s plate G-code) and matched to `printer_models` by normalized id or label ("MK4S" = `mk4s`, "COREONE" = "Core One", "Bambu Lab X1 Carbon" contains "X1 Carbon"). If the file has none, the group's model is used when every active printer in the group is the same model.
+
+**Errors:** `400` if the model cannot be determined in a mixed group, if the file was sliced for a model the group has no printers of, or if the group has no active printers and the file names no model; `415` for anything but `.gcode`/`.gco`/`.g`/`.bgcode`/`.3mf`. A rejected upload leaves no file or row behind. The stored filename is reduced to a safe basename.
+
+```json
+{
+  "files": { "local": { "name": "4x Bracket.gcode", "path": "4x Bracket.gcode", "origin": "local", "refs": { "resource": "http://farm:3000/slicer/Rack%20A/api/files/local/4x%20Bracket.gcode" } } },
+  "done": true,
+  "effectiveSelect": false,
+  "effectivePrint": false,
+  "farm_gcode_id": 42
+}
+```
+
+---
+
 ## Scheduler
 
 ### `POST /api/scheduler/dispatch`
@@ -765,6 +859,15 @@ Triggers an immediate dispatch sweep — queries all currently idle, non-held pr
 ```
 
 Called by the Projects UI when a project is activated or resumed.
+
+### Dispatch order
+
+When a printer is free, the scheduler (`server/scheduler.js` `_reserveCandidate`) walks the eligible parts (open part, active project, approved G-code for this printer's model, group/material/color match) in queue order and takes the first one that still needs prints. Work with a priority override (`parts.priority_override` or its project's, set by an operator or admin) always comes first and is not limited by the caps below; within each group:
+
+- `queue_order = "priority"` (default): `projects.priority`, then `projects.created_at`, then `parts.sort_order`, then `parts.created_at`. This is the drag order on the Projects page.
+- `queue_order = "fifo"`: `gcodes.created_at` of the part's G-code for this printer's model, oldest first. A duplicated project's G-codes count from when they were duplicated.
+
+With `max_printers_per_part` or `max_printers_per_project` set, a candidate whose part or project already has that many jobs `uploading`/`printing` is skipped in favor of the next eligible one, before any job row (dispatch lock) is written. Only if every eligible candidate is capped does the scheduler take a capped one anyway, so a cap never idles a printer. `GET /api/parts/:id/dispatch-status` adds a note (not a blocker) when a part or its project is at its cap.
 
 ---
 
@@ -811,8 +914,13 @@ Body: `{ "value": "..." }`. Allowed keys:
 | `upload_retry_window_min` | integer 1-180 | How many minutes the scheduler keeps retrying a failing upload on later sweeps (roughly every 15s, tied to the poller's cycle) before finally holding the printer for operator confirmation. Default `15`. See `jobs.upload_first_failed_at` in [docs/database.md](database.md). |
 | `require_uploader_approval` | `"0"` or `"1"` | Admin-only. Off by default. Whether a new `uploader` account auto-provisioned via OIDC must be approved (`POST /api/users/:id/approve`) before it can sign in; see [docs/auth.md](auth.md)'s Account approval section. |
 | `update_repo` | must look like `owner/repo` | Admin-only. GitHub repo the Software Update section (Settings page) checks the running build against, e.g. `maevebaksa/print-farm-manager`. See the Update section below and [docs/deployment.md](deployment.md). |
+| `queue_order` | `"priority"` or `"fifo"` | Admin-only. Which waiting print a free printer takes next. `priority` (the default when unset): project priority, then part `sort_order`. `fifo`: first in, first out by the matching G-code's upload time (`gcodes.created_at`); project and part order are ignored. See the Scheduler section below. |
+| `max_printers_per_part` | integer 0-1000 | Admin-only. `0` (default) = unlimited. How many printers one part may have uploading or printing while other eligible work is waiting. Work-conserving: never leaves a printer idle. |
+| `max_printers_per_project` | integer 0-1000 | Admin-only. Same as above, counted across all of a project's parts. |
+| `operator_hours_start` / `operator_hours_end` | `HH:MM` (24-hour) or `"off"` | Admin-only. The operator shift used by the completion estimates (`GET /api/projects/:id/eta`): a printer that finishes outside it waits for the next shift. An end before the start is an overnight shift. Either one `"off"` (or unset) means always staffed. Server local time. |
+| `operator_days` | comma-separated `0`-`6` (0 = Sunday) | Admin-only. Days the shift runs; default every day. |
 
-Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, or `update_repo`.
+Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, `update_repo`, `queue_order`, `max_printers_per_part`, `max_printers_per_project`, `operator_hours_start`, `operator_hours_end`, or `operator_days`.
 
 ---
 
@@ -867,7 +975,7 @@ Single endpoint that returns all data required by the TV dashboard in one call. 
 - `elapsed_secs` — total wall-clock print time in seconds: sum of `finished_at − started_at` for all `finished` jobs in the project, plus `now − started_at` for any currently `printing` job.
 - `material_used_grams` — total material consumed in grams: sum of `gcode.material_grams / gcode.parts_per_plate * job.parts_per_plate` across all `finished` jobs that have a linked gcode with `material_grams` set. `null` if no jobs have gcode material data.
 - `model_breakdown` — array of per-printer-model summaries for all finished jobs: `{ printer_model, jobs_count, parts_printed, material_grams, elapsed_secs }`, ordered by `parts_printed DESC`.
-- `estimated_remaining_secs` / `estimated_remaining_incomplete`: same rough remaining-time estimate as `GET /api/projects/:id/eta` above (see that entry for what these mean and what they deliberately don't model), computed by the same shared `server/project-eta.js` function.
+- `estimated_remaining_secs` / `estimated_completion_at` / `estimated_remaining_incomplete`: the same farm-simulation estimate as `GET /api/projects/:id/eta` above (see that entry), from one `simulateFarm` run shared by every project in the response.
 
 `recent_activity` is the 12 most recent `finished` or `failed` jobs, each with `part_name` and `printer_name` joined in. (Retained in the payload for compatibility; the dashboard UI no longer renders this list — see [web-app.md](web-app.md).)
 
@@ -924,6 +1032,8 @@ Downloads a full farm snapshot as `farm-backup-YYYY-MM-DD.json`. Includes `print
 **Response:** `Content-Disposition: attachment` JSON file.
 
 ### `POST /api/backup/restore`
+
+`403` for the `uploader` role (a restore replaces the printer table; see Printers above).
 
 Replaces all farm data from a previously exported backup file. Clears the DB and rewrites all tables; gcode files are written to `server/gcode/`. Since `filepath` stores only the filename, no path rewriting is needed — the restored DB works correctly on any machine. Each `gcode_files` key must be a bare filename — any key that isn't (e.g. containing `/`, `\`, or equal to `.`/`..`) is rejected with `400` before anything is written to disk, since it would otherwise be able to resolve outside `server/gcode/`.
 

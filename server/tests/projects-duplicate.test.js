@@ -31,7 +31,8 @@ beforeAll(() => {
       status      TEXT DEFAULT 'draft',
       priority    INTEGER DEFAULT 0,
       created_at  INTEGER NOT NULL,
-      updated_at  INTEGER NOT NULL
+      updated_at  INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE parts (
       id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +45,8 @@ beforeAll(() => {
       print_time_seconds INTEGER,
       material_grams     REAL,
       created_at         INTEGER NOT NULL,
-      updated_at         INTEGER NOT NULL
+      updated_at         INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE gcodes (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +61,8 @@ beforeAll(() => {
       allowed_groups   TEXT,
       required_material TEXT,
       required_color   TEXT,
-      created_at       INTEGER NOT NULL
+      created_at       INTEGER NOT NULL,
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT
     );
   `);
 

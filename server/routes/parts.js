@@ -1,4 +1,5 @@
 const express = require('express');
+const { requireAnyRole } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -39,7 +40,8 @@ module.exports = (db, scheduler = null) => {
              projects.status            AS project_status,
              projects.required_material AS project_material,
              projects.required_color    AS project_color,
-             projects.allowed_groups    AS project_allowed_groups
+             projects.allowed_groups    AS project_allowed_groups,
+             projects.priority_override AS project_priority_override
       FROM parts JOIN projects ON projects.id = parts.project_id
       WHERE parts.id = ?
     `).get(req.params.id);
@@ -62,6 +64,38 @@ module.exports = (db, scheduler = null) => {
     const remaining = Math.max(0, part.target_qty - part.completed_qty);
     if (part.status === 'open' && part.active_qty >= remaining && remaining > 0) {
       blockers.push(`Jobs already printing cover the remaining ${remaining} part(s) — waiting for them to finish`);
+    }
+
+    // Printer caps (max_printers_per_part / max_printers_per_project), mirroring
+    // scheduler.js's _queuePolicy and _atPrinterCap. Not a blocker: caps are
+    // work-conserving, so a capped part still dispatches when nothing else is
+    // waiting. Keep in sync with the scheduler (see CLAUDE.md's sync-pairs table).
+    const capSetting = (key) => {
+      const n = parseInt(db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value, 10);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+    // Priority override (part or project) puts this ahead of the normal queue
+    // and exempts it from the caps, mirroring the scheduler's "overridden".
+    const overridden = part.priority_override === 1 || part.project_priority_override === 1;
+    if (overridden) {
+      notes.push('Priority override: dispatched ahead of the normal queue and not limited by the printer caps');
+    }
+    const maxPerPart = overridden ? 0 : capSetting('max_printers_per_part');
+    const maxPerProject = overridden ? 0 : capSetting('max_printers_per_project');
+    if (maxPerPart > 0) {
+      const n = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE part_id = ? AND status IN ('uploading', 'printing')").get(part.id).n;
+      if (n >= maxPerPart) {
+        notes.push(`At the per-part printer cap (${n} of ${maxPerPart} printers): other waiting work goes first, this part only gets another printer when nothing else is queued for it`);
+      }
+    }
+    if (maxPerProject > 0) {
+      const n = db.prepare(`
+        SELECT COUNT(*) AS n FROM jobs JOIN parts ON parts.id = jobs.part_id
+        WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing')
+      `).get(part.project_id).n;
+      if (n >= maxPerProject) {
+        notes.push(`Project is at the per-project printer cap (${n} of ${maxPerProject} printers): other waiting work goes first, this project only gets another printer when nothing else is queued for it`);
+      }
     }
 
     const gcodes = db.prepare('SELECT * FROM gcodes WHERE part_id = ?').all(part.id);
@@ -196,9 +230,9 @@ module.exports = (db, scheduler = null) => {
     const maxRow = db.prepare('SELECT MAX(sort_order) AS max FROM parts WHERE project_id = ?').get(project_id);
     const sortOrder = (maxRow?.max ?? -1) + 1;
     const result = db.prepare(`
-      INSERT INTO parts (project_id, name, target_qty, sort_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(project_id, name, parseInt(target_qty, 10), sortOrder, now, now);
+      INSERT INTO parts (project_id, name, target_qty, sort_order, created_at, updated_at, created_by_user_id, created_by_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(project_id, name, parseInt(target_qty, 10), sortOrder, now, now, req.user?.id ?? null, req.user?.name ?? null);
 
     // A new part always starts open and unmet, so reopen a completed project immediately
     // so it's active by the time the operator uploads G-code for the part, rather than
@@ -232,6 +266,21 @@ module.exports = (db, scheduler = null) => {
       ids.forEach((id, index) => update.run(index, now, id));
     })();
     res.json({ success: true });
+  });
+
+  // PUT /:id/priority-override: { "enabled": true|false }. Operator/admin only
+  // (the part jumps the whole queue, so an uploader cannot set it; the
+  // general PUT /:id never touches this column). Sweeps so an idle printer
+  // picks the work up now.
+  router.put('/:id/priority-override', requireAnyRole(['admin', 'operator']), (req, res) => {
+    const row = db.prepare('SELECT id FROM parts WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Part not found' });
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) is required' });
+    db.prepare('UPDATE parts SET priority_override = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), row.id);
+    console.log(`[parts] ${req.user?.name ?? 'unknown'} ${enabled ? 'set' : 'cleared'} priority override on part ${row.id}`);
+    if (enabled && scheduler) scheduler.sweepIdlePrinters();
+    res.json(db.prepare('SELECT * FROM parts WHERE id = ?').get(row.id));
   });
 
   router.put('/:id', (req, res) => {

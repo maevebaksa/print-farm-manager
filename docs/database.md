@@ -109,9 +109,16 @@ CREATE TABLE IF NOT EXISTS projects (
   required_color    TEXT,                   -- optional project-wide default; gcode-level overrides
   allowed_groups    TEXT,                   -- nullable JSON array; optional project-wide default; gcode-level overrides
   created_at        INTEGER NOT NULL,
-  updated_at        INTEGER NOT NULL
+  updated_at        INTEGER NOT NULL,
+  created_by_user_id INTEGER,               -- migration; who created it (no FK)
+  created_by_name   TEXT,                   -- migration; snapshot, not joined at read time
+  priority_override INTEGER NOT NULL DEFAULT 0 -- migration; operator/admin "print next" flag (also on parts)
 );
 ```
+
+**`priority_override`** (migration, on `projects` and `parts`, 0/1): set only through `PUT /api/{projects,parts}/:id/priority-override`, operator/admin only. Overridden work (the part's flag or its project's) is dispatched ahead of the normal queue order and exempt from the printer caps.
+
+**`created_by_user_id`/`created_by_name`** (migration, also on `parts`; `gcodes` has the equivalent `uploaded_by_user_id`/`uploaded_by_name`): which signed-in user created the project or part, or uploaded the G-code, so the Projects and Jobs pages can show whose parts everything belongs to. Same convention as `printer_events.user_id`/`user_name`: no FK, and the name is a snapshot taken at insert time, so attribution survives the user being renamed or deleted. `NULL` on rows created before this migration. Duplicating a project (`POST /api/projects/:id/duplicate`) attributes the new project and parts to whoever duplicated it, while each copied G-code keeps its original uploader. Jobs have no owner column: the scheduler creates job rows, so `GET /api/jobs` joins the owner from the job's part and G-code instead.
 
 ### parts
 
@@ -129,13 +136,16 @@ CREATE TABLE IF NOT EXISTS parts (
   print_time_seconds  INTEGER,               -- legacy; superseded by gcodes.est_print_secs
   material_grams      REAL,                  -- legacy; superseded by gcodes.material_grams
   created_at          INTEGER NOT NULL,
-  updated_at          INTEGER NOT NULL
+  updated_at          INTEGER NOT NULL,
+  created_by_user_id  INTEGER,               -- migration; see projects above
+  created_by_name     TEXT,                  -- migration; snapshot
+  priority_override   INTEGER NOT NULL DEFAULT 0 -- migration; see projects above
 );
 ```
 
 A Part is **open** while `completed_qty < target_qty`. It transitions to **closed** automatically when `completed_qty >= target_qty`. `completed_qty` is allowed to exceed `target_qty` (expected due to plate-based printing — never dispatch half a plate).
 
-`sort_order` controls dispatch priority within a project — the scheduler picks the lowest `sort_order` part first. Set via `PUT /api/parts/reorder`. New parts default to `0` and fall back to `created_at` as a tiebreaker.
+`sort_order` controls dispatch priority within a project (under the default `queue_order = "priority"`; ignored under `"fifo"`, see docs/api.md's Dispatch order): the scheduler picks the lowest `sort_order` part first. Set via `PUT /api/parts/reorder`. New parts default to `0` and fall back to `created_at` as a tiebreaker.
 
 `print_time_seconds` and `material_grams` on parts are legacy columns retained for schema compatibility but no longer written to. Time and material estimates are now stored per-gcode (see below) so they can vary by printer model.
 
@@ -158,15 +168,20 @@ CREATE TABLE IF NOT EXISTS gcodes (
   required_material  TEXT,               -- nullable; overrides the project default below when set
   required_color     TEXT,               -- nullable; overrides the project default below when set
   approved           INTEGER NOT NULL DEFAULT 1,  -- 0 if the uploader requires print approval; see below
-  created_at         INTEGER NOT NULL
+  created_at         INTEGER NOT NULL,
+  uploaded_by_user_id INTEGER,           -- migration; who uploaded it (see projects above)
+  uploaded_by_name   TEXT,               -- migration; snapshot
+  material_type      TEXT                -- migration; filament type(s) from the file's slicer header, display only
 );
 ```
+
+**`material_type`** (migration): the filament type(s) the slicer wrote in the file header (`PLA`, or `PETG, PLA` for multi-material), shown next to the G-code on the Projects page. Deliberately display only and never copied into `required_material`: that would stop the G-code dispatching to any printer that does not have the material set as loaded. `NULL` for older rows and for files without the header.
 
 **Uniqueness on `(part_id, printer_model)`** is enforced at the application layer, not as a DB constraint, so the error message shown to the operator is clear and specific.
 
 **`approved`:** 1 for every G-code except one uploaded by an account with `users.requires_print_approval = 1`, which starts at 0 (`POST /api/gcodes/upload`, see below). The scheduler's dispatch candidate query and `GET /api/parts/:id/dispatch-status` both check `approved = 1`: an unapproved G-code is simply never a dispatch candidate, the same mechanism as one with no matching printer, not a new hold/job state. `POST /api/gcodes/:id/approve` (admin-or-operator) clears it back to 1.
 
-`est_print_secs` and `material_grams` are **per-plate** values (i.e., covering all parts on one plate, not one part). They are auto-populated from the filename on upload when the Bambu-style naming convention is detected, and can be edited later via `PUT /api/gcodes/:id`. Since each gcode belongs to one `printer_model`, the stats system can break down elapsed time and material used by model across a project's completed jobs.
+`est_print_secs` and `material_grams` are **per-plate** values (i.e., covering all parts on one plate, not one part). They are read on upload from the file's own slicer header (PrusaSlicer, OrcaSlicer, ideaMaker; `server/gcode-metadata.js`), falling back to what the upload form sent (auto-populated from the filename when the Bambu-style naming convention is detected), and can be edited later via `PUT /api/gcodes/:id`. Since each gcode belongs to one `printer_model`, the stats system can break down elapsed time and material used by model across a project's completed jobs.
 
 **Targeting cascade (`allowed_groups`, `required_material`, `required_color`):** all three follow the same gcode-overrides-project pattern. The scheduler's dispatch candidate query and the `GET /api/parts/:id/dispatch-status` diagnostic both evaluate `COALESCE(gcodes.X, projects.X)`: a value set on the gcode always wins; otherwise the project's default (if any) applies; if neither is set, the field is unrestricted. `allowed_groups` differs from the material/color pair only in shape: it is a JSON array (a gcode or project can allow multiple groups), matched with `EXISTS (SELECT 1 FROM json_each(...) WHERE value = ?)` against the candidate printer's `group_name`, instead of a scalar equality check.
 

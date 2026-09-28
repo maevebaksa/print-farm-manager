@@ -28,6 +28,16 @@ const COMPRESSION_DEFLATE = 1;
 // A thumbnail block using either is skipped (not guessed at, not mis-decoded).
 const THUMBNAIL_FORMAT_MIME = { 0: 'image/png', 1: 'image/jpeg' }; // 2 = QOI: no browser support, skipped
 
+// bgcode's Deflate is zlib-wrapped: libbgcode (src/LibBGCode/binarize/binarize.cpp)
+// compresses with deflateInit and decompresses with inflateInit, not the raw
+// variants. A stream without a valid zlib header (CMF method 8, header check
+// divisible by 31) is still tried as raw Deflate, for robustness against
+// writers that got this wrong.
+function inflateBgcodeDeflate(raw) {
+  const hasZlibHeader = raw.length >= 2 && (raw[0] & 0x0f) === 8 && ((raw[0] << 8) | raw[1]) % 31 === 0;
+  return hasZlibHeader ? zlib.inflateSync(raw) : zlib.inflateRawSync(raw);
+}
+
 function fromBgcode(buf) {
   if (buf.length < 10 || buf.toString('ascii', 0, 4) !== BGCODE_MAGIC) return null;
   const checksumType = buf.readUInt16LE(8);
@@ -69,7 +79,7 @@ function fromBgcode(buf) {
       if (mimeType && (compression === COMPRESSION_NONE || compression === COMPRESSION_DEFLATE)) {
         try {
           const raw = buf.subarray(dataOffset, dataOffset + dataSize);
-          const data = compression === COMPRESSION_DEFLATE ? zlib.inflateRawSync(raw) : Buffer.from(raw);
+          const data = compression === COMPRESSION_DEFLATE ? inflateBgcodeDeflate(raw) : Buffer.from(raw);
           const area = width * height;
           if (!best || area > best.area) best = { mimeType, data, area };
         } catch (_) { /* corrupt block: skip it, keep scanning for another */ }
@@ -166,4 +176,4 @@ function extractThumbnail(filename, buf) {
   return null;
 }
 
-module.exports = { extractThumbnail, fromBgcode, fromThreeMf };
+module.exports = { extractThumbnail, fromBgcode, fromThreeMf, readZipEntries, readZipEntryData };

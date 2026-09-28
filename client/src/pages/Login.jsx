@@ -86,7 +86,7 @@ export default function Login({ forceLocal = false }) {
   if (!status || autoRedirecting) {
     return (
       <div style={{
-        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: '#0a0f1a', padding: 20,
       }}>
         {autoRedirecting && (
@@ -105,7 +105,7 @@ export default function Login({ forceLocal = false }) {
 
   return (
     <div style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: '#0a0f1a', padding: 20,
     }}>
       <form onSubmit={submit} style={cardStyle}>

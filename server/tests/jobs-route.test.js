@@ -20,10 +20,14 @@ beforeAll(() => {
       model TEXT, status TEXT DEFAULT 'UNKNOWN', is_held INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1, created_at INTEGER);
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, status TEXT DEFAULT 'draft',
-      created_at INTEGER, updated_at INTEGER);
+      created_at INTEGER, updated_at INTEGER,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER, name TEXT,
       target_qty INTEGER, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open',
-      created_at INTEGER, updated_at INTEGER);
+      created_at INTEGER, updated_at INTEGER,
+      created_by_user_id INTEGER, created_by_name TEXT, priority_override INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER, filename TEXT,
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT);
     CREATE TABLE jobs (id INTEGER PRIMARY KEY, part_id INTEGER, printer_id INTEGER,
       gcode_id INTEGER, parts_per_plate INTEGER, status TEXT DEFAULT 'queued',
       started_at INTEGER, finished_at INTEGER, created_at INTEGER);
@@ -37,13 +41,15 @@ beforeAll(() => {
 
   db.prepare(`INSERT INTO projects (id, name, status, created_at, updated_at)
     VALUES (1, 'Proj', 'active', ?, ?)`).run(now, now);
-  db.prepare(`INSERT INTO parts (id, project_id, name, target_qty, created_at, updated_at)
-    VALUES (1, 1, 'Part', 10, ?, ?)`).run(now, now);
+  db.prepare(`INSERT INTO parts (id, project_id, name, target_qty, created_at, updated_at, created_by_user_id, created_by_name)
+    VALUES (1, 1, 'Part', 10, ?, ?, 5, 'Alice')`).run(now, now);
+  db.prepare(`INSERT INTO gcodes (id, part_id, filename, uploaded_by_user_id, uploaded_by_name)
+    VALUES (1, 1, 'part.gcode', 6, 'Bob')`).run();
 
   // Job 1: on the held-but-IDLE printer — a missed-finish hold. The job row
   // is still 'printing' because nothing in the scheduler resolved it yet.
-  db.prepare(`INSERT INTO jobs (id, part_id, printer_id, parts_per_plate, status, started_at, created_at)
-    VALUES (1, 1, 1, 4, 'printing', ?, ?)`).run(now, now);
+  db.prepare(`INSERT INTO jobs (id, part_id, printer_id, gcode_id, parts_per_plate, status, started_at, created_at)
+    VALUES (1, 1, 1, 1, 4, 'printing', ?, ?)`).run(now, now);
 
   // Job 2: on the genuinely-printing, unheld printer.
   db.prepare(`INSERT INTO jobs (id, part_id, printer_id, parts_per_plate, status, started_at, created_at)
@@ -55,6 +61,23 @@ beforeAll(() => {
 });
 
 describe('GET /api/jobs', () => {
+  test('includes the part owner and G-code uploader for each job', async () => {
+    const res = await request(app).get('/api/jobs');
+    expect(res.status).toBe(200);
+    expect(res.body.find(j => j.id === 1)).toMatchObject({
+      part_owner_user_id: 5,
+      part_owner_name: 'Alice',
+      gcode_uploaded_by_user_id: 6,
+      gcode_uploaded_by_name: 'Bob',
+    });
+    // Job 2 has no gcode_id: the LEFT JOIN still returns the job, uploader null.
+    expect(res.body.find(j => j.id === 2)).toMatchObject({
+      part_owner_name: 'Alice',
+      gcode_uploaded_by_name: null,
+    });
+  });
+
+
   test('joins printer_is_held and printer_status for every job', async () => {
     const res = await request(app).get('/api/jobs');
     expect(res.status).toBe(200);
