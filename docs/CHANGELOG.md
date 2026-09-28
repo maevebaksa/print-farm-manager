@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-09-28: fix Fleet's Bulk Edit Color dropdown, empty since the Printers merge
+
+Reported: the Bulk Edit bar's Color dropdown never showed any actual colors, just the "Color…" placeholder, so bulk color assignment was unusable.
+
+`filamentColors` state existed and was correctly filtered against (`c.type_name === bulkMaterial`), but nothing ever populated it: Fleet.jsx already had its own `/api/filaments/colors` fetch predating the Printers merge, used only to build `colorHexMap` (for the swatch next to a printer's loaded color), and when Bulk Edit was ported over from the old Printers.jsx (which had its own separate, correct `setFilamentColors` call), that fetch was reused instead of also wiring up the setter the ported UI needed. Broken since the merge itself, not something introduced since.
+
+### Changes
+- `client/src/pages/Fleet.jsx`: the existing `/api/filaments/colors` fetch now also calls `setFilamentColors`, alongside building `colorHexMap` as before.
+
+No automated test: this repo has no client-side test framework. Verified `npm run build` succeeds; could not exercise the real page in a live browser, same `better-sqlite3` limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-28: scale the whole app 120%
 
 Requested: make the overall UI a bit larger, specifically 120% scale.

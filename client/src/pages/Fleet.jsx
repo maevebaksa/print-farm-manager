@@ -460,7 +460,7 @@ export default function Fleet() {
 
   useEffect(() => {
     fetch('/api/models').then(r => r.json()).then(setAllModels).catch(() => {});
-    fetch('/api/filaments/colors').then(r => r.json()).then(colors => setColorHexMap(buildColorHexMap(colors))).catch(() => {});
+    fetch('/api/filaments/colors').then(r => r.json()).then(colors => { setColorHexMap(buildColorHexMap(colors)); setFilamentColors(colors); }).catch(() => {});
     fetch('/api/filaments/types').then(r => r.json()).then(setFilamentTypes).catch(() => {});
     fetch('/api/groups').then(r => r.json()).then(groups => setRegistryGroups(groups.map(g => g.name))).catch(() => {});
   }, []);
