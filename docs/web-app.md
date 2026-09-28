@@ -46,7 +46,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/components/GcodeThumbnail.jsx` | Renders a sliced file's embedded plate thumbnail from `GET /api/gcodes/:id/thumbnail`; renders nothing if there is no `gcodeId` or the image fails to load (file has none embedded) |
 | `server/project-eta.js` | `estimateProjectRemaining(db, projectId)`: the rough remaining-time estimate shared by `GET /api/projects/:id/eta` and `GET /api/dashboard`'s `estimated_remaining_secs` per project |
 | `client/src/components/PollTimer.jsx` | Shared circular refresh-countdown ring used by Fleet and Dashboard |
-| `client/index.html` | HTML shell with dark background baseline CSS |
+| `client/index.html` | HTML shell with dark background baseline CSS; `body { zoom: 1.2 }` scales the whole app uniformly (see Layout below) |
 | `client/vite.config.js` | Vite config — port 5173, `/api` proxy to 3000 |
 
 ## Layout
@@ -75,7 +75,9 @@ The React single-page application served by Vite. In development, Vite runs on p
 
 `Users` appears in the nav for `admin` and `operator` accounts (an operator only sees the Pending Approval section there, see the Users Page section and [docs/auth.md](auth.md)); the route itself is conditionally registered on `user.role`, so an `uploader` navigating to `/users` directly gets no match rather than the Users UI.
 
-**Responsive breakpoint at 600px:** the sidebar is hidden and replaced by a horizontal top nav bar (with the same Sign out button). All page content is still fully accessible on mobile.
+**Responsive breakpoint at 600px:** the sidebar is hidden and replaced by a horizontal top nav bar (with the same Sign out button). All page content is still fully accessible on mobile. Measured against the CSS layout viewport, which the global `zoom: 1.2` below shrinks in CSS-pixel terms at a given physical window size (the same effect a browser's own zoom has on media queries), so the breakpoint now triggers at a somewhat wider physical window than it would unzoomed.
+
+**Whole-app scale:** `client/index.html` sets `body { zoom: 1.2 }`, scaling every page uniformly (fonts, padding, borders) without touching the hardcoded px values in every page's inline styles (this codebase has no CSS variables or rem-based sizing to hook a proportional scale into instead). `zoom`, not `transform: scale()`, so the layout actually reflows at the scaled size rather than visually stretching a 100%-sized layout and clipping or leaving gaps.
 
 Navigation uses `react-router-dom` `<NavLink>` — active links are highlighted in blue (`#1e40af`).
 

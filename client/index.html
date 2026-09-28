@@ -9,7 +9,14 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; }
+      /* Scales the whole app uniformly (fonts, padding, borders, everything) without
+         touching the hundreds of hardcoded px values across every page's inline
+         styles: this codebase has no CSS variables or rem-based sizing to hook a
+         root font-size scale into instead (see CLAUDE.md's client conventions).
+         zoom, not transform: scale(), so the layout reflows at the scaled size
+         (100vh/100vw and fixed-position elements stay correct) instead of just
+         visually stretching a 100%-sized layout and clipping/leaving gaps. */
+      body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #0a0f1a; color: #e2e8f0; zoom: 1.2; }
     </style>
   </head>
   <body>

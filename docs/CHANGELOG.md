@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-09-28: scale the whole app 120%
+
+Requested: make the overall UI a bit larger, specifically 120% scale.
+
+`client/index.html` now sets `body { zoom: 1.2 }`. This codebase has no CSS variables or rem-based sizing (every page uses hardcoded px in inline `style={{}}` objects, per this repo's client conventions), so there was no proportional scale to hook into short of editing every page; `zoom` on `body` scales everything uniformly in one place instead. Chose `zoom` over `transform: scale()` specifically because it actually reflows layout at the scaled size (100vh/100vw, fixed-position elements) rather than visually stretching a 100%-sized layout and clipping or leaving gaps around it.
+
+Side effect worth knowing: the 600px sidebar-to-topbar breakpoint (App.jsx) is measured against the CSS layout viewport, which zoom shrinks in CSS-pixel terms at a given physical window size, the same way a browser's own zoom affects media queries. So the mobile layout now kicks in at a somewhat wider physical window than before, not a bug, just an implication of scaling everything up.
+
+### Changes
+- `client/index.html`: `body` gains `zoom: 1.2`.
+- `docs/web-app.md`: documented the scale and its effect on the responsive breakpoint.
+
+No automated test: this repo has no client-side test framework, and this is a pure CSS change. Verified `npm run build` succeeds; could not exercise the real page in a live browser, this machine's `better-sqlite3` native binding fails to load, so the server cannot start locally, the same limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-28: fix command palette sorting "mini10" before "mini9"
 
 Reported: printer search results in the command palette (Cmd/Ctrl+K) sorted "mini10" ahead of "mini9".
