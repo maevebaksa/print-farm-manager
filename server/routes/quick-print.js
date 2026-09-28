@@ -1,6 +1,6 @@
 // Quick Print: upload one sliced file from the app and print it once, without
 // building a project first. POST /api/quick-print (multipart: file, optional
-// printer_id, optional parts_per_plate).
+// printer_id, optional printer_model, optional priority, optional parts_per_plate).
 //
 // It goes through the same path as a slicer upload (server/routes/slicer-upload.js):
 // one Part (target = one plate) in the uploader's own "Uploads: <name>" project,
@@ -8,10 +8,15 @@
 // here touches parts.completed_qty: the part is credited through the normal
 // Set Ready flow after a real print, exactly like every other part.
 //
-// With printer_id the print is pinned to that printer (gcodes.target_printer_id);
-// without it, any eligible printer of the file's model takes it. The uploader's
-// user group is enforced: can_quick_print, its allowed printers, plate cap, and
-// requires_approval (an unapproved quick print waits for an operator).
+// Anyone may leave the printer unset (auto-detected from the file's own header,
+// or the farm's only active model) or narrow it to a printer type via
+// printer_model ("any Mini", still shares across every printer of that type).
+// Pinning to one exact printer_id, or marking priority (jumps the queue, same
+// as PUT /api/parts/:id/priority-override), is operator/admin only: a specific
+// machine or the front of the line can starve other users' work, so a plain
+// uploader cannot claim either. The uploader's user group is still enforced:
+// can_quick_print, its allowed printers, and requires_approval (an unapproved
+// quick print waits for an operator).
 
 const express = require('express');
 const multer = require('multer');
@@ -55,23 +60,26 @@ module.exports = (db, scheduler = null) => {
       }
 
       const perms = req.user.permissions;
+      // Picking one exact machine, or marking a quick print priority, both let
+      // one person jump ahead of or monopolize shared hardware, reserved for
+      // operator/admin. Anyone may still narrow to a printer type ("any Mini"):
+      // that's just being explicit about what the auto-detected model would
+      // pick anyway, and still shares fairly across every printer of that type.
+      const isOperatorPlus = req.user.role === 'admin' || req.user.role === 'operator';
       const partsPerPlate = req.body.parts_per_plate ? parseInt(req.body.parts_per_plate, 10) : 1;
       if (!Number.isInteger(partsPerPlate) || partsPerPlate < 1 || partsPerPlate > 9999) {
         return reject(400, 'parts_per_plate must be a positive whole number');
       }
-      if (perms && perms.max_plates_per_upload && partsPerPlate > perms.max_plates_per_upload) {
-        return reject(403, `Your user group allows at most ${perms.max_plates_per_upload} parts per plate per upload`);
-      }
-
       const models = db.prepare('SELECT model_id, label FROM printer_models').all();
       const buf = fs.readFileSync(req.file.path);
       const headerModelName = readPrinterModelName(displayName, buf);
       const headerModel = headerModelName ? matchRegistryModel(headerModelName, models) : null;
 
-      // Target printer, if the operator picked one.
+      // Target printer, if an operator/admin picked one.
       let targetPrinter = null;
       const rawPrinterId = req.body.printer_id;
       if (rawPrinterId !== undefined && rawPrinterId !== '' && rawPrinterId !== 'any') {
+        if (!isOperatorPlus) return reject(403, 'Only an operator or admin may target a specific printer');
         targetPrinter = db.prepare('SELECT * FROM printers WHERE id = ?').get(parseInt(rawPrinterId, 10));
         if (!targetPrinter) return reject(404, 'Printer not found');
         if (!targetPrinter.is_active) return reject(409, `${targetPrinter.name} is decommissioned`);
@@ -80,14 +88,33 @@ module.exports = (db, scheduler = null) => {
         }
       }
 
-      // Model: the chosen printer's, else the file's own header, else the only
-      // active model on the farm. Never guessed beyond that.
+      // Requested printer type ("any Mini"), if picked and no specific printer
+      // was. Anyone may narrow to a type; it still queues for any eligible
+      // printer of that model, same as the auto-detected path below.
+      let requestedModel = null;
+      const rawModel = req.body.printer_model;
+      if (!targetPrinter && rawModel !== undefined && rawModel !== '' && rawModel !== 'any') {
+        requestedModel = rawModel;
+      }
+
+      // Model: the chosen printer's, else the chosen type, else the file's own
+      // header, else the only active model on the farm. Never guessed beyond that.
       let printerModel;
       if (targetPrinter) {
         if (headerModel && headerModel !== targetPrinter.model) {
           return reject(400, `This file was sliced for ${headerModelName}, but ${targetPrinter.name} is a ${targetPrinter.model}`);
         }
         printerModel = targetPrinter.model;
+      } else if (requestedModel) {
+        if (headerModel && headerModel !== requestedModel) {
+          return reject(400, `This file was sliced for ${headerModelName}, not ${requestedModel}`);
+        }
+        const usable = db.prepare('SELECT id, group_name FROM printers WHERE model = ? AND is_active = 1').all(requestedModel);
+        if (usable.length === 0) return reject(400, `No active ${requestedModel} printers on the farm`);
+        if (!usable.some(p => auth.printerAllowed(perms, p))) {
+          return reject(403, `Your user group is not allowed to print on any ${requestedModel} printer`);
+        }
+        printerModel = requestedModel;
       } else {
         const farmModels = db.prepare('SELECT DISTINCT model FROM printers WHERE is_active = 1').all().map(r => r.model);
         if (headerModel) {
@@ -96,13 +123,22 @@ module.exports = (db, scheduler = null) => {
         } else if (farmModels.length === 1) {
           printerModel = farmModels[0];
         } else {
-          return reject(400, 'Could not tell which printer model this file is for: pick a printer, or slice with a printer profile that names the model');
+          return reject(400, 'Could not tell which printer model this file is for: pick a printer type, or slice with a printer profile that names the model');
         }
         // A restricted group needs at least one allowed printer of that model.
         const usable = db.prepare('SELECT id, group_name FROM printers WHERE model = ? AND is_active = 1').all(printerModel);
         if (!usable.some(p => auth.printerAllowed(perms, p))) {
           return reject(403, `Your user group is not allowed to print on any ${printerModel} printer`);
         }
+      }
+
+      // Priority: jumps this quick print ahead of the normal queue order, same
+      // as PUT /api/parts/:id/priority-override. Operator/admin only, same as
+      // that route.
+      const rawPriority = req.body.priority;
+      const wantsPriority = rawPriority === 'true' || rawPriority === true || rawPriority === '1';
+      if (wantsPriority && !isOperatorPlus) {
+        return reject(403, 'Only an operator or admin may mark a quick print as priority');
       }
 
       const stats = readPrintStats(displayName, buf);
@@ -128,9 +164,9 @@ module.exports = (db, scheduler = null) => {
 
         const maxRow = db.prepare('SELECT MAX(sort_order) AS max FROM parts WHERE project_id = ?').get(project.id);
         const partId = db.prepare(`
-          INSERT INTO parts (project_id, name, target_qty, sort_order, created_at, updated_at, created_by_user_id, created_by_name)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(project.id, stripExtension(displayName), partsPerPlate, (maxRow?.max ?? -1) + 1, now, now, user.id, user.name).lastInsertRowid;
+          INSERT INTO parts (project_id, name, target_qty, sort_order, priority_override, created_at, updated_at, created_by_user_id, created_by_name)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(project.id, stripExtension(displayName), partsPerPlate, (maxRow?.max ?? -1) + 1, wantsPriority ? 1 : 0, now, now, user.id, user.name).lastInsertRowid;
 
         const gcodeId = db.prepare(`
           INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, approved, target_printer_id,
@@ -152,6 +188,7 @@ module.exports = (db, scheduler = null) => {
         filename: displayName,
         printer_model: printerModel,
         target_printer_id: targetPrinter ? targetPrinter.id : null,
+        priority: wantsPriority,
         pending_approval: !approved,
       });
     });

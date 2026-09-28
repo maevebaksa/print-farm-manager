@@ -148,7 +148,7 @@ module.exports = (db, getScheduler = () => null) => {
         }
 
         // User-group limits: an allowed-printer list must include at least one
-        // active printer in this group, and max_plates_per_upload caps the plate size.
+        // active printer in this group.
         const perms = req.user.permissions;
         if (perms && (perms.allowed_printer_ids || perms.allowed_printer_groups)) {
           const groupPrinters = db.prepare(
@@ -157,9 +157,6 @@ module.exports = (db, getScheduler = () => null) => {
           if (!groupPrinters.some(p => auth.printerAllowed(perms, p))) {
             return reject(403, `Your user group is not allowed to print on any printer in group "${req.groupName}"`);
           }
-        }
-        if (perms && perms.max_plates_per_upload && partsPerPlateFromName(displayName) > perms.max_plates_per_upload) {
-          return reject(403, `Your user group allows at most ${perms.max_plates_per_upload} parts per plate per upload`);
         }
 
         const stats = readPrintStats(displayName, buf); // print time, grams, filament type from the header

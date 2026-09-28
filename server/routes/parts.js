@@ -41,7 +41,8 @@ module.exports = (db, scheduler = null) => {
              projects.required_material AS project_material,
              projects.required_color    AS project_color,
              projects.allowed_groups    AS project_allowed_groups,
-             projects.priority_override AS project_priority_override
+             projects.priority_override AS project_priority_override,
+             projects.max_concurrent_plates AS project_max_concurrent_plates
       FROM parts JOIN projects ON projects.id = parts.project_id
       WHERE parts.id = ?
     `).get(req.params.id);
@@ -66,35 +67,24 @@ module.exports = (db, scheduler = null) => {
       blockers.push(`Jobs already printing cover the remaining ${remaining} part(s) — waiting for them to finish`);
     }
 
-    // Printer caps (max_printers_per_part / max_printers_per_project), mirroring
-    // scheduler.js's _queuePolicy and _atPrinterCap. Not a blocker: caps are
-    // work-conserving, so a capped part still dispatches when nothing else is
-    // waiting. Keep in sync with the scheduler (see CLAUDE.md's sync-pairs table).
-    const capSetting = (key) => {
-      const n = parseInt(db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value, 10);
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    };
+    // Per-project plate cap (projects.max_concurrent_plates, set on the project
+    // itself, not an admin setting), mirroring scheduler.js's _atPrinterCap. Not
+    // a blocker: the cap is work-conserving, so a capped project still
+    // dispatches when nothing else is waiting. Keep in sync with the scheduler
+    // (see CLAUDE.md's sync-pairs table).
     // Priority override (part or project) puts this ahead of the normal queue
-    // and exempts it from the caps, mirroring the scheduler's "overridden".
+    // and exempts it from the cap, mirroring the scheduler's "overridden".
     const overridden = part.priority_override === 1 || part.project_priority_override === 1;
     if (overridden) {
-      notes.push('Priority override: dispatched ahead of the normal queue and not limited by the printer caps');
+      notes.push('Priority override: dispatched ahead of the normal queue and not limited by the plate cap');
     }
-    const maxPerPart = overridden ? 0 : capSetting('max_printers_per_part');
-    const maxPerProject = overridden ? 0 : capSetting('max_printers_per_project');
-    if (maxPerPart > 0) {
-      const n = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE part_id = ? AND status IN ('uploading', 'printing')").get(part.id).n;
-      if (n >= maxPerPart) {
-        notes.push(`At the per-part printer cap (${n} of ${maxPerPart} printers): other waiting work goes first, this part only gets another printer when nothing else is queued for it`);
-      }
-    }
-    if (maxPerProject > 0) {
+    if (!overridden && part.project_max_concurrent_plates > 0) {
       const n = db.prepare(`
         SELECT COUNT(*) AS n FROM jobs JOIN parts ON parts.id = jobs.part_id
         WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing')
       `).get(part.project_id).n;
-      if (n >= maxPerProject) {
-        notes.push(`Project is at the per-project printer cap (${n} of ${maxPerProject} printers): other waiting work goes first, this project only gets another printer when nothing else is queued for it`);
+      if (n >= part.project_max_concurrent_plates) {
+        notes.push(`Project is at its plate cap (${n} of ${part.project_max_concurrent_plates} printers): other waiting work goes first, this project only gets another printer when nothing else is queued for it`);
       }
     }
 

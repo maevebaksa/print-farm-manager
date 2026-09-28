@@ -27,7 +27,8 @@ beforeEach(() => {
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL, status TEXT DEFAULT 'active',
-      required_material TEXT, required_color TEXT, allowed_groups TEXT, priority_override INTEGER NOT NULL DEFAULT 0
+      required_material TEXT, required_color TEXT, allowed_groups TEXT, priority_override INTEGER NOT NULL DEFAULT 0,
+      max_concurrent_plates INTEGER
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,14 +70,15 @@ const now = Date.now();
 
 function seedProject(overrides = {}) {
   const stmt = db.prepare(`
-    INSERT INTO projects (name, status, required_material, required_color, allowed_groups)
-    VALUES ('Proj', ?, ?, ?, ?)
+    INSERT INTO projects (name, status, required_material, required_color, allowed_groups, max_concurrent_plates)
+    VALUES ('Proj', ?, ?, ?, ?, ?)
   `);
   const r = stmt.run(
     overrides.status ?? 'active',
     overrides.required_material ?? null,
     overrides.required_color ?? null,
     overrides.allowed_groups ?? null,
+    overrides.max_concurrent_plates ?? null,
   );
   return r.lastInsertRowid;
 }
@@ -353,43 +355,27 @@ describe('GET /api/parts/:id/dispatch-status: color tolerance', () => {
   });
 });
 
-describe('GET /api/parts/:id/dispatch-status: printer caps (mirrors scheduler _atPrinterCap)', () => {
-  function setSetting(key, value) {
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, String(value));
-  }
-
-  test('notes a part at max_printers_per_part without blocking it', async () => {
-    const partId = seedPart(seedProject(), { target_qty: 100 });
-    seedGcode(partId);
-    seedPrinter();
-    db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(partId);
-    setSetting('max_printers_per_part', 1);
-
-    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
-    expect(res.status).toBe(200);
-    expect(res.body.notes.join(' ')).toMatch(/per-part printer cap \(1 of 1/);
-    expect(res.body.dispatchable).toBe(true); // a cap is a note, never a blocker
-  });
-
-  test('notes a project at max_printers_per_project', async () => {
-    const projectId = seedProject();
+describe('GET /api/parts/:id/dispatch-status: per-project plate cap (mirrors scheduler _atPrinterCap)', () => {
+  test('notes a project at its plate cap, even for a different part of it', async () => {
+    const projectId = seedProject({ max_concurrent_plates: 1 });
     const busy = seedPart(projectId, { target_qty: 100 });
     const partId = seedPart(projectId, { target_qty: 100 });
     seedGcode(partId);
     seedPrinter();
     db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(busy);
-    setSetting('max_printers_per_project', 1);
 
     const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
-    expect(res.body.notes.join(' ')).toMatch(/per-project printer cap \(1 of 1/);
+    expect(res.status).toBe(200);
+    expect(res.body.notes.join(' ')).toMatch(/plate cap \(1 of 1/);
+    expect(res.body.dispatchable).toBe(true); // a cap is a note, never a blocker
   });
 
-  test('no cap note when caps are unset', async () => {
+  test('no cap note when the project has no cap set', async () => {
     const partId = seedPart(seedProject(), { target_qty: 100 });
     seedGcode(partId);
     seedPrinter();
     db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(partId);
     const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
-    expect(res.body.notes.join(' ')).not.toMatch(/printer cap/);
+    expect(res.body.notes.join(' ')).not.toMatch(/plate cap/);
   });
 });

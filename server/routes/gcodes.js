@@ -154,14 +154,6 @@ module.exports = (db, scheduler = null) => {
       });
     }
 
-    // User-group cap on plate size (parts_per_plate) per upload, when the uploader's
-    // group sets one. Checked before anything is stored.
-    const maxPlates = req.user.permissions?.max_plates_per_upload;
-    if (maxPlates && parseInt(parts_per_plate, 10) > maxPlates) {
-      fs.unlinkSync(req.file.path);
-      return res.status(403).json({ error: `Your user group allows at most ${maxPlates} parts per plate per upload` });
-    }
-
     // ams_slot: -1 = external spool, 0–N = AMS slot, null = not applicable (non-Bambu)
     const parsedAmsSlot = ams_slot !== undefined && ams_slot !== '' ? parseInt(ams_slot, 10) : null;
 

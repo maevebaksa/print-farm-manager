@@ -15,6 +15,7 @@ beforeEach(() => {
   db.exec(`
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL, status TEXT DEFAULT 'active',
       priority INTEGER DEFAULT 0, allowed_groups TEXT, required_material TEXT, required_color TEXT,
+      max_concurrent_plates INTEGER,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL,
       target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open', sort_order INTEGER DEFAULT 0,
@@ -35,9 +36,9 @@ beforeEach(() => {
 
 const set = (k, v) => db.prepare('INSERT OR REPLACE INTO settings VALUES (?, ?)').run(k, String(v));
 
-function project({ priority = 0, created = 1, override = 0 } = {}) {
-  return db.prepare('INSERT INTO projects (name, priority, created_at, updated_at, priority_override) VALUES (?, ?, ?, ?, ?)')
-    .run('P', priority, created, created, override).lastInsertRowid;
+function project({ priority = 0, created = 1, override = 0, maxConcurrentPlates = null } = {}) {
+  return db.prepare('INSERT INTO projects (name, priority, created_at, updated_at, priority_override, max_concurrent_plates) VALUES (?, ?, ?, ?, ?, ?)')
+    .run('P', priority, created, created, override, maxConcurrentPlates).lastInsertRowid;
 }
 function part(projectId, { target, completed = 0, status = 'open' }) {
   return db.prepare('INSERT INTO parts (project_id, name, target_qty, completed_qty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1)')
@@ -145,9 +146,8 @@ describe('queue ahead of the project', () => {
     expect(eta(b).remaining_seconds).toBe(3600);
   });
 
-  test('printer caps spread printers across projects', () => {
-    set('max_printers_per_project', 1);
-    const a = project({ priority: 0 }); gcode(part(a, { target: 2 }));
+  test('a project plate cap spreads printers across projects', () => {
+    const a = project({ priority: 0, maxConcurrentPlates: 1 }); gcode(part(a, { target: 2 }));
     const b = project({ priority: 1 }); gcode(part(b, { target: 2 }));
     printer(); printer();
     expect(eta(a).remaining_seconds).toBe(2 * 3600);

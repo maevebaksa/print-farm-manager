@@ -1,6 +1,8 @@
-// Tests for the admin queue policy (scheduler.js _queuePolicy / _atPrinterCap):
-//   queue_order = 'priority' (default) | 'fifo' (by G-code upload time)
-//   max_printers_per_part / max_printers_per_project: work-conserving caps
+// Tests for the queue policy (scheduler.js _queuePolicy / _atPrinterCap):
+//   queue_order = 'priority' (default, admin setting) | 'fifo' (by G-code upload time)
+//   projects.max_concurrent_plates: a work-conserving cap set on the project
+//   itself (not an admin setting), capping how many printers that project's
+//   own work may occupy at once.
 // The driver is mocked, so no real network I/O occurs.
 
 const path = require('path');
@@ -30,7 +32,9 @@ beforeEach(() => {
 // Project "Early" (priority 0, created first) has part E whose G-code was
 // uploaded LATE; project "Late" (priority 1) has part L whose G-code was
 // uploaded EARLY. Priority order picks E, FIFO picks L.
-function makeDb(settings = {}) {
+// caps: { <project id>: max_concurrent_plates }, applied after the two seeded
+// projects (1 = Early, 2 = Late) exist. Omitted or 0/null means no cap.
+function makeDb(settings = {}, caps = {}) {
   const db = new Database(':memory:');
   db.exec(`
     CREATE TABLE printers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, ip TEXT NOT NULL, api_key TEXT NOT NULL,
@@ -40,6 +44,7 @@ function makeDb(settings = {}) {
       material TEXT, color TEXT, updated_at INTEGER NOT NULL);
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL, status TEXT DEFAULT 'active',
       priority INTEGER DEFAULT 0, required_material TEXT, required_color TEXT, allowed_groups TEXT,
+      max_concurrent_plates INTEGER,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL,
       target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open',
@@ -66,6 +71,9 @@ function makeDb(settings = {}) {
   const gc = db.prepare("INSERT INTO gcodes (id, part_id, printer_model, filename, filepath, parts_per_plate, created_at) VALUES (?, ?, 'mk4s', ?, ?, 1, ?)");
   gc.run(1, 1, gcodeFilename, gcodeFilename, 5000); // E uploaded late
   gc.run(2, 2, gcodeFilename, gcodeFilename, 1000); // L uploaded early
+  for (const [projectId, cap] of Object.entries(caps)) {
+    db.prepare('UPDATE projects SET max_concurrent_plates = ? WHERE id = ?').run(cap || null, projectId);
+  }
   return db;
 }
 
@@ -103,36 +111,42 @@ describe('queue_order', () => {
   });
 });
 
-describe('printer caps', () => {
-  test('a part at max_printers_per_part yields to other waiting work', async () => {
-    const db = makeDb({ queue_order: 'fifo', max_printers_per_part: 1 });
+describe('per-project plate cap (max_concurrent_plates)', () => {
+  test('a project at its cap yields to other waiting work', async () => {
+    const db = makeDb({ queue_order: 'fifo' }, { 2: 1 }); // Late capped at 1
     addActiveJob(db, 2); // L (first in FIFO) already on one printer
     expect(await dispatchedPartId(db)).toBe(1);
   });
 
-  test('caps are work-conserving: a capped part still gets an otherwise idle printer', async () => {
-    const db = makeDb({ queue_order: 'fifo', max_printers_per_part: 1 });
+  test('caps are work-conserving: a capped project still gets an otherwise idle printer', async () => {
+    const db = makeDb({ queue_order: 'fifo' }, { 2: 1 });
     addActiveJob(db, 2);
     db.prepare("UPDATE projects SET status = 'paused' WHERE id = 1").run(); // nothing else waiting
     expect(await dispatchedPartId(db)).toBe(2);
   });
 
-  test('a project at max_printers_per_project yields, even for a different part of it', async () => {
-    const db = makeDb({ max_printers_per_project: 1 }); // priority order: Early first
+  test('a project at its cap yields, even for a different part of it', async () => {
+    const db = makeDb({}, { 1: 1 }); // Early capped at 1; priority order: Early first
     db.prepare("INSERT INTO parts (id, project_id, name, target_qty, created_at, updated_at) VALUES (3, 1, 'E2', 100, 300, 300)").run();
     db.prepare("INSERT INTO gcodes (id, part_id, printer_model, filename, filepath, parts_per_plate, created_at) VALUES (3, 3, 'mk4s', ?, ?, 1, 300)").run(gcodeFilename, gcodeFilename);
     addActiveJob(db, 1); // Early's part E is printing: Early is at its cap
     expect(await dispatchedPartId(db)).toBe(2); // Late's part, not Early's E2
   });
 
-  test('0 means unlimited', async () => {
-    const db = makeDb({ queue_order: 'fifo', max_printers_per_part: 0, max_printers_per_project: 0 });
+  test('no cap set (null) means unlimited', async () => {
+    const db = makeDb({ queue_order: 'fifo' });
     addActiveJob(db, 2);
     expect(await dispatchedPartId(db)).toBe(2);
   });
 
-  test('a capped part is skipped before any dispatch lock is taken (no stray job rows)', async () => {
-    const db = makeDb({ queue_order: 'fifo', max_printers_per_part: 1 });
+  test('a cap of 0 also means unlimited', async () => {
+    const db = makeDb({ queue_order: 'fifo' }, { 2: 0 });
+    addActiveJob(db, 2);
+    expect(await dispatchedPartId(db)).toBe(2);
+  });
+
+  test('a capped project is skipped before any dispatch lock is taken (no stray job rows)', async () => {
+    const db = makeDb({ queue_order: 'fifo' }, { 2: 1 });
     addActiveJob(db, 2);
     await dispatchedPartId(db);
     const rows = db.prepare("SELECT part_id, printer_id FROM jobs WHERE printer_id = 1").all();
@@ -153,8 +167,8 @@ describe('priority override', () => {
     expect(await dispatchedPartId(db)).toBe(2);
   });
 
-  test('overridden work is exempt from the printer caps', async () => {
-    const db = makeDb({ queue_order: 'fifo', max_printers_per_part: 1 });
+  test('overridden work is exempt from the plate cap', async () => {
+    const db = makeDb({ queue_order: 'fifo' }, { 2: 1 });
     addActiveJob(db, 2);
     db.prepare('UPDATE parts SET priority_override = 1 WHERE id = 2').run();
     expect(await dispatchedPartId(db)).toBe(2); // not skipped for E despite being at its cap

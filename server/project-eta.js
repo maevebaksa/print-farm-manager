@@ -15,7 +15,7 @@
 //              queue_order ('priority' or 'fifo' by G-code upload time), same
 //              model / group / material / color eligibility (exact match; the
 //              optional color tolerance is not modeled), same work-conserving
-//              per-part / per-project printer caps.
+//              per-project plate cap (projects.max_concurrent_plates).
 //   Plates     a printer runs one whole plate of the part's G-code for its own
 //              model: parts_per_plate parts in est_print_secs (read from the
 //              file header on upload). Remaining plates per part come from
@@ -89,9 +89,7 @@ function nextOperatorTime(t, hours) {
 // ─── Simulation ─────────────────────────────────────────────────────────────
 
 function readQueuePolicy(db) {
-  const get = (k) => setting(db, k);
-  const cap = (k) => { const n = parseInt(get(k), 10); return Number.isFinite(n) && n > 0 ? n : 0; };
-  return { fifo: get('queue_order') === 'fifo', maxPerPart: cap('max_printers_per_part'), maxPerProject: cap('max_printers_per_project') };
+  return { fifo: setting(db, 'queue_order') === 'fifo' };
 }
 
 function hasColumn(db, table, column) {
@@ -110,7 +108,8 @@ function simulateFarm(db, now = Date.now()) {
            ${col('projects', 'priority_override', '0')} AS priority_override,
            ${col('projects', 'allowed_groups', 'NULL')} AS allowed_groups,
            ${col('projects', 'required_material', 'NULL')} AS required_material,
-           ${col('projects', 'required_color', 'NULL')} AS required_color
+           ${col('projects', 'required_color', 'NULL')} AS required_color,
+           ${col('projects', 'max_concurrent_plates', 'NULL')} AS max_concurrent_plates
     FROM projects WHERE status = 'active'
   `).all();
   const projectById = new Map(projects.map(p => [p.id, p]));
@@ -213,8 +212,8 @@ function simulateFarm(db, now = Date.now()) {
   const cmp = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; return 0; };
   const busyAt = (t, pred) => running.filter(r => r.end > t && pred(r)).length;
   const atCap = (item, t) =>
-    (policy.maxPerPart > 0 && busyAt(t, r => r.partId === item.part.id) >= policy.maxPerPart) ||
-    (policy.maxPerProject > 0 && busyAt(t, r => r.projectId === item.part.project_id) >= policy.maxPerProject);
+    item.project.max_concurrent_plates > 0 &&
+    busyAt(t, r => r.projectId === item.part.project_id) >= item.project.max_concurrent_plates;
 
   let dispatched = 0;
   while (printers.length > 0) {

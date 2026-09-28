@@ -7,21 +7,31 @@ const inputStyle = {
   fontSize: 13, padding: '6px 9px', outline: 'none', fontFamily: 'inherit', width: '100%', boxSizing: 'border-box',
 };
 
-// One-off upload: pick a sliced file, optionally pin it to one printer, print it once.
-// POST /api/quick-print (see server/routes/quick-print.js). Hidden when the signed-in
-// user's group does not allow it (the server 403s too).
+// One-off upload: pick a sliced file, optionally narrow it to a printer type or (operator/
+// admin only) one exact printer, print it once. POST /api/quick-print (see
+// server/routes/quick-print.js). Hidden when the signed-in user's group does not allow
+// it (the server 403s too). The exact-printer options and Priority checkbox are hidden
+// for a plain uploader (the server 403s a request for either anyway).
 export default function QuickPrint({ onQueued }) {
   const { user } = useAuth();
   const allowed = user?.permissions?.can_quick_print ?? true;
+  // Picking one exact machine or jumping the queue can starve other users'
+  // work on shared hardware, so both are operator/admin only (server enforces
+  // this too; see routes/quick-print.js). A printer type ("any Mini") stays
+  // open to everyone: it still shares fairly across every printer of that type.
+  const isOperatorPlus = user?.role === 'admin' || user?.role === 'operator';
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState(null);
-  const [printerId, setPrinterId] = useState('any');
+  const [target, setTarget] = useState('any'); // 'any' | 'type:<model>' | '<printerId>'
+  const [priority, setPriority] = useState(false);
   const [printers, setPrinters] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [showToast, toastEl] = useToast();
 
   if (!allowed) return null;
+
+  const models = [...new Set(printers.map(p => p.model))].sort();
 
   async function openModal() {
     setOpen(true);
@@ -41,7 +51,8 @@ export default function QuickPrint({ onQueued }) {
     if (busy) return;
     setOpen(false);
     setFile(null);
-    setPrinterId('any');
+    setTarget('any');
+    setPriority(false);
   }
 
   async function submit(e) {
@@ -52,7 +63,9 @@ export default function QuickPrint({ onQueued }) {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      if (printerId !== 'any') fd.append('printer_id', printerId);
+      if (target.startsWith('type:')) fd.append('printer_model', target.slice(5));
+      else if (target !== 'any') fd.append('printer_id', target);
+      if (priority) fd.append('priority', 'true');
       const res = await fetch('/api/quick-print', { method: 'POST', body: fd });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -64,7 +77,8 @@ export default function QuickPrint({ onQueued }) {
         : `${body.filename} queued to print once`, body.pending_approval ? 'warning' : 'success');
       setOpen(false);
       setFile(null);
-      setPrinterId('any');
+      setTarget('any');
+      setPriority(false);
       if (onQueued) onQueued();
     } finally {
       setBusy(false);
@@ -103,10 +117,17 @@ export default function QuickPrint({ onQueued }) {
               style={{ ...inputStyle, marginBottom: 12 }}
             />
             <label style={{ fontSize: 12, color: '#94a3b8', display: 'block', marginBottom: 4 }}>Printer</label>
-            <select value={printerId} onChange={e => setPrinterId(e.target.value)} disabled={busy} style={{ ...inputStyle, cursor: 'pointer', marginBottom: 12 }}>
+            <select value={target} onChange={e => setTarget(e.target.value)} disabled={busy} style={{ ...inputStyle, cursor: 'pointer', marginBottom: 12 }}>
               <option value="any">Any eligible printer</option>
-              {printers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
+              {models.map(m => <option key={m} value={`type:${m}`}>Any {m}</option>)}
+              {isOperatorPlus && printers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
             </select>
+            {isOperatorPlus && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#94a3b8', marginBottom: 12, cursor: 'pointer' }}>
+                <input type="checkbox" checked={priority} onChange={e => setPriority(e.target.checked)} disabled={busy} style={{ accentColor: '#3b82f6' }} />
+                Priority (jumps ahead of the normal queue)
+              </label>
+            )}
             {error && <div style={{ fontSize: 12, color: '#fca5a5', marginBottom: 10 }}>{error}</div>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button type="button" onClick={close} disabled={busy} style={{ background: 'none', border: '1px solid #2d3748', color: '#94a3b8', borderRadius: 5, padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}>

@@ -38,13 +38,13 @@ describe('user group routes', () => {
     expect(res.body[0].member_count).toBe(0);
   });
 
-  test('creates a custom group with printer limits, plate cap, and flags', async () => {
+  test('creates a custom group with printer limits and flags', async () => {
     const res = await request(app).post('/api/user-groups').send({
       name: 'Students', role: 'uploader', allowed_printer_ids: [1, '2'], allowed_printer_groups: ['Rack A'],
-      max_plates_per_upload: 4, requires_approval: true, can_quick_print: false,
+      requires_approval: true, can_quick_print: false,
     });
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ name: 'Students', is_system: 0, requires_approval: 1, can_quick_print: 0, max_plates_per_upload: 4 });
+    expect(res.body).toMatchObject({ name: 'Students', is_system: 0, requires_approval: 1, can_quick_print: 0 });
     expect(res.body.allowed_printer_ids).toEqual([1, 2]);
     expect(res.body.allowed_printer_groups).toEqual(['Rack A']);
   });
@@ -71,11 +71,10 @@ describe('user group routes', () => {
     expect((await request(app).put('/api/user-groups/99').send({})).status).toBe(404);
   });
 
-  test('PUT with null clears printer limits and the plate cap', async () => {
-    const g = (await request(app).post('/api/user-groups').send({ name: 'G', allowed_printer_ids: [1], max_plates_per_upload: 2 })).body;
-    const res = await request(app).put(`/api/user-groups/${g.id}`).send({ allowed_printer_ids: null, max_plates_per_upload: null });
+  test('PUT with null clears printer limits', async () => {
+    const g = (await request(app).post('/api/user-groups').send({ name: 'G', allowed_printer_ids: [1] })).body;
+    const res = await request(app).put(`/api/user-groups/${g.id}`).send({ allowed_printer_ids: null });
     expect(res.body.allowed_printer_ids).toBeNull();
-    expect(res.body.max_plates_per_upload).toBeNull();
   });
 
   test('changing a custom group role updates its non-admin members', async () => {

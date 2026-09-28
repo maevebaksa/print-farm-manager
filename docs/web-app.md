@@ -14,7 +14,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 - **Jobs page** — live job queue with filters and cancel action
 - **Account page**: the signed-in user's own API keys: create one (shown once), revoke one; and the per-group slicer upload URLs
 - **Users page**: admin only: add accounts, assign each to a user group, manage user groups (permissions and allowed printers), remove access
-- **Quick Print**: a button on the Fleet page header (`client/src/components/QuickPrint.jsx`); hidden when the user's group disallows it
+- **Quick Print**: a button on the Fleet and Jobs page headers (`client/src/components/QuickPrint.jsx`); hidden when the user's group disallows it. Anyone may leave the printer unset or narrow it to a type; pinning to one exact printer or marking priority is operator/admin only.
 
 ## Key Files
 
@@ -27,7 +27,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/pages/Account.jsx` | Self-service API key management |
 | `client/src/pages/Users.jsx` | Admin-only account management |
 | `client/src/components/UserGroups.jsx` | Admin-only user group editor on the Users page |
-| `client/src/components/QuickPrint.jsx` | One-off upload and print modal (Fleet) |
+| `client/src/components/QuickPrint.jsx` | One-off upload and print modal (Fleet, Jobs) |
 | `client/src/pages/Fleet.jsx` | Live printer grid, pinned-printers section, bulk material/color/group editing (absorbed the old Printers.jsx) |
 | `client/src/pages/Webcams.jsx` | Plain snapshot gallery, one still image per printer, no status highlighting |
 | `client/src/pages/PrinterDetail.jsx` | Per-printer event timeline, note form, camera card, catalog-print popup |
@@ -288,7 +288,7 @@ Responsive grid of decommissioned printers — printers that have been pulled fr
 
 **Software Update section (admin only, hidden entirely for anyone else):** a repo input (`update_repo` setting, `PUT /api/settings/update_repo`, validated as `owner/repo`) with a Save button, a version display comparing the running build's `GIT_COMMIT` against the latest commit on that repo's `main` branch, and a Check for updates button (`GET /api/update/status`). An Update now button appears only when the server reports `canTrigger: true`, meaning the operator has bind-mounted the Docker socket and compose project directory (see [docs/deployment.md](deployment.md)); it is gated behind `useConfirm` (`danger: true`) since it restarts the server. See [docs/api.md](api.md)'s Update section for the full request/response shape.
 
-**Print Queue section:** the admin-only queue policy (`queue_order`, `max_printers_per_part`, `max_printers_per_project`, each saved with `PUT /api/settings/:key`): a Queue order dropdown (Project priority, or First in, first out by upload time) and two cap inputs (0 = unlimited), with a plain-language explanation of each. Non-admins see the current values read-only. When `queue_order` is `fifo`, the Projects list view shows a notice that project and part order no longer decide what prints next. Below the queue policy, the admin-only operator shift (`operator_hours_start`, `operator_hours_end` as time inputs, `operator_days` as weekday checkboxes), saved by the same button. Used only by the completion estimates; both times empty means always staffed.
+**Print Queue section:** the admin-only queue order (`queue_order`, `PUT /api/settings/queue_order`): a dropdown (Project priority, or First in, first out by upload time), with a plain-language explanation. Non-admins see the current value read-only. When `queue_order` is `fifo`, the Projects list view shows a notice that project and part order no longer decide what prints next. How many printers one project may occupy at once is not here: it is set per project on the Projects page itself (`max_concurrent_plates`), by whoever manages that project. Below the queue order, the admin-only operator shift (`operator_hours_start`, `operator_hours_end` as time inputs, `operator_days` as weekday checkboxes), saved by the same button. Used only by the completion estimates; both times empty means always staffed.
 
 **Dispatch Settings section:** the `dispatch_batch_size` concurrency target (`PUT /api/settings/dispatch_batch_size`), plus a **Color tolerance** sub-section (`color_tolerance`, `PUT /api/settings/color_tolerance`): a number input (0-450) with suggested values (`<datalist>`, matching the Group field's autocomplete pattern) explaining what a given number roughly means ("Off", "Very close", "Same color family", "Loose match"). `0` (default) keeps color matching exact-only. See `docs/filaments.md` for how this reads `filament_colors.hex_color` and `server/scheduler.js` for the matching rule itself.
 
@@ -317,6 +317,7 @@ Primary operator screen for setting up and launching print runs. Reads `?open=<p
   - `completed` → "Re-activate" (`POST /api/projects/:id/reactivate`): reopens any closed parts that still have remaining qty and sweeps for idle printers immediately. Shows a warning toast instead of transitioning if every part is already at target qty (`nothing_to_reopen` in the response).
   - Next to the status dropdown, a rough **~X remaining** badge from `GET /api/projects/:id/eta` (fetched alongside the rest of the detail view, quietly, same as any other read-on-load): the estimated time left for the whole project's queue, not just whatever is currently printing. `(at least)` appears when the estimate is a known undercount (some remaining G-code has no estimated print time set). Nothing renders when no estimate is possible. See `server/project-eta.js` and [docs/api.md](api.md).
 - **Project-level targeting defaults:** two rows shown when a filament library or a group registry exists. *Filament*: Material/Color dropdowns → `PUT /api/projects/:id/filament`. *Groups*: checkboxes sourced from `GET /api/groups` → `PUT /api/projects/:id/groups`. Both apply to every G-code in the project that doesn't set its own override, and both are visible again in the per-gcode Targeting row below (Upload G-code and each G-code file's estimate row): a per-gcode value always wins over the project default, and the per-gcode picker's empty state reads "inherits project: X" instead of "all groups"/"any material" when a project default is set. See the "Targeting cascade" note in [database.md](database.md).
+- **Max concurrent plates:** a number input (blank = no limit) → `PUT /api/projects/:id { max_concurrent_plates }`, saved on blur. Caps how many printers this project's own work may occupy at once while other eligible work is waiting; work-conserving, so a capped project never leaves a printer idle just because of its own cap. Set by whoever manages the project, not an admin Settings value: see [docs/api.md](api.md) and [docs/database.md](database.md).
 - **Priority override:** an amber **Priority** badge on a project (list and detail header) or part whose `priority_override` is on. Operators and admins see it as a toggle ("+ Priority" when off) that calls `PUT /api/{projects,parts}/:id/priority-override`; uploaders only see the badge. Overridden work prints ahead of the normal queue and ignores printer caps.
 - **Parts list:** each row shows name (with ▲/▼ priority buttons, and "by <user>" underneath from `parts.created_by_name` when recorded), a 3-segment progress bar, a fixed-width status badge (Open/Closed), and a Details toggle. A red `×` delete button appears at the far right: clicking it confirms then calls `DELETE /api/parts/:id`, which cascades to all jobs and G-code files for that part. Deletion is blocked (with an alert) if the part has an active uploading or printing job. All other editing is behind the Details button.
 
@@ -335,7 +336,7 @@ Primary operator screen for setting up and launching print runs. Reads `?open=<p
 
 `client/src/pages/Jobs.jsx`
 
-Live job queue that polls `GET /api/jobs` every 15 seconds.
+Live job queue that polls `GET /api/jobs` every 15 seconds. Page header also has the Quick Print button (`onQueued` refetches the job list immediately instead of waiting for the next poll), the same component as on the Fleet page.
 
 **Columns:** thumbnail (`GcodeThumbnail.jsx`, blank if the file has none embedded), ID, Part, Project, Owner, Printer, Model, Status, Started, Duration, Actions. The mobile card view shows the same thumbnail next to the part name, and an "Owner:" line.
 

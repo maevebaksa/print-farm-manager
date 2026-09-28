@@ -113,14 +113,34 @@ module.exports = (db, scheduler = null) => {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const { name, description, status } = req.body;
+
+    // max_concurrent_plates: present-in-body semantics (like the two lists on
+    // PUT /api/user-groups/:id) because null/0 is a meaningful value ("no
+    // cap"), not "leave unchanged". Set by whoever manages the project, not an
+    // admin Settings value: see server/scheduler.js's _atPrinterCap.
+    let maxPlates = project.max_concurrent_plates;
+    if ('max_concurrent_plates' in req.body) {
+      const raw = req.body.max_concurrent_plates;
+      if (raw === null || raw === '' || raw === 0 || raw === '0') {
+        maxPlates = null;
+      } else {
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 1 || n > 1000) {
+          return res.status(400).json({ error: 'max_concurrent_plates must be a positive integer (or null/0 for no cap)' });
+        }
+        maxPlates = n;
+      }
+    }
+
     db.prepare(`
       UPDATE projects
       SET name = COALESCE(?, name),
           description = COALESCE(?, description),
           status = COALESCE(?, status),
+          max_concurrent_plates = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(name, description, status, Date.now(), req.params.id);
+    `).run(name, description, status, maxPlates, Date.now(), req.params.id);
     res.json(db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id));
   });
 

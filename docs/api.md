@@ -120,7 +120,7 @@ Any signed-in user. Built-in groups first, then custom groups.
 
 ```json
 [{ "id": 4, "name": "Students", "role": "uploader", "can_approve": 0, "can_set_ready": 0, "can_manage_printers": 0,
-   "can_quick_print": 1, "requires_approval": 1, "max_plates_per_upload": 4,
+   "can_quick_print": 1, "requires_approval": 1,
    "allowed_printer_ids": [1, 2], "allowed_printer_groups": ["Rack A"], "is_system": 0, "member_count": 3, "created_at": 1774903214349 }]
 ```
 
@@ -128,11 +128,11 @@ Any signed-in user. Built-in groups first, then custom groups.
 
 ### `POST /api/user-groups`
 
-Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the five boolean flags (defaults follow the role), `max_plates_per_upload` (positive integer or `null`), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
+Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the five boolean flags (defaults follow the role), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
 
 ### `PUT /api/user-groups/:id`
 
-Admin only. Partial update: omitted fields are unchanged, and `null` on `max_plates_per_upload` or the two lists clears them. Changing a custom group's `role` also updates its non-admin members. `404` if not found, `409` for the Admin group, or renaming or re-roling a built-in group.
+Admin only. Partial update: omitted fields are unchanged, and `null` on either printer list clears it. Changing a custom group's `role` also updates its non-admin members. `404` if not found, `409` for the Admin group, or renaming or re-roling a built-in group.
 
 ### `DELETE /api/user-groups/:id`
 
@@ -570,7 +570,7 @@ Estimated completion of the project's whole remaining queue. `404` if the projec
 Computed by a simulation of the whole farm (`server/project-eta.js` `simulateFarm`), replaying what the scheduler would do from now on, one plate at a time:
 
 - **Printers:** every active printer. One printing now is free when its print ends (`printers.job_time_remaining`); an idle, unheld one is free now; one held for sign-off is free once an operator is on shift. OFFLINE, ERROR, and UNKNOWN printers take no work.
-- **Queue:** open parts of active projects in the scheduler's order (priority override first, then `queue_order`), with the same model, group, and exact material/color eligibility (the optional color tolerance is not modeled) and the same work-conserving printer caps. So another project's work ahead in the queue delays this one.
+- **Queue:** open parts of active projects in the scheduler's order (priority override first, then `queue_order`), with the same model, group, and exact material/color eligibility (the optional color tolerance is not modeled) and the same work-conserving per-project plate cap (`max_concurrent_plates`, below). So another project's work ahead in the queue delays this one.
 - **Plates:** each dispatch prints one whole plate of the G-code for that printer's model (`parts_per_plate` parts in `est_print_secs`); remaining plates come from `target_qty - completed_qty -` what is already printing.
 - **Operators:** every print finishes held, so a printer that finishes only takes its next plate at the next moment an operator is on shift (`operator_hours_start` / `operator_hours_end` / `operator_days`, server local time; unset means always staffed). Printers with `auto_advance` do not wait.
 
@@ -600,9 +600,11 @@ Operator/admin only (`403` for an uploader). Body `{ "enabled": true }` or `{ "e
 
 ### `PUT /api/projects/:id`
 
-Partial update. Accepts: `name`, `description`, `status` (`draft` | `active` | `paused` | `completed`).
+Partial update. Accepts: `name`, `description`, `status` (`draft` | `active` | `paused` | `completed`), `max_concurrent_plates`.
 
 When setting `status` to `active`, the UI also calls `POST /api/scheduler/dispatch` to trigger an immediate sweep of idle printers.
+
+`max_concurrent_plates`: how many printers this project's own work may occupy at once while other eligible work is waiting (work-conserving: never leaves a printer idle just because of a cap). Present-in-body semantics: a positive integer (1-1000) sets it, `null` or `0` clears it back to unlimited, omitting the field entirely leaves it unchanged. `400` for anything else (a negative number, a non-integer). Set by whoever manages the project, not an admin Settings value: see [docs/database.md](database.md)'s `projects` table for why this replaced the earlier `max_printers_per_part`/`max_printers_per_project` settings, and the Scheduler section below for how it's enforced.
 
 ### `PUT /api/projects/:id/filament`
 
@@ -797,15 +799,19 @@ Deletes the DB record and removes the file from disk. Returns `{ "success": true
 
 Upload one sliced file and print it once, without building a project. `Content-Type: multipart/form-data`, file field `file` (`.gcode`, `.gco`, `.g`, `.bgcode`, `.3mf`). Available to every role unless the user's group turns off `can_quick_print` (`403`).
 
-**Form fields:** `printer_id` (optional; omit or `any` for any eligible printer, otherwise the print is pinned to that printer through `gcodes.target_printer_id`), `parts_per_plate` (optional, default 1).
+**Form fields:**
+- `printer_id` (optional, **operator/admin only**): pins the print to that exact printer through `gcodes.target_printer_id`. `403` for any other role.
+- `printer_model` (optional, every role): narrows to a printer type ("any Mini") without pinning to one machine, still shares fairly across every printer of that model. Ignored if `printer_id` is set.
+- `priority` (optional boolean, **operator/admin only**): sets `parts.priority_override`, jumping this print ahead of the normal queue order, the same as `PUT /api/parts/:id/priority-override`. `403` for any other role.
+- `parts_per_plate` (optional, default 1).
 
-It goes through the same path as the slicer endpoint: one part (target quantity equals the plate) in the caller's own "Uploads: <name>" project, one G-code, dispatched by the scheduler. Nothing here changes `parts.completed_qty` outside the normal Set Ready flow. The printer model comes from the chosen printer, else the file header, else the only active model on the farm.
+Picking one exact machine or the front of the queue can starve other users' work on shared hardware, so both require operator or admin; a plain uploader can only leave the printer unset or narrow it to a type. It goes through the same path as the slicer endpoint: one part (target quantity equals the plate) in the caller's own "Uploads: <name>" project, one G-code, dispatched by the scheduler. Nothing here changes `parts.completed_qty` outside the normal Set Ready flow. The printer model comes from the chosen printer, else the chosen type, else the file header, else the only active model on the farm.
 
 ```json
-{ "project_id": 12, "part_id": 40, "gcode_id": 41, "filename": "bracket.gcode", "printer_model": "mk4s", "target_printer_id": 3, "pending_approval": false }
+{ "project_id": 12, "part_id": 40, "gcode_id": 41, "filename": "bracket.gcode", "printer_model": "mk4s", "target_printer_id": 3, "priority": false, "pending_approval": false }
 ```
 
-Returns `201`. `400` for an unknown or ambiguous model, a bad `parts_per_plate`, or a file sliced for a different model than the chosen printer, `403` for a printer or plate count the user's group does not allow, `404` for an unknown printer, `409` for a decommissioned printer, `415` for an unsupported file type. `pending_approval` is true when the user's group or account requires approval; the print then waits for `POST /api/gcodes/:id/approve`.
+Returns `201`. `400` for an unknown or ambiguous model, a bad `parts_per_plate`, no active printer of a requested `printer_model`, or a file sliced for a different model than the chosen printer or type, `403` for a printer or plate count the user's group does not allow, for `printer_id`/`priority` from a non-operator, or `printer_model` the user's group does not allow, `404` for an unknown printer, `409` for a decommissioned printer, `415` for an unsupported file type. `pending_approval` is true when the user's group or account requires approval; the print then waits for `POST /api/gcodes/:id/approve`.
 
 ### `POST /api/gcodes/:id/approve`
 
@@ -913,7 +919,7 @@ When a printer is free, the scheduler (`server/scheduler.js` `_reserveCandidate`
 - `queue_order = "priority"` (default): `projects.priority`, then `projects.created_at`, then `parts.sort_order`, then `parts.created_at`. This is the drag order on the Projects page.
 - `queue_order = "fifo"`: `gcodes.created_at` of the part's G-code for this printer's model, oldest first. A duplicated project's G-codes count from when they were duplicated.
 
-With `max_printers_per_part` or `max_printers_per_project` set, a candidate whose part or project already has that many jobs `uploading`/`printing` is skipped in favor of the next eligible one, before any job row (dispatch lock) is written. Only if every eligible candidate is capped does the scheduler take a capped one anyway, so a cap never idles a printer. `GET /api/parts/:id/dispatch-status` adds a note (not a blocker) when a part or its project is at its cap.
+With a project's own `max_concurrent_plates` set (see the Projects section above), a candidate whose project already has that many jobs `uploading`/`printing` is skipped in favor of the next eligible one, before any job row (dispatch lock) is written. Only if every eligible candidate is capped does the scheduler take a capped one anyway, so a cap never idles a printer. `GET /api/parts/:id/dispatch-status` adds a note (not a blocker) when a part's project is at its cap.
 
 ---
 
@@ -961,12 +967,12 @@ Body: `{ "value": "..." }`. Allowed keys:
 | `require_uploader_approval` | `"0"` or `"1"` | Admin-only. Off by default. Whether a new `uploader` account auto-provisioned via OIDC must be approved (`POST /api/users/:id/approve`) before it can sign in; see [docs/auth.md](auth.md)'s Account approval section. |
 | `update_repo` | must look like `owner/repo` | Admin-only. GitHub repo the Software Update section (Settings page) checks the running build against, e.g. `maevebaksa/print-farm-manager`. See the Update section below and [docs/deployment.md](deployment.md). |
 | `queue_order` | `"priority"` or `"fifo"` | Admin-only. Which waiting print a free printer takes next. `priority` (the default when unset): project priority, then part `sort_order`. `fifo`: first in, first out by the matching G-code's upload time (`gcodes.created_at`); project and part order are ignored. See the Scheduler section below. |
-| `max_printers_per_part` | integer 0-1000 | Admin-only. `0` (default) = unlimited. How many printers one part may have uploading or printing while other eligible work is waiting. Work-conserving: never leaves a printer idle. |
-| `max_printers_per_project` | integer 0-1000 | Admin-only. Same as above, counted across all of a project's parts. |
 | `operator_hours_start` / `operator_hours_end` | `HH:MM` (24-hour) or `"off"` | Admin-only. The operator shift used by the completion estimates (`GET /api/projects/:id/eta`): a printer that finishes outside it waits for the next shift. An end before the start is an overnight shift. Either one `"off"` (or unset) means always staffed. Server local time. |
 | `operator_days` | comma-separated `0`-`6` (0 = Sunday) | Admin-only. Days the shift runs; default every day. |
 
-Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, `update_repo`, `queue_order`, `max_printers_per_part`, `max_printers_per_project`, `operator_hours_start`, `operator_hours_end`, or `operator_days`.
+Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, `update_repo`, `queue_order`, `operator_hours_start`, `operator_hours_end`, or `operator_days`.
+
+How many printers one project's own work may occupy at once is not a Settings key: it is `max_concurrent_plates` on the project itself (`PUT /api/projects/:id`, any role that can edit projects), replacing an earlier admin-only `max_printers_per_part`/`max_printers_per_project` pair of settings. See the Projects section above and [docs/database.md](database.md).
 
 ---
 

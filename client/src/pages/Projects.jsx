@@ -1449,6 +1449,28 @@ export default function Projects() {
     await fetchDetail(detailProject.id);
   }
 
+  // Per-project cap on how many printers this project's own work may occupy at
+  // once (server/scheduler.js's _atPrinterCap). Set by whoever manages the
+  // project, not an admin Settings value.
+  async function saveProjectMaxPlates(raw) {
+    const trimmed = String(raw).trim();
+    if (trimmed !== '' && (!/^\d+$/.test(trimmed) || Number(trimmed) < 1)) {
+      showToast('Max concurrent plates must be a positive whole number', 'error');
+      return;
+    }
+    const res = await fetch(`/api/projects/${detailProject.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_concurrent_plates: trimmed === '' ? null : Number(trimmed) }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showToast('Save failed: ' + (body.error || res.status), 'error');
+      return;
+    }
+    await fetchDetail(detailProject.id);
+  }
+
   async function saveProjectGroups(groups) {
     await fetch(`/api/projects/${detailProject.id}/groups`, {
       method: 'PUT',
@@ -1922,6 +1944,26 @@ export default function Projects() {
           )}
         </div>
       )}
+
+      {/* Per-project plate concurrency cap: how many printers this project's own
+          work may occupy at once, so one project can't tie up the whole farm
+          while other work waits. Unlike an upload-size limit, this never
+          penalizes batching many parts onto one plate. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: '#64748b', flexShrink: 0 }}>Max concurrent plates:</span>
+        <input
+          key={detailProject.id}
+          type="number"
+          min={1}
+          placeholder="no limit"
+          defaultValue={detailProject.max_concurrent_plates ?? ''}
+          onBlur={e => saveProjectMaxPlates(e.target.value)}
+          style={{ ...inputSx, fontSize: 12, width: 90 }}
+        />
+        <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>
+          how many printers this project may use at once; leave blank for no cap
+        </span>
+      </div>
 
       {/* Parts */}
       <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>

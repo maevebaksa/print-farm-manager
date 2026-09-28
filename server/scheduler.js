@@ -376,18 +376,18 @@ class JobScheduler extends EventEmitter {
     // same-family-but-different-shade one instead. Material is never loosened,
     // only color.
     //
-    // Queue policy (admin settings, see _queuePolicy): the order candidates are
-    // walked in, and per-part/per-project caps on how many printers one piece of
-    // work may occupy. Caps are work-conserving: both color passes first run
-    // honoring them, and only if that finds nothing do they run again ignoring
-    // them, so a capped part still gets a printer that would otherwise sit idle
-    // but never jumps ahead of other waiting work.
+    // Queue policy (admin setting, see _queuePolicy): the order candidates are
+    // walked in. Each project may also cap how many printers its own work may
+    // occupy at once (projects.max_concurrent_plates, set by whoever manages
+    // the project, not an admin setting). Caps are work-conserving: both color
+    // passes first run honoring them, and only if that finds nothing do they
+    // run again ignoring them, so a capped project still gets a printer that
+    // would otherwise sit idle but never jumps ahead of other waiting work.
     const policy = this._queuePolicy();
     const toleranceSetting = this.db.prepare("SELECT value FROM settings WHERE key = 'color_tolerance'").get();
     const tolerance = toleranceSetting ? parseInt(toleranceSetting.value, 10) || 0 : 0;
 
-    const capModes = policy.capsActive ? [true, false] : [false];
-    for (const respectCaps of capModes) {
+    for (const respectCaps of [true, false]) {
       const exact = this._reserveCandidate(printer, driver, false, 0, policy, respectCaps);
       if (exact) return exact;
 
@@ -408,51 +408,36 @@ class JobScheduler extends EventEmitter {
     return null;
   }
 
-  // Admin-configured queue policy (Settings > Dispatch Settings, admin-only keys
-  // in routes/settings.js):
-  //   queue_order              'priority' (default): project priority, then part
-  //                            order within the project, as dragged on the
-  //                            Projects page. 'fifo': first in, first out by when
-  //                            the matching G-code was uploaded (gcodes.created_at);
-  //                            project and part order are ignored entirely.
-  //   max_printers_per_part    0 = unlimited. How many printers one part may have
-  //   max_printers_per_project uploading/printing at once while other eligible
-  //                            work is waiting (see _reserveJob's capModes).
+  // Admin-configured queue order (Settings > Print Queue, admin-only queue_order
+  // key in routes/settings.js):
+  //   'priority' (default): project priority, then part order within the
+  //   project, as dragged on the Projects page. 'fifo': first in, first out by
+  //   when the matching G-code was uploaded (gcodes.created_at); project and
+  //   part order are ignored entirely.
   // Read fresh on every reservation, like color_tolerance, so a change applies
   // on the next dispatch with no restart.
   _queuePolicy() {
     const get = (key) => this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value;
-    const cap = (key) => {
-      const n = parseInt(get(key), 10);
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    };
-    const maxPerPart = cap('max_printers_per_part');
-    const maxPerProject = cap('max_printers_per_project');
-    return {
-      fifo: get('queue_order') === 'fifo',
-      maxPerPart,
-      maxPerProject,
-      capsActive: maxPerPart > 0 || maxPerProject > 0,
-    };
+    return { fifo: get('queue_order') === 'fifo' };
   }
 
-  // True when this candidate's part or project already has as many printers
-  // uploading/printing as the policy allows. Counted from job rows, which every
-  // dispatch path inserts synchronously as its lock, so a batch sweep sees the
-  // reservations it has already made earlier in the same wave.
-  _atPrinterCap(candidate, policy) {
-    if (policy.maxPerPart > 0) {
-      const n = this.db.prepare(
-        "SELECT COUNT(*) AS n FROM jobs WHERE part_id = ? AND status IN ('uploading', 'printing')"
-      ).get(candidate.part_id).n;
-      if (n >= policy.maxPerPart) return `part ${candidate.part_id} already on ${n} printer(s), cap ${policy.maxPerPart}`;
-    }
-    if (policy.maxPerProject > 0) {
-      const n = this.db.prepare(`
-        SELECT COUNT(*) AS n FROM jobs JOIN parts ON parts.id = jobs.part_id
-        WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing')
-      `).get(candidate.project_id).n;
-      if (n >= policy.maxPerProject) return `project ${candidate.project_id} already on ${n} printer(s), cap ${policy.maxPerProject}`;
+  // True when this candidate's project already has as many printers
+  // uploading/printing as its own max_concurrent_plates allows. Set by whoever
+  // manages the project (PUT /api/projects/:id), not an admin setting: this is
+  // deliberately a per-project concurrency cap, not a per-part upload-size cap,
+  // so it stops one project from tying up every printer on a shared farm
+  // without penalizing a part that batches many copies onto one plate. Counted
+  // from job rows, which every dispatch path inserts synchronously as its
+  // lock, so a batch sweep sees the reservations it has already made earlier
+  // in the same wave.
+  _atPrinterCap(candidate) {
+    if (!candidate.max_concurrent_plates) return null;
+    const n = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM jobs JOIN parts ON parts.id = jobs.part_id
+      WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing')
+    `).get(candidate.project_id).n;
+    if (n >= candidate.max_concurrent_plates) {
+      return `project ${candidate.project_id} already on ${n} printer(s), cap ${candidate.max_concurrent_plates}`;
     }
     return null;
   }
@@ -469,7 +454,7 @@ class JobScheduler extends EventEmitter {
   // (SQL here, plain JS in routes/parts.js's dispatch-status) both read
   // server/color-distance.js's colorsClose, so the two can't drift on what
   // "close enough" means; keep both in sync (see CLAUDE.md's sync-pairs table).
-  _reserveCandidate(printer, driver, tolerant, tolerance, policy = { fifo: false, capsActive: false }, respectCaps = false) {
+  _reserveCandidate(printer, driver, tolerant, tolerance, policy = { fifo: false }, respectCaps = false) {
     const printerColorHex = tolerant
       ? this.db.prepare('SELECT hex_color FROM filament_colors WHERE name = ?').get(printer.loaded_color)?.hex_color ?? null
       : null;
@@ -520,6 +505,7 @@ class JobScheduler extends EventEmitter {
           gcodes.filepath,
           gcodes.parts_per_plate,
           gcodes.ams_slot,
+          projects.max_concurrent_plates,
           -- Operator/admin priority override on the part or its project: always
           -- first in line, whatever queue_order says, and exempt from the caps.
           (parts.priority_override = 1 OR projects.priority_override = 1) AS overridden
@@ -589,7 +575,7 @@ class JobScheduler extends EventEmitter {
       // before taking any dispatch lock. _reserveJob retries with caps ignored
       // if nothing uncapped turns up, so this never idles a printer.
       if (respectCaps && !candidate.overridden) {
-        const capped = this._atPrinterCap(candidate, policy);
+        const capped = this._atPrinterCap(candidate);
         if (capped) {
           console.log(`[scheduler] ${printer.name}: skipping, ${capped}`);
           skippedPartIds.push(candidate.part_id);

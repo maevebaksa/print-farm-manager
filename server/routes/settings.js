@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
 
-const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min', 'require_uploader_approval', 'update_repo', 'queue_order', 'max_printers_per_part', 'max_printers_per_project', 'operator_hours_start', 'operator_hours_end', 'operator_days']);
+const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min', 'require_uploader_approval', 'update_repo', 'queue_order', 'operator_hours_start', 'operator_hours_end', 'operator_days']);
 const QUEUE_ORDERS = new Set(['priority', 'fifo']);
-const MAX_PRINTER_CAP = 1000;
 // RGB Euclidean distance (server/color-distance.js) ranges 0 (identical) to
 // ~441.7 (black vs white): anything past ~450 would treat literally any two
 // colors as interchangeable, which is never a useful tolerance.
@@ -16,7 +15,7 @@ const MAX_COLOR_TOLERANCE = 450;
 // scheduler.js's _queuePolicy), so they are admin-only as well.
 // Operator hours only feed the time estimates (server/project-eta.js), but
 // they describe staffing, so they sit with the other admin farm policy keys.
-const ADMIN_ONLY_KEYS = new Set(['auto_sso_redirect', 'require_uploader_approval', 'update_repo', 'queue_order', 'max_printers_per_part', 'max_printers_per_project', 'operator_hours_start', 'operator_hours_end', 'operator_days']);
+const ADMIN_ONLY_KEYS = new Set(['auto_sso_redirect', 'require_uploader_approval', 'update_repo', 'queue_order', 'operator_hours_start', 'operator_hours_end', 'operator_days']);
 
 module.exports = (db) => {
   // GET /api/settings — returns all settings as { key: value, ... }
@@ -94,13 +93,6 @@ module.exports = (db) => {
 
     if (key === 'queue_order' && !QUEUE_ORDERS.has(value)) {
       return res.status(400).json({ error: 'queue_order must be "priority" or "fifo"' });
-    }
-
-    if (key === 'max_printers_per_part' || key === 'max_printers_per_project') {
-      const n = Number(value);
-      if (!Number.isInteger(n) || n < 0 || n > MAX_PRINTER_CAP) {
-        return res.status(400).json({ error: `${key} must be an integer between 0 (unlimited) and ${MAX_PRINTER_CAP}` });
-      }
     }
 
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, String(value));

@@ -146,7 +146,7 @@ function parseJsonArray(text) {
 // allowed_printer_groups are both null when unrestricted.
 function resolvePermissions(db, user) {
   const base = ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS.uploader;
-  const open = { ...base, max_plates_per_upload: null, allowed_printer_ids: null, allowed_printer_groups: null, group: null };
+  const open = { ...base, allowed_printer_ids: null, allowed_printer_groups: null, group: null };
   if (user.role === 'admin' || !user.user_group_id) return open;
   const g = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(user.user_group_id);
   if (!g) return open;
@@ -156,7 +156,6 @@ function resolvePermissions(db, user) {
     can_manage_printers: !!g.can_manage_printers,
     can_quick_print: !!g.can_quick_print,
     requires_approval: !!g.requires_approval,
-    max_plates_per_upload: g.max_plates_per_upload ?? null,
     allowed_printer_ids: parseJsonArray(g.allowed_printer_ids),
     allowed_printer_groups: parseJsonArray(g.allowed_printer_groups),
     group: { id: g.id, name: g.name },

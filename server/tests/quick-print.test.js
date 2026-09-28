@@ -13,10 +13,11 @@ const sweep = jest.fn();
 const created = [];
 
 const perms = (over = {}) => ({
-  can_quick_print: true, requires_approval: false, max_plates_per_upload: null,
+  can_quick_print: true, requires_approval: false,
   allowed_printer_ids: null, allowed_printer_groups: null, ...over,
 });
 const USER = (over) => ({ id: 2, name: 'Bob', role: 'uploader', permissions: perms(over) });
+const OPERATOR = (over) => ({ id: 3, name: 'Op', role: 'operator', permissions: perms(over) });
 
 beforeAll(() => {
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
@@ -33,6 +34,7 @@ beforeEach(() => {
       priority INTEGER DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, created_by_user_id INTEGER, created_by_name TEXT);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL, target_qty INTEGER NOT NULL,
       completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open', sort_order INTEGER NOT NULL DEFAULT 0,
+      priority_override INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, created_by_user_id INTEGER, created_by_name TEXT);
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_model TEXT NOT NULL, filename TEXT NOT NULL,
       filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL, est_print_secs INTEGER, material_grams REAL, material_type TEXT,
@@ -65,10 +67,35 @@ describe('POST /api/quick-print', () => {
     expect(sweep).toHaveBeenCalled();
   });
 
-  test('pins the gcode to the chosen printer and uses its model', async () => {
+  test('pins the gcode to the chosen printer and uses its model (operator/admin only)', async () => {
+    currentUser = OPERATOR();
     const res = await send({ printer_id: '2' });
     expect(res.status).toBe(201);
     expect(db.prepare('SELECT target_printer_id FROM gcodes').get().target_printer_id).toBe(2);
+  });
+
+  test('403 for a plain uploader targeting a specific printer', async () => {
+    expect((await send({ printer_id: '2' })).status).toBe(403);
+  });
+
+  test('printer_model narrows to a type, open to every role, no pin', async () => {
+    const res = await send({ printer_model: 'mk4s' });
+    expect(res.status).toBe(201);
+    expect(res.body.printer_model).toBe('mk4s');
+    expect(db.prepare('SELECT target_printer_id FROM gcodes').get().target_printer_id).toBeNull();
+  });
+
+  test('400 when printer_model has no active printers on the farm', async () => {
+    expect((await send({ printer_model: 'c1' })).status).toBe(400);
+  });
+
+  test('priority is operator/admin only and sets priority_override', async () => {
+    expect((await send({ priority: 'true' })).status).toBe(403);
+    currentUser = OPERATOR();
+    const res = await send({ priority: 'true' });
+    expect(res.status).toBe(201);
+    expect(res.body.priority).toBe(true);
+    expect(db.prepare('SELECT priority_override FROM parts').get().priority_override).toBe(1);
   });
 
   test('a second quick print reuses the same project', async () => {
@@ -84,13 +111,13 @@ describe('POST /api/quick-print', () => {
   });
 
   test('403 for a printer outside the group allowed printers, 201 for one inside', async () => {
-    currentUser = USER({ allowed_printer_ids: [1] });
+    currentUser = OPERATOR({ allowed_printer_ids: [1] });
     expect((await send({ printer_id: '2' })).status).toBe(403);
     expect((await send({ printer_id: '1' })).status).toBe(201);
   });
 
   test('allowed printer groups work, and a restricted group with no usable printer is refused', async () => {
-    currentUser = USER({ allowed_printer_groups: ['Rack B'] });
+    currentUser = OPERATOR({ allowed_printer_groups: ['Rack B'] });
     expect((await send({ printer_id: '2' })).status).toBe(201);
     expect((await send({ printer_id: '1' })).status).toBe(403);
     currentUser = USER({ allowed_printer_ids: [999] });
@@ -105,13 +132,8 @@ describe('POST /api/quick-print', () => {
     expect(sweep).not.toHaveBeenCalled();
   });
 
-  test('max_plates_per_upload caps parts_per_plate', async () => {
-    currentUser = USER({ max_plates_per_upload: 2 });
-    expect((await send({ parts_per_plate: '3' })).status).toBe(403);
-    expect((await send({ parts_per_plate: '2' })).status).toBe(201);
-  });
-
   test('validation: bad extension 415, unknown printer 404, decommissioned 409, bad count 400, no file 400', async () => {
+    currentUser = OPERATOR();
     expect((await send({}, 'notes.txt')).status).toBe(415);
     expect((await send({ printer_id: '77' })).status).toBe(404);
     db.prepare('UPDATE printers SET is_active = 0 WHERE id = 1').run();

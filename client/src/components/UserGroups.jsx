@@ -18,7 +18,7 @@ const FLAG_LABELS = [
 const EMPTY = {
   name: '', role: 'uploader',
   can_quick_print: true, can_set_ready: false, can_approve: false, can_manage_printers: false, requires_approval: false,
-  max_plates_per_upload: '', restrict: false, allowed_printer_ids: [], allowed_printer_groups: [],
+  restrict: false, allowed_printer_ids: [], allowed_printer_groups: [],
 };
 
 function toForm(g) {
@@ -26,7 +26,6 @@ function toForm(g) {
     name: g.name, role: g.role,
     can_quick_print: !!g.can_quick_print, can_set_ready: !!g.can_set_ready, can_approve: !!g.can_approve,
     can_manage_printers: !!g.can_manage_printers, requires_approval: !!g.requires_approval,
-    max_plates_per_upload: g.max_plates_per_upload ?? '',
     restrict: !!(g.allowed_printer_ids || g.allowed_printer_groups),
     allowed_printer_ids: g.allowed_printer_ids || [],
     allowed_printer_groups: g.allowed_printer_groups || [],
@@ -41,7 +40,6 @@ function summary(g) {
   if (g.can_manage_printers) bits.push('printer admin');
   if (!g.can_quick_print) bits.push('no Quick Print');
   if (g.requires_approval) bits.push('uploads need approval');
-  if (g.max_plates_per_upload) bits.push(`max ${g.max_plates_per_upload} per plate`);
   const n = (g.allowed_printer_ids || []).length + (g.allowed_printer_groups || []).length;
   bits.push(n ? 'limited printers' : 'all printers');
   return bits.join(', ');
@@ -81,7 +79,6 @@ export default function UserGroups({ groups, onChanged }) {
       const payload = {
         can_quick_print: form.can_quick_print, can_set_ready: form.can_set_ready, can_approve: form.can_approve,
         can_manage_printers: form.can_manage_printers, requires_approval: form.requires_approval,
-        max_plates_per_upload: form.max_plates_per_upload === '' ? null : Number(form.max_plates_per_upload),
         allowed_printer_ids: form.restrict ? form.allowed_printer_ids : null,
         allowed_printer_groups: form.restrict ? form.allowed_printer_groups : null,
       };
@@ -176,11 +173,6 @@ export default function UserGroups({ groups, onChanged }) {
                 {label}
               </label>
             ))}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#cbd5e1' }}>
-              Max parts per plate per upload
-              <input type="number" min={1} placeholder="no limit" value={form.max_plates_per_upload}
-                onChange={e => setForm(f => ({ ...f, max_plates_per_upload: e.target.value }))} style={{ ...inputStyle, width: 100 }} />
-            </label>
           </div>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#e2e8f0', fontWeight: 600, cursor: 'pointer', marginBottom: 8 }}>

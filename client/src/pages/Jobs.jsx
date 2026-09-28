@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useConfirm } from '../useConfirm';
 import EmptyState from '../components/EmptyState';
 import GcodeThumbnail from '../components/GcodeThumbnail';
+import QuickPrint from '../components/QuickPrint';
 
 // Colors match the Fleet page conventions: blue = printing, green = done.
 // Cancelled gets a line-through as a non-color cue against Queued.
@@ -134,7 +135,10 @@ export default function Jobs() {
   return (
     <div>
       {confirmModal}
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 16 }}>Job Queue</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Job Queue</h1>
+        <QuickPrint onQueued={fetchJobs} />
+      </div>
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16, alignItems: 'center' }}>

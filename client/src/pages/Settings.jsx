@@ -380,10 +380,10 @@ export default function Settings() {
   // Color tolerance: RGB-distance fallback the scheduler uses only when no printer
   // has the exact required color loaded (server/color-distance.js, server/scheduler.js).
   const [colorTolerance, setColorTolerance] = useState('');
-  // Print queue policy (admin-only keys; see server/scheduler.js _queuePolicy)
+  // Print queue order (admin-only key; see server/scheduler.js _queuePolicy).
+  // Per-project plate concurrency caps live on the project itself (Projects
+  // page), not here: see server/scheduler.js's _atPrinterCap.
   const [queueOrder, setQueueOrder] = useState('priority');
-  const [maxPerPart, setMaxPerPart] = useState('0');
-  const [maxPerProject, setMaxPerProject] = useState('0');
   const [queueError, setQueueError] = useState(null);
   const [savingQueue, setSavingQueue] = useState(false);
   // Operator hours (admin-only; feed the completion estimates in
@@ -438,8 +438,6 @@ export default function Settings() {
         setAutoSsoRedirect(data.auto_sso_redirect === '1');
         setColorTolerance(data.color_tolerance ?? '0');
         setQueueOrder(data.queue_order || 'priority');
-        setMaxPerPart(data.max_printers_per_part ?? '0');
-        setMaxPerProject(data.max_printers_per_project ?? '0');
         setOpStart(data.operator_hours_start && data.operator_hours_start !== 'off' ? data.operator_hours_start : '');
         setOpEnd(data.operator_hours_end && data.operator_hours_end !== 'off' ? data.operator_hours_end : '');
         if (data.operator_days) setOpDays(data.operator_days.split(',').map(Number));
@@ -566,7 +564,7 @@ export default function Settings() {
       if (opDays.length === 0) throw new Error('Pick at least one operator day');
       if (!!opStart !== !!opEnd) throw new Error('Set both operator start and end, or leave both empty for always staffed');
       for (const [key, value] of [
-        ['queue_order', queueOrder], ['max_printers_per_part', maxPerPart], ['max_printers_per_project', maxPerProject],
+        ['queue_order', queueOrder],
         ['operator_hours_start', opStart || 'off'], ['operator_hours_end', opEnd || 'off'],
         ['operator_days', [...opDays].sort().join(',')],
       ]) {
@@ -1819,16 +1817,6 @@ export default function Settings() {
               <option value="fifo">First in, first out (upload time)</option>
             </select>
           </div>
-          <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Max printers per part</label>
-            <input type="number" min={0} value={maxPerPart} disabled={user?.role !== 'admin'}
-              onChange={e => setMaxPerPart(e.target.value)} style={{ ...inputStyle, width: 90 }} />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Max printers per project</label>
-            <input type="number" min={0} value={maxPerProject} disabled={user?.role !== 'admin'}
-              onChange={e => setMaxPerProject(e.target.value)} style={{ ...inputStyle, width: 90 }} />
-          </div>
           {user?.role === 'admin' && (
             <button
               onClick={handleSaveQueuePolicy}
@@ -1840,9 +1828,10 @@ export default function Settings() {
           )}
         </div>
         <p style={{ color: '#64748b', fontSize: 12, marginTop: 10 }}>
-          Printer caps (0 = unlimited) stop one part or project from taking over the farm while other prints are waiting:
-          once it has that many printers busy, its next print waits for other queued work first. If nothing else is
-          waiting, it still gets the printer, so no printer sits idle because of a cap.
+          Each project can set its own cap on how many printers its work may occupy at once, from the project's own
+          page: this stops one project from tying up every printer while other work waits, without capping how many
+          parts fit on one plate. If nothing else is waiting, a capped project still gets the printer, so no printer
+          sits idle because of a cap.
         </p>
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid #2d3748' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>Operator hours</div>

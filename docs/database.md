@@ -112,11 +112,14 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at        INTEGER NOT NULL,
   created_by_user_id INTEGER,               -- migration; who created it (no FK)
   created_by_name   TEXT,                   -- migration; snapshot, not joined at read time
-  priority_override INTEGER NOT NULL DEFAULT 0 -- migration; operator/admin "print next" flag (also on parts)
+  priority_override INTEGER NOT NULL DEFAULT 0, -- migration; operator/admin "print next" flag (also on parts)
+  max_concurrent_plates INTEGER             -- migration; null/0 = unlimited. See below.
 );
 ```
 
-**`priority_override`** (migration, on `projects` and `parts`, 0/1): set only through `PUT /api/{projects,parts}/:id/priority-override`, operator/admin only. Overridden work (the part's flag or its project's) is dispatched ahead of the normal queue order and exempt from the printer caps.
+**`priority_override`** (migration, on `projects` and `parts`, 0/1): set only through `PUT /api/{projects,parts}/:id/priority-override`, operator/admin only. Overridden work (the part's flag or its project's) is dispatched ahead of the normal queue order and exempt from the plate cap below.
+
+**`max_concurrent_plates`** (migration): how many printers this project's own work may occupy at once. Set by whoever manages the project (`PUT /api/projects/:id`, any role that can edit projects), not an admin Settings value: replaces the earlier admin-only `max_printers_per_part`/`max_printers_per_project` settings, which capped upload size in disguise (one printer running a big plate counted the same as one running a small plate) and could let one project tie up every printer on a shared farm. Enforced in `server/scheduler.js`'s `_atPrinterCap` and mirrored in `GET /api/parts/:id/dispatch-status` and `server/project-eta.js`'s simulation (see CLAUDE.md's sync-pairs table).
 
 **`created_by_user_id`/`created_by_name`** (migration, also on `parts`; `gcodes` has the equivalent `uploaded_by_user_id`/`uploaded_by_name`): which signed-in user created the project or part, or uploaded the G-code, so the Projects and Jobs pages can show whose parts everything belongs to. Same convention as `printer_events.user_id`/`user_name`: no FK, and the name is a snapshot taken at insert time, so attribution survives the user being renamed or deleted. `NULL` on rows created before this migration. Duplicating a project (`POST /api/projects/:id/duplicate`) attributes the new project and parts to whoever duplicated it, while each copied G-code keeps its original uploader. Jobs have no owner column: the scheduler creates job rows, so `GET /api/jobs` joins the owner from the job's part and G-code instead.
 
@@ -272,7 +275,7 @@ CREATE TABLE IF NOT EXISTS user_groups (
   can_manage_printers    INTEGER NOT NULL DEFAULT 0,
   can_quick_print        INTEGER NOT NULL DEFAULT 1,
   requires_approval      INTEGER NOT NULL DEFAULT 0,
-  max_plates_per_upload  INTEGER,                           -- null = no cap
+  max_plates_per_upload  INTEGER,                           -- unused: removed per-group plate-size cap, see docs/CHANGELOG.md; column kept (additive-only schema), never read or written
   allowed_printer_ids    TEXT,                              -- JSON array of printers.id; null = unrestricted
   allowed_printer_groups TEXT,                              -- JSON array of group names; null = unrestricted
   is_system              INTEGER NOT NULL DEFAULT 0,

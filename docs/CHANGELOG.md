@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-09-28: per-project plate cap replaces admin printer-count settings; Quick Print targets a printer type
+
+Requested (academic farm, shared by many students): the admin `max_printers_per_part`/`max_printers_per_project` settings measured the wrong thing, printer count rather than concurrency, and the user-group `max_plates_per_upload` cap on plate size actively discouraged students from batching multiple copies onto one plate. What's actually wanted: let a project's own owner cap how many printers *that project* may occupy at once, so one student's work can't tie up the whole farm, without penalizing anyone for merging parts onto fewer, bigger plates. Also requested alongside: Quick Print should resolve a file to a printer *type* (not just one exact machine or a fully automatic guess), with picking one exact machine or jumping the queue reserved for operator/admin; and a second Quick Print entry point on the Jobs page.
+
+**Plate cap moves from Settings to the project.** `projects.max_concurrent_plates` (additive column, null/0 = unlimited) replaces the admin-only `max_printers_per_part` and `max_printers_per_project` settings entirely. Set via `PUT /api/projects/:id` by whoever manages the project (any role that can edit projects), not an admin Settings page. Enforced in `server/scheduler.js`'s `_atPrinterCap` exactly like the old settings-based caps were (work-conserving: a capped project still gets an otherwise-idle printer), and mirrored in `GET /api/parts/:id/dispatch-status` and `server/project-eta.js`'s completion-estimate simulation, per this repo's sync-pairs convention. The per-*part* cap has no replacement: only the project-level cap remains, since capping upload size (in disguise, via printer count) was the actual problem.
+
+**`max_plates_per_upload` removed.** The per-user-group cap on `parts_per_plate` (`POST /api/gcodes/upload`, the slicer endpoint, Quick Print) is gone: it existed to stop one upload from being too large, which is exactly the "merge your parts" behavior the farm wants to encourage. The `user_groups.max_plates_per_upload` column stays in the schema (additive-only), unused, never read or written.
+
+**Quick Print printer type + operator-only targeting/priority.** `printer_model` (new, every role) narrows Quick Print to a type ("any Mini") without pinning to one machine; still shares fairly across every printer of that model. `printer_id` (pin to one exact machine) and `priority` (new; sets `parts.priority_override`, same effect as `PUT /api/parts/:id/priority-override`) are now operator/admin only (`403` for anyone else): a specific machine or the front of the queue can starve other users' work on shared hardware, a specific concern on a farm shared by many students. The Quick Print button (`client/src/components/QuickPrint.jsx`) now also appears on the Jobs page header, not just Fleet.
+
+Hardware validation: no driver code changed; this is dispatch-eligibility and permission logic, covered by tests against an in-memory schema, not validated by real dispatches on a farm. Could not run the full suite locally, this machine's `better-sqlite3` native binding still fails to load (same limitation disclosed all session); `node --check` on every changed file and `npm run build` both pass.
+
+### Changes
+- `server/db.js`: new `projects.max_concurrent_plates` column; `user_groups.max_plates_per_upload` marked unused in a comment, left in place.
+- `server/routes/settings.js`: `max_printers_per_part`/`max_printers_per_project` removed from `ALLOWED_KEYS`/`ADMIN_ONLY_KEYS` and validation.
+- `server/routes/projects.js`: `PUT /:id` accepts `max_concurrent_plates` (present-in-body semantics, `400` for a bad value).
+- `server/scheduler.js`: `_queuePolicy` now only reads `queue_order`; `_atPrinterCap` reads the candidate's own `projects.max_concurrent_plates` instead of global settings; the two-pass capped/uncapped dispatch loop always runs (no longer gated on a global "any cap configured" flag, since that's no longer knowable in advance).
+- `server/routes/parts.js`: `GET /:id/dispatch-status`'s printer-cap mirror rewritten to match (per-project only, reads the joined `projects.max_concurrent_plates`).
+- `server/project-eta.js`: the completion-estimate simulation's cap check (`atCap`) reads the same per-project field instead of the removed settings.
+- `server/auth.js`, `server/routes/gcodes.js`, `server/routes/quick-print.js`, `server/routes/slicer-upload.js`, `server/routes/user-groups.js`: `max_plates_per_upload` enforcement and CRUD support removed.
+- `server/routes/quick-print.js`: new `printer_model` (every role) and `priority` (operator/admin only) form fields; `printer_id` gated to operator/admin.
+- `client/src/pages/Settings.jsx`: Print Queue section's two printer-cap inputs removed.
+- `client/src/pages/Projects.jsx`: new "Max concurrent plates" input in the project detail view.
+- `client/src/components/UserGroups.jsx`: "Max parts per plate per upload" field removed.
+- `client/src/components/QuickPrint.jsx`: printer dropdown gains "Any &lt;model&gt;" options; exact-printer options and a new Priority checkbox are shown only to operator/admin.
+- `client/src/pages/Jobs.jsx`: Quick Print button added to the page header, refetches the job list on success.
+- `server/tests/`: `scheduler-queue-policy.test.js`, `dispatch-status.test.js`, `project-eta.test.js` rewritten for the per-project cap; `settings.test.js`, `user-groups.test.js`, `quick-print.test.js` updated for the removed/changed fields; new `projects-max-plates.test.js`.
+- `docs/database.md`, `docs/api.md`, `docs/auth.md`, `docs/web-app.md`: documented the moved cap, the removed setting, and the new Quick Print fields.
+
+Separately confirmed, not a change: `DELETE /api/users/:id` already refuses to delete the signed-in user's own account (`409`) and the last remaining admin, and `DELETE /api/user-groups/:id` already refuses a group with members or a built-in group, so an admin cannot delete their own way out of account management this way either.
+
+---
+
 ## 2026-09-28: user groups with per-group printers and permissions, plus Quick Print
 
 Requested: custom user groups where an admin sets each group's own settings, including which printers members may upload to, an admin group and an operator group, and a quick way to upload one file and print it once.

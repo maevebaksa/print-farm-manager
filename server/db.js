@@ -548,7 +548,7 @@ try {
     can_manage_printers    INTEGER NOT NULL DEFAULT 0,
     can_quick_print        INTEGER NOT NULL DEFAULT 1,
     requires_approval      INTEGER NOT NULL DEFAULT 0,
-    max_plates_per_upload  INTEGER,
+    max_plates_per_upload  INTEGER, -- unused: removed per-group plate-size cap; see docs/CHANGELOG.md. Column kept (additive-only schema rule), never read or written.
     allowed_printer_ids    TEXT,
     allowed_printer_groups TEXT,
     is_system              INTEGER NOT NULL DEFAULT 0,
@@ -574,5 +574,15 @@ try {
 // must run them. NULL = any eligible printer, the normal case. Checked in the
 // scheduler's candidate query and mirrored in GET /api/parts/:id/dispatch-status.
 try { db.exec('ALTER TABLE gcodes ADD COLUMN target_printer_id INTEGER'); } catch (_) {}
+
+// How many printers this project's own work may occupy at once. NULL/0 =
+// unlimited (the default). Set by whoever manages the project itself (PUT
+// /api/projects/:id), not an admin-wide Settings value: replaces the earlier
+// admin-only max_printers_per_part/max_printers_per_project settings, which
+// caused one large upload to tie up every printer on a shared academic farm
+// and, being a flat size limit rather than a concurrency limit, discouraged
+// students from batching multiple parts onto one plate. Enforced in the
+// scheduler's candidate walk (server/scheduler.js's _atPrinterCap).
+try { db.exec('ALTER TABLE projects ADD COLUMN max_concurrent_plates INTEGER'); } catch (_) {}
 
 module.exports = db;
