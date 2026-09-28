@@ -24,6 +24,11 @@ export default function Account() {
   const [showToast, toastEl] = useToast();
   const [confirm, confirmModal] = useConfirm();
 
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+
   const fetchKeys = useCallback(async () => {
     const res = await fetch('/api/api-keys');
     if (res.ok) setKeys(await res.json());
@@ -66,12 +71,88 @@ export default function Account() {
     fetchKeys();
   }
 
+  async function changePassword(e) {
+    e.preventDefault();
+    if (newPassword !== confirmPassword) {
+      showToast('New password and confirmation do not match', 'error');
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const res = await fetch('/api/account/password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(body.error || 'Password change failed', 'error'); return; }
+      showToast('Password changed', 'success');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
   if (loading) return <p style={{ color: '#64748b' }}>Loading…</p>;
 
   return (
     <div style={{ maxWidth: 640 }}>
       <div style={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0', marginBottom: 4 }}>My Account</div>
       <div style={{ fontSize: 13, color: '#64748b', marginBottom: 20 }}>{user.name} · {user.email}</div>
+
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        Change Password
+      </div>
+
+      {!user.has_password ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>
+          This account signs in via SSO and has no password to change.
+        </p>
+      ) : (
+        <form onSubmit={changePassword} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320, marginBottom: 24 }}>
+          <input
+            type="password"
+            placeholder="Current password"
+            value={currentPassword}
+            onChange={e => setCurrentPassword(e.target.value)}
+            disabled={changingPassword}
+            style={inputStyle}
+          />
+          <input
+            type="password"
+            placeholder="New password (min 8 characters)"
+            value={newPassword}
+            onChange={e => setNewPassword(e.target.value)}
+            disabled={changingPassword}
+            minLength={8}
+            style={inputStyle}
+          />
+          <input
+            type="password"
+            placeholder="Confirm new password"
+            value={confirmPassword}
+            onChange={e => setConfirmPassword(e.target.value)}
+            disabled={changingPassword}
+            minLength={8}
+            style={inputStyle}
+          />
+          <button
+            type="submit"
+            disabled={changingPassword || !currentPassword || newPassword.length < 8 || !confirmPassword}
+            style={{
+              alignSelf: 'flex-start',
+              background: changingPassword || !currentPassword || newPassword.length < 8 || !confirmPassword ? '#1e2433' : '#1e40af',
+              color: changingPassword || !currentPassword || newPassword.length < 8 || !confirmPassword ? '#475569' : '#fff',
+              border: 'none', borderRadius: 5, padding: '7px 16px', fontSize: 13, fontWeight: 600,
+              cursor: changingPassword || !currentPassword || newPassword.length < 8 || !confirmPassword ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {changingPassword ? 'Changing…' : 'Change Password'}
+          </button>
+        </form>
+      )}
 
       <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
         API Keys

@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-09-29: self-service and admin password changes
+
+Requested: a way to change a password, admin included; previously there was no UI for changing an existing account's password anywhere, only setting one at creation.
+
+New `PUT /api/account/password` (self-service, requires the current password, standard practice so a left-open session can't silently take over an account for good) surfaced on the Account page as a Change Password form, hidden with an explanatory message for an SSO-only account with nothing to change. `PUT /api/users/:id` already accepted a `password` field server-side (used by account creation); now surfaced on the Users page too, per row, as an admin-only Reset password action (no current-password check, an admin resetting someone else's password is already a privileged action, e.g. for a locked-out user).
+
+`req.user`'s shape (and the login/bootstrap responses) gains `has_password`, a computed boolean from `auth.js`'s `publicUser()`, never the real hash: what the Account page uses to decide whether to show the form at all.
+
+### Changes
+- `server/routes/account.js`: new file, `PUT /password` (verify current, hash and store new, `401`/`400` on failure).
+- `server/auth.js`: `publicUser()` adds computed `has_password`.
+- `server/index.js`: mounts the new router at `/api/account`.
+- `client/src/pages/Account.jsx`: new Change Password section.
+- `client/src/pages/Users.jsx`: new Reset password button + inline field per row.
+- `server/tests/account-routes.test.js`: new file, covering success, wrong current password, short new password, SSO-only account, unknown user.
+- `docs/api.md`, `docs/auth.md`, `docs/web-app.md`: documented the new endpoint, the `has_password` field, and both UI surfaces.
+
+No automated test for the client UI: this repo has no client-side test framework. Verified `npm run build` succeeds and `node --check` on the new/changed server files; could not run `npm test` or a live browser, this machine's `better-sqlite3` native binding fails to load, the same limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-28: fix OctoPrint loopback webcam fix: real IP, wrong port
 
 Reported: after the previous entry's fix shipped (substitute the printer's real host for a `127.0.0.1` webcam URL, keeping OctoPrint's own reported port), the resulting URL still failed: `ECONNREFUSED <printer's real IP>:8080`. A live test confirmed `http://<ip>:8080/...` refused from outside the Pi entirely (mjpg-streamer there is bound to `127.0.0.1` only, not the Pi's real interface), while `http://<ip>/webcam/?action=snapshot`, no port, does work.

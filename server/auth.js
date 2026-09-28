@@ -129,7 +129,7 @@ function clearSessionCookie(req, res) {
 function publicUser(user) {
   if (!user) return null;
   const { password_hash, ...rest } = user;
-  return rest;
+  return { ...rest, has_password: !!password_hash };
 }
 
 // Mounted ahead of every /api route except the public ones listed in

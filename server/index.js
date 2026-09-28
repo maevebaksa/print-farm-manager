@@ -24,6 +24,7 @@ const auth           = require('./auth');
 const authRouter         = require('./routes/auth')(db);
 const usersRouter        = require('./routes/users')(db);
 const apiKeysRouter      = require('./routes/api-keys')(db);
+const accountRouter      = require('./routes/account')(db);
 const printersRouter     = require('./routes/printers')(db);
 const jobsRouter         = require('./routes/jobs')(db);
 const backupRouter       = require('./routes/backup')(db);
@@ -66,6 +67,7 @@ app.use('/api', auth.requireAuth(db));
 // comment.
 app.use('/api/users',           usersRouter);
 app.use('/api/api-keys',        apiKeysRouter);
+app.use('/api/account',         accountRouter);
 app.use('/api/printers',        printersRouter);
 app.use('/api/printers/:id/jobs', printerJobsRouter);
 app.use('/api/jobs',            jobsRouter);

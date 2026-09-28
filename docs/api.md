@@ -130,6 +130,16 @@ Revokes (soft delete, the row and its `last_used_at` history are kept). `404` if
 
 ---
 
+## Account
+
+Self-service actions on the signed-in user's own account, distinct from the `Users` section above (admin managing everyone).
+
+### `PUT /api/account/password`
+
+Change your own password. **Body:** `{ "current_password": "...", "new_password": "..." }`, both required. `401` if `current_password` is wrong. `400` if `new_password` is under 8 characters, or if the account has no password to change at all (SSO-only, `password_hash` is null): `{ "error": "This account has no password (signs in via SSO); there is nothing to change." }`. Returns `{ "success": true }`. Does not touch other sessions or API keys, the same as an admin resetting someone's password via `PUT /api/users/:id`.
+
+---
+
 ## Printers
 
 ### `GET /api/printers`

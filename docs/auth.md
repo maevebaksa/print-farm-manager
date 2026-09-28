@@ -7,7 +7,7 @@ Every route under `/api/*` except the ones listed below requires a signed-in use
 1. **Session cookie**: the browser client. `POST /api/auth/login` (or the bootstrap/OIDC flows below) sets an httpOnly `pfm_session` cookie; every subsequent request includes it automatically.
 2. **API key**: for scripts, OrcaSlicer, or any tool calling the REST API directly. Send `Authorization: Bearer <key>`. A key acts as its owning user for every request: full access, not scoped to specific routes. Generated and revoked from Account → API Keys in the app; the plaintext is shown exactly once, at creation.
 
-Both resolve to the same `req.user` shape server-side (`{ id, email, name, role, oidc_subject, created_at, last_login_at }`): route handlers never need to know which one was used, except where noted.
+Both resolve to the same `req.user` shape server-side (`{ id, email, name, role, oidc_subject, created_at, last_login_at, has_password }`): route handlers never need to know which one was used, except where noted. `has_password` is a computed boolean (`auth.js`'s `publicUser()`), never the real `password_hash`: `true` for a local/password account, `false` for an SSO-only one with nothing to change (see `PUT /api/account/password` in [docs/api.md](api.md)).
 
 ## Public routes (no auth required)
 

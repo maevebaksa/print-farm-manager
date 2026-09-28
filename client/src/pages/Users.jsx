@@ -74,6 +74,9 @@ export default function Users() {
   const [saving, setSaving] = useState(false);
   const [showToast, toastEl] = useToast();
   const [confirm, confirmModal] = useConfirm();
+  const [resetPasswordFor, setResetPasswordFor] = useState(null); // user id currently showing the reset field
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [resettingPassword, setResettingPassword] = useState(false);
 
   // An operator can reach this page (see App.jsx) but GET /api/users is
   // admin-only, so only fetch the full list (and thus render the full
@@ -152,6 +155,25 @@ export default function Users() {
     fetchUsers();
   }
 
+  async function resetPassword(u) {
+    if (resetPasswordValue.length < 8) return;
+    setResettingPassword(true);
+    try {
+      const res = await fetch(`/api/users/${u.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: resetPasswordValue }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(`Reset failed: ${body.error || res.status}`, 'error'); return; }
+      showToast(`${u.name}'s password reset`, 'success');
+      setResetPasswordFor(null);
+      setResetPasswordValue('');
+    } finally {
+      setResettingPassword(false);
+    }
+  }
+
   async function removeUser(u) {
     const ok = await confirm({
       title: `Remove ${u.name}?`,
@@ -217,8 +239,9 @@ export default function Users() {
           {users.map(u => (
             <div key={u.id} style={{
               background: '#131720', border: '1px solid #1e2433', borderRadius: 7,
-              padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12,
+              padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8,
             }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, color: '#e2e8f0', fontWeight: 600 }}>
                   {u.name} {u.id === me.id && <span style={{ color: '#64748b', fontWeight: 400 }}>(you)</span>}
@@ -257,11 +280,55 @@ export default function Users() {
                 <option value="admin">Admin</option>
               </select>
               <button
+                onClick={() => {
+                  setResetPasswordFor(resetPasswordFor === u.id ? null : u.id);
+                  setResetPasswordValue('');
+                }}
+                style={{ background: 'none', border: '1px solid #2d3748', color: '#94a3b8', borderRadius: 5, padding: '5px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Reset password
+              </button>
+              <button
                 onClick={() => removeUser(u)}
                 style={{ background: 'none', border: '1px solid #7f1d1d', color: '#fca5a5', borderRadius: 5, padding: '5px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
               >
                 Remove
               </button>
+            </div>
+
+            {resetPasswordFor === u.id && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 2 }}>
+                <input
+                  type="password"
+                  placeholder="New password (min 8 characters)"
+                  value={resetPasswordValue}
+                  onChange={e => setResetPasswordValue(e.target.value)}
+                  disabled={resettingPassword}
+                  minLength={8}
+                  autoFocus
+                  style={{ ...inputStyle, flex: 1, maxWidth: 260 }}
+                />
+                <button
+                  onClick={() => resetPassword(u)}
+                  disabled={resettingPassword || resetPasswordValue.length < 8}
+                  style={{
+                    background: resettingPassword || resetPasswordValue.length < 8 ? '#1e2433' : '#1e40af',
+                    color: resettingPassword || resetPasswordValue.length < 8 ? '#475569' : '#fff',
+                    border: 'none', borderRadius: 5, padding: '5px 12px', fontSize: 12, fontWeight: 600,
+                    cursor: resettingPassword || resetPasswordValue.length < 8 ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {resettingPassword ? 'Setting…' : 'Set'}
+                </button>
+                <button
+                  onClick={() => { setResetPasswordFor(null); setResetPasswordValue(''); }}
+                  disabled={resettingPassword}
+                  style={{ background: 'none', border: 'none', color: '#475569', fontSize: 12, cursor: 'pointer', padding: '5px 6px' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
             </div>
           ))}
         </div>
