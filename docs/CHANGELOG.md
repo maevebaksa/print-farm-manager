@@ -2,6 +2,20 @@
 
 ---
 
+## 2026-09-28: never use a client-supplied upload filename raw on disk
+
+Reported (found while building the slicer endpoint): `POST /api/gcodes/upload` named stored files `Date.now() + "_" + file.originalname`, trusting the client's filename, and stored it verbatim as the display name. Checked before fixing: the feared `../` path traversal is not reachable today, because multer 2.2.0's default `preservePath: false` has busboy strip directory parts (both `/` and `\`) before the route sees the name; a raw multipart request with `filename="../../evil.gcode"` arrives as `evil.gcode`. What does arrive intact are characters NTFS treats specially, which matters on the Windows farm machine: `part:1.gcode` would be written as an alternate data stream on a file named `<timestamp>_part` rather than a normal file, and `?`, `*`, `|`, `"` make the write fail.
+
+New `server/safe-filename.js`: `safeFilename()` (disk name: bare basename, only `[A-Za-z0-9_ .-()+]`, no leading dots) and `displayFilename()` (display name: bare basename with control characters removed, otherwise unchanged so accented names still read correctly). Both split on `/` and `\` explicitly rather than trusting multer's default to stay the same. Used by the G-code upload route and the slicer endpoint (which had its own copy). Backup restore and printer import were checked: restore's upload has a fixed server-chosen name and it already rejects any non-basename `gcode_files` key; import uses memory storage.
+
+### Changes
+- `server/safe-filename.js`: new.
+- `server/routes/gcodes.js`: disk name via `safeFilename`, stored display name via `displayFilename`.
+- `server/routes/slicer-upload.js`: uses the shared helpers; display name via `displayFilename`.
+- `server/tests/gcodes.test.js`: a Windows-special-character filename is stored as a plain safe basename inside `server/gcode/` (fails on the previous code); a `../` name is reduced to its basename (passes either way, since multer already strips it, and says so).
+
+---
+
 ## 2026-09-28: read print time and filament from the file's slicer header (PrusaSlicer, OrcaSlicer, ideaMaker)
 
 Requested: for every uploaded file, take the print time and material from the file header rather than the filename. Until now `est_print_secs` and `material_grams` only came from a filename convention (`..._2h30m_45g.gcode`) or manual entry, so most real slicer output arrived with no estimate at all, which also starved the project ETA.

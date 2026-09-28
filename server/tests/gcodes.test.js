@@ -87,6 +87,8 @@ beforeAll(() => {
   db.exec(`INSERT INTO printer_models VALUES ('a1m',  'A1 Mini',    'bambu')`); // requires_print_approval tests only, kept unused elsewhere so (part_id, printer_model) never collides
   db.exec(`INSERT INTO printer_models VALUES ('mini', 'MINI+',      'prusa')`); // uploaded_by attribution test only, same reason
   db.exec(`INSERT INTO printer_models VALUES ('hdr',  'Header Test', 'prusa')`); // header print-stats test only, same reason
+  db.exec(`INSERT INTO printer_models VALUES ('fnm',  'Filename 1', 'prusa')`);  // filename-safety tests only, same reason
+  db.exec(`INSERT INTO printer_models VALUES ('fnm2', 'Filename 2', 'prusa')`);
 
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
 
@@ -379,6 +381,43 @@ describe('POST /api/gcodes/upload: print stats from the file header', () => {
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ est_print_secs: 7200, material_grams: 12.5, material_type: 'PETG', required_material: null });
     uploadedPath = res.body.filepath;
+  });
+});
+
+describe('POST /api/gcodes/upload: client filename is never used raw on disk', () => {
+  // multer's default preservePath: false already strips directory parts from
+  // the multipart filename (busboy), so "../" traversal cannot arrive through
+  // this route today. What does arrive intact is a character NTFS treats
+  // specially: "part:1.gcode" on the Windows farm machine would write an
+  // alternate data stream instead of a file, and ?, *, |, " fail outright.
+  let uploadedPath;
+  afterEach(() => {
+    if (uploadedPath && fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
+    uploadedPath = null;
+  });
+
+  test('stored filepath is a plain safe basename inside server/gcode/, display name keeps the readable name', async () => {
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', Buffer.from('G28\n'), { filename: 'part:1?*|x.gcode' })
+      .field('part_id', '1').field('parts_per_plate', '1').field('printer_model', 'fnm');
+    expect(res.status).toBe(201);
+    uploadedPath = res.body.filepath;
+    expect(res.body.filepath).not.toMatch(/[\\/:?*|"<>]/);
+    expect(path.dirname(path.resolve(GCODE_DIR, res.body.filepath))).toBe(path.resolve(GCODE_DIR));
+    expect(fs.existsSync(path.join(GCODE_DIR, res.body.filepath))).toBe(true);
+    expect(res.body.filename).toBe('part:1?*|x.gcode');
+  });
+
+  test('a traversal filename is reduced to its basename', async () => {
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', Buffer.from('G28\n'), { filename: '../../evil.gcode' })
+      .field('part_id', '1').field('parts_per_plate', '1').field('printer_model', 'fnm2');
+    expect(res.status).toBe(201);
+    uploadedPath = res.body.filepath;
+    expect(res.body.filepath).not.toMatch(/[\\/]/);
+    expect(res.body.filename).toBe('evil.gcode');
   });
 });
 

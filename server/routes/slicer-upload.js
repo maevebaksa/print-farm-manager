@@ -39,6 +39,7 @@ const path = require('path');
 const fs = require('fs');
 const auth = require('../auth');
 const { readPrinterModelName, matchRegistryModel, readPrintStats } = require('../gcode-metadata');
+const { safeFilename, displayFilename } = require('../safe-filename');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 const ACCEPTED_EXTENSIONS = ['.gcode', '.gco', '.g', '.bgcode', '.3mf'];
@@ -46,15 +47,7 @@ const ACCEPTED_EXTENSIONS = ['.gcode', '.gco', '.g', '.bgcode', '.3mf'];
 // with "OctoPrint" (OctoPrint::validate_version_text).
 const VERSION_INFO = { api: '0.1', server: '1.10.0', text: 'OctoPrint 1.10.0 (Print Farm Manager)' };
 
-// Stored names are built from the client-supplied filename, so reduce it to a
-// bare, safe basename first: no directory parts, no characters that could
-// escape GCODE_DIR or trip Windows.
-function safeFilename(original) {
-  const base = String(original || 'upload.gcode').split(/[\\/]/).pop();
-  const cleaned = base.replace(/[^\w.\- ()+]/g, '_').replace(/^\.+/, '');
-  return cleaned || 'upload.gcode';
-}
-
+// Stored names never trust the client-supplied filename: see server/safe-filename.js.
 const upload = multer({
   storage: multer.diskStorage({
     destination: GCODE_DIR,
@@ -124,7 +117,7 @@ module.exports = (db, getScheduler = () => null) => {
           return res.status(status).json({ error });
         };
 
-        const displayName = safeFilename(req.file.originalname);
+        const displayName = displayFilename(req.file.originalname);
         const lower = displayName.toLowerCase();
         if (!ACCEPTED_EXTENSIONS.some(ext => lower.endsWith(ext))) {
           return reject(415, `Unsupported file type: upload .gcode, .bgcode, or a sliced .3mf`);
@@ -228,4 +221,3 @@ module.exports = (db, getScheduler = () => null) => {
   return router;
 };
 
-module.exports.safeFilename = safeFilename;
