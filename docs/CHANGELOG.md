@@ -2,6 +2,15 @@
 
 ---
 
+## 2026-09-28: fix CI: four test files missing the new projects column
+
+CI went red on `main` after the per-project plate cap commit (86d098a): `server/scheduler.js`'s candidate query now always selects `projects.max_concurrent_plates`, but four test files build their own in-memory schema and hadn't been updated, `SqliteError: no such column: projects.max_concurrent_plates` in every test that reaches the scheduler's candidate SQL or `GET /api/parts/:id/dispatch-status`.
+
+### Changes
+- `server/tests/scheduler-sweep.test.js`, `scheduler-targeting.test.js`, `scheduler-file.test.js`, `rename.test.js`: `projects` table gains `max_concurrent_plates INTEGER`, matching every other test file already updated in the previous commit.
+
+---
+
 ## 2026-09-28: per-project plate cap replaces admin printer-count settings; Quick Print targets a printer type
 
 Requested (academic farm, shared by many students): the admin `max_printers_per_part`/`max_printers_per_project` settings measured the wrong thing, printer count rather than concurrency, and the user-group `max_plates_per_upload` cap on plate size actively discouraged students from batching multiple copies onto one plate. What's actually wanted: let a project's own owner cap how many printers *that project* may occupy at once, so one student's work can't tie up the whole farm, without penalizing anyone for merging parts onto fewer, bigger plates. Also requested alongside: Quick Print should resolve a file to a printer *type* (not just one exact machine or a fully automatic guess), with picking one exact machine or jumping the queue reserved for operator/admin; and a second Quick Print entry point on the Jobs page.

@@ -527,7 +527,7 @@ describe('_sweepInBatches: ceiling interaction through the real wave loop', () =
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL, status TEXT DEFAULT 'active',
         priority INTEGER DEFAULT 0, required_material TEXT, required_color TEXT,
-        allowed_groups TEXT,
+        allowed_groups TEXT, max_concurrent_plates INTEGER,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE parts (

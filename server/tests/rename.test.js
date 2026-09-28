@@ -15,6 +15,7 @@ beforeAll(() => {
       name TEXT NOT NULL,
       description TEXT,
       status TEXT DEFAULT 'draft',
+      max_concurrent_plates INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
     );
