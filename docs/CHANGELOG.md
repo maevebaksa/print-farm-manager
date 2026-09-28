@@ -27,6 +27,14 @@ Hardware validation: no driver code changed. The scheduler restriction and pinni
 - `docs/auth.md`, `api.md`, `database.md`, `web-app.md`: documented.
 
 Test status: `npm test` could not run on this machine (no better-sqlite3 build for Node 22.23.2 and no Visual Studio toolchain). The touched suites passed under a temporary shim over Node's built-in `node:sqlite`; a full run through the shim also showed failures that differ from run to run and also occur without these changes. Run `npm test` on a machine with a working build before merging.
+## 2026-09-28: fix CI: account and update route tests hitting a stale router
+
+CI went red on `main` after the Software Update / account branch merged (run for `8d16146`): three tests in `account-routes.test.js` and `update-routes.test.js` failed (a 401 and a 404 where 400 was expected, and `latestCommit: null`). They failed on that branch's own commit before the merge too (`c012a62`), so they were not caused by the merge.
+
+Cause: `server/routes/account.js` and `server/routes/update.js` created their Express router once at module level but registered handlers inside the factory. Each test builds a fresh app and database, calling the factory again, which added another handler to the same shared router; the first one, bound to the first test's database, answered every later request. So a later test saw the password changed by an earlier one, or a database without its `update_repo` setting. Harmless in production (one factory call), but wrong. Both routers are now created inside the factory, like `routes/groups.js` and `routes/models.js`.
+
+### Changes
+- `server/routes/account.js`, `server/routes/update.js`: router created per factory call.
 
 ---
 
