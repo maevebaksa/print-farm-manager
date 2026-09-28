@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min', 'require_uploader_approval', 'queue_order', 'max_printers_per_part', 'max_printers_per_project']);
+const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min', 'require_uploader_approval', 'queue_order', 'max_printers_per_part', 'max_printers_per_project', 'operator_hours_start', 'operator_hours_end', 'operator_days']);
 const QUEUE_ORDERS = new Set(['priority', 'fifo']);
 const MAX_PRINTER_CAP = 1000;
 // RGB Euclidean distance (server/color-distance.js) ranges 0 (identical) to
@@ -14,7 +14,9 @@ const MAX_COLOR_TOLERANCE = 450;
 // scoped to admin the same way /api/users is (see server/index.js).
 // The queue policy keys decide whose prints run first on a shared farm (see
 // scheduler.js's _queuePolicy), so they are admin-only as well.
-const ADMIN_ONLY_KEYS = new Set(['auto_sso_redirect', 'require_uploader_approval', 'queue_order', 'max_printers_per_part', 'max_printers_per_project']);
+// Operator hours only feed the time estimates (server/project-eta.js), but
+// they describe staffing, so they sit with the other admin farm policy keys.
+const ADMIN_ONLY_KEYS = new Set(['auto_sso_redirect', 'require_uploader_approval', 'queue_order', 'max_printers_per_part', 'max_printers_per_project', 'operator_hours_start', 'operator_hours_end', 'operator_days']);
 
 module.exports = (db) => {
   // GET /api/settings — returns all settings as { key: value, ... }
@@ -70,6 +72,20 @@ module.exports = (db) => {
 
     if (key === 'require_uploader_approval' && value !== '0' && value !== '1') {
       return res.status(400).json({ error: 'require_uploader_approval must be "0" or "1"' });
+    }
+
+    // "" is not accepted by the generic check above, so "always staffed" is
+    // expressed as "off" for either end of the shift.
+    if ((key === 'operator_hours_start' || key === 'operator_hours_end') &&
+        value !== 'off' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value))) {
+      return res.status(400).json({ error: `${key} must be HH:MM (24-hour) or "off"` });
+    }
+
+    if (key === 'operator_days') {
+      const days = String(value).split(',').map(d => d.trim());
+      if (days.length === 0 || days.some(d => !/^[0-6]$/.test(d))) {
+        return res.status(400).json({ error: 'operator_days must be a comma-separated list of 0-6 (0 = Sunday)' });
+      }
     }
 
     if (key === 'queue_order' && !QUEUE_ORDERS.has(value)) {

@@ -386,6 +386,11 @@ export default function Settings() {
   const [maxPerProject, setMaxPerProject] = useState('0');
   const [queueError, setQueueError] = useState(null);
   const [savingQueue, setSavingQueue] = useState(false);
+  // Operator hours (admin-only; feed the completion estimates in
+  // server/project-eta.js). Empty start/end = always staffed.
+  const [opStart, setOpStart] = useState('');
+  const [opEnd, setOpEnd] = useState('');
+  const [opDays, setOpDays] = useState([0, 1, 2, 3, 4, 5, 6]);
   const [colorToleranceError, setColorToleranceError] = useState(null);
 
   // Upload retry window: how long the scheduler keeps retrying a failing upload on
@@ -423,6 +428,9 @@ export default function Settings() {
         setQueueOrder(data.queue_order || 'priority');
         setMaxPerPart(data.max_printers_per_part ?? '0');
         setMaxPerProject(data.max_printers_per_project ?? '0');
+        setOpStart(data.operator_hours_start && data.operator_hours_start !== 'off' ? data.operator_hours_start : '');
+        setOpEnd(data.operator_hours_end && data.operator_hours_end !== 'off' ? data.operator_hours_end : '');
+        if (data.operator_days) setOpDays(data.operator_days.split(',').map(Number));
         setRetryWindow(data.upload_retry_window_min ?? '15');
         setRequireUploaderApproval(data.require_uploader_approval === '1');
       })
@@ -490,7 +498,13 @@ export default function Settings() {
     setQueueError(null);
     setSavingQueue(true);
     try {
-      for (const [key, value] of [['queue_order', queueOrder], ['max_printers_per_part', maxPerPart], ['max_printers_per_project', maxPerProject]]) {
+      if (opDays.length === 0) throw new Error('Pick at least one operator day');
+      if (!!opStart !== !!opEnd) throw new Error('Set both operator start and end, or leave both empty for always staffed');
+      for (const [key, value] of [
+        ['queue_order', queueOrder], ['max_printers_per_part', maxPerPart], ['max_printers_per_project', maxPerProject],
+        ['operator_hours_start', opStart || 'off'], ['operator_hours_end', opEnd || 'off'],
+        ['operator_days', [...opDays].sort().join(',')],
+      ]) {
         const res = await fetch(`/api/settings/${key}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -1682,6 +1696,38 @@ export default function Settings() {
           once it has that many printers busy, its next print waits for other queued work first. If nothing else is
           waiting, it still gets the printer, so no printer sits idle because of a cap.
         </p>
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid #2d3748' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>Operator hours</div>
+          <p style={{ color: '#64748b', fontSize: 12, marginBottom: 10 }}>
+            Every print finishes held until someone confirms it, so a printer that finishes outside these hours sits
+            until the next shift. Used only for the completion estimates on the Dashboard and Projects pages (server
+            time). Leave both times empty if someone is always around. Saved with the button above.
+          </p>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Shift starts</label>
+              <input type="time" value={opStart} disabled={user?.role !== 'admin'} onChange={e => setOpStart(e.target.value)} style={{ ...inputStyle, width: 120 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Shift ends</label>
+              <input type="time" value={opEnd} disabled={user?.role !== 'admin'} onChange={e => setOpEnd(e.target.value)} style={{ ...inputStyle, width: 120 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingBottom: 6 }}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label, d) => (
+                <label key={d} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 12, color: opDays.includes(d) ? '#e2e8f0' : '#64748b', cursor: user?.role === 'admin' ? 'pointer' : 'default' }}>
+                  <input
+                    type="checkbox"
+                    checked={opDays.includes(d)}
+                    disabled={user?.role !== 'admin'}
+                    onChange={e => setOpDays(prev => e.target.checked ? [...prev, d] : prev.filter(x => x !== d))}
+                    style={{ accentColor: '#3b82f6' }}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
         {queueError && <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{queueError}</div>}
       </section>
 

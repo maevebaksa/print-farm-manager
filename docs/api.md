@@ -519,17 +519,26 @@ Returns a single project. `404` if not found.
 
 ### `GET /api/projects/:id/eta`
 
-Rough estimated time remaining for the project's whole queue, not just whatever is currently printing. `404` if the project doesn't exist.
+Estimated completion of the project's whole remaining queue. `404` if the project doesn't exist.
 
 ```json
-{ "remaining_seconds": 5400, "incomplete": false, "eligible_printer_count": 2 }
+{ "remaining_seconds": 64014, "completion_at": 1790688000000, "incomplete": false, "eligible_printer_count": 2 }
 ```
 
-- `remaining_seconds`: real telemetry (`printers.job_time_remaining`) for whatever is printing right now on this project, plus the estimated time for everything not yet started or in flight, spread across `eligible_printer_count`. `null` if there is remaining work but no G-code in the project has `est_print_secs` set anywhere, so no estimate is possible at all. `0` once nothing remains.
-- `incomplete`: `true` if some remaining part has no `est_print_secs` on any of its G-codes, meaning `remaining_seconds` (when non-null) undercounts rather than being wrong outright.
-- `eligible_printer_count`: how many active printers have a model matching at least one of this project's G-codes. This is a coarse capacity figure, not a live schedule: it doesn't account for material/color/group eligibility or whether those printers are currently busy with something else.
+Computed by a simulation of the whole farm (`server/project-eta.js` `simulateFarm`), replaying what the scheduler would do from now on, one plate at a time:
 
-This is deliberately a rough estimate, not a scheduling simulation. See `server/project-eta.js`. The Dashboard's Active Projects panel includes the same numbers per project as `estimated_remaining_secs` / `estimated_remaining_incomplete` in `GET /api/dashboard` (see below), computed by the same shared function.
+- **Printers:** every active printer. One printing now is free when its print ends (`printers.job_time_remaining`); an idle, unheld one is free now; one held for sign-off is free once an operator is on shift. OFFLINE, ERROR, and UNKNOWN printers take no work.
+- **Queue:** open parts of active projects in the scheduler's order (priority override first, then `queue_order`), with the same model, group, and exact material/color eligibility (the optional color tolerance is not modeled) and the same work-conserving printer caps. So another project's work ahead in the queue delays this one.
+- **Plates:** each dispatch prints one whole plate of the G-code for that printer's model (`parts_per_plate` parts in `est_print_secs`); remaining plates come from `target_qty - completed_qty -` what is already printing.
+- **Operators:** every print finishes held, so a printer that finishes only takes its next plate at the next moment an operator is on shift (`operator_hours_start` / `operator_hours_end` / `operator_days`, server local time; unset means always staffed). Printers with `auto_advance` do not wait.
+
+Fields:
+- `remaining_seconds`: until the project's last plate finishes printing. `0` when nothing is left; `null` when there is work left but none of it can be estimated.
+- `completion_at`: that moment as epoch milliseconds, or `null`.
+- `incomplete`: `true` when the estimate is a lower bound: a G-code without `est_print_secs`, a part no current printer can take, or the simulation's safety limit (20000 plates) reached.
+- `eligible_printer_count`: active printers whose model matches one of this project's G-codes (informational).
+
+The Dashboard's Active Projects panel includes the same numbers per project in `GET /api/dashboard` (`estimated_remaining_secs`, `estimated_completion_at`, `estimated_remaining_incomplete`), from one shared simulation per request.
 
 ### `POST /api/projects`
 
@@ -897,8 +906,10 @@ Body: `{ "value": "..." }`. Allowed keys:
 | `queue_order` | `"priority"` or `"fifo"` | Admin-only. Which waiting print a free printer takes next. `priority` (the default when unset): project priority, then part `sort_order`. `fifo`: first in, first out by the matching G-code's upload time (`gcodes.created_at`); project and part order are ignored. See the Scheduler section below. |
 | `max_printers_per_part` | integer 0-1000 | Admin-only. `0` (default) = unlimited. How many printers one part may have uploading or printing while other eligible work is waiting. Work-conserving: never leaves a printer idle. |
 | `max_printers_per_project` | integer 0-1000 | Admin-only. Same as above, counted across all of a project's parts. |
+| `operator_hours_start` / `operator_hours_end` | `HH:MM` (24-hour) or `"off"` | Admin-only. The operator shift used by the completion estimates (`GET /api/projects/:id/eta`): a printer that finishes outside it waits for the next shift. An end before the start is an overnight shift. Either one `"off"` (or unset) means always staffed. Server local time. |
+| `operator_days` | comma-separated `0`-`6` (0 = Sunday) | Admin-only. Days the shift runs; default every day. |
 
-Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, `queue_order`, `max_printers_per_part`, or `max_printers_per_project`.
+Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, `queue_order`, `max_printers_per_part`, `max_printers_per_project`, `operator_hours_start`, `operator_hours_end`, or `operator_days`.
 
 ---
 
@@ -953,7 +964,7 @@ Single endpoint that returns all data required by the TV dashboard in one call. 
 - `elapsed_secs` — total wall-clock print time in seconds: sum of `finished_at − started_at` for all `finished` jobs in the project, plus `now − started_at` for any currently `printing` job.
 - `material_used_grams` — total material consumed in grams: sum of `gcode.material_grams / gcode.parts_per_plate * job.parts_per_plate` across all `finished` jobs that have a linked gcode with `material_grams` set. `null` if no jobs have gcode material data.
 - `model_breakdown` — array of per-printer-model summaries for all finished jobs: `{ printer_model, jobs_count, parts_printed, material_grams, elapsed_secs }`, ordered by `parts_printed DESC`.
-- `estimated_remaining_secs` / `estimated_remaining_incomplete`: same rough remaining-time estimate as `GET /api/projects/:id/eta` above (see that entry for what these mean and what they deliberately don't model), computed by the same shared `server/project-eta.js` function.
+- `estimated_remaining_secs` / `estimated_completion_at` / `estimated_remaining_incomplete`: the same farm-simulation estimate as `GET /api/projects/:id/eta` above (see that entry), from one `simulateFarm` run shared by every project in the response.
 
 `recent_activity` is the 12 most recent `finished` or `failed` jobs, each with `part_name` and `printer_name` joined in. (Retained in the payload for compatibility; the dashboard UI no longer renders this list — see [web-app.md](web-app.md).)
 

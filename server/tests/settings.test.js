@@ -244,3 +244,25 @@ describe('queue policy settings (queue_order, max_printers_per_part/project)', (
     expect(res.status).toBe(403);
   });
 });
+
+describe('operator hours settings (used by the time estimates)', () => {
+  afterEach(() => { currentUser = { id: 1, role: 'admin' }; });
+
+  test('admin can set start, end, and days; "off" clears a shift end', async () => {
+    expect((await request(app).put('/api/settings/operator_hours_start').send({ value: '08:00' })).status).toBe(200);
+    expect((await request(app).put('/api/settings/operator_hours_end').send({ value: '17:30' })).status).toBe(200);
+    expect((await request(app).put('/api/settings/operator_days').send({ value: '1,2,3,4,5' })).status).toBe(200);
+    expect((await request(app).put('/api/settings/operator_hours_end').send({ value: 'off' })).status).toBe(200);
+  });
+
+  test('rejects malformed times and days', async () => {
+    expect((await request(app).put('/api/settings/operator_hours_start').send({ value: '8am' })).status).toBe(400);
+    expect((await request(app).put('/api/settings/operator_hours_end').send({ value: '24:00' })).status).toBe(400);
+    expect((await request(app).put('/api/settings/operator_days').send({ value: '1,7' })).status).toBe(400);
+  });
+
+  test('an operator cannot change them', async () => {
+    currentUser = { id: 2, role: 'operator' };
+    expect((await request(app).put('/api/settings/operator_hours_start').send({ value: '08:00' })).status).toBe(403);
+  });
+});

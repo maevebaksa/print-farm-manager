@@ -21,6 +21,13 @@ function formatDurationForInput(secs) {
 // Read-only display for the project ETA badge, day-aware, unlike
 // formatDurationForInput above (which round-trips into an editable field and
 // deliberately stays in the same h/m shape a person would type).
+// Clock time a project's last plate should finish (estimated_completion_at /
+// completion_at from server/project-eta.js), e.g. "Tue 14:05".
+function formatCompletionAt(ms) {
+  if (!ms) return null;
+  return new Date(ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 function formatDurationDisplay(secs) {
   if (!secs) return null;
   const HOUR = 3600, DAY = 86400;
@@ -1841,12 +1848,12 @@ export default function Projects() {
         {detailEta && detailEta.remaining_seconds != null && (
           <span style={{ fontSize: 12, color: '#94a3b8' }}>
             {detailEta.remaining_seconds > 0
-              ? <>~{formatDurationDisplay(detailEta.remaining_seconds)} remaining</>
+              ? <>~{formatDurationDisplay(detailEta.remaining_seconds)} remaining{detailEta.completion_at ? <>, done ~{formatCompletionAt(detailEta.completion_at)}</> : null}</>
               : 'nothing left to print'}
             {detailEta.incomplete && (
               <span
                 style={{ color: '#64748b' }}
-                title="Some remaining G-code files have no estimated print time set, so this is a lower bound"
+                title="Lower bound: some remaining G-code files have no print time, or some parts have no printer that can take them right now"
               > (at least)</span>
             )}
           </span>

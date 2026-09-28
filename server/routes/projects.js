@@ -30,6 +30,7 @@ module.exports = (db, scheduler = null) => {
     const eta = estimateProjectRemaining(db, project.id);
     res.json({
       remaining_seconds: eta.remaining_seconds,
+      completion_at: eta.completion_at,
       incomplete: eta.incomplete,
       eligible_printer_count: eta.eligible_printer_count,
     });

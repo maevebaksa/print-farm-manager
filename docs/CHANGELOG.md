@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-09-28: completion estimates simulate the real queue, whole plates, and operator hours
+
+Reported: the project completion estimate (Dashboard "Remaining", Projects "~X remaining") was a mess. It was a formula, not a schedule: it added up the remaining time of every printer currently printing the project even though they run in parallel, spread the project's queued part-time evenly over every printer of a matching model whether or not they were busy with other work, ignored the queue ahead of it entirely (other projects' work, queue order, printer caps), counted per-part time rather than whole plates, and assumed a finished printer is reset instantly. With no printer able to take the work it even reported a "serial time" as if one could.
+
+`server/project-eta.js` is now a small farm simulation, run once per request: it replays the scheduler from now on, one plate at a time, in the scheduler's own order (priority override, then `queue_order`) with its eligibility rules and printer caps, using each printer's real time remaining for what is printing now and the per-plate print time (now read from the file header) for everything queued. New admin settings `operator_hours_start`, `operator_hours_end`, and `operator_days` model that every print finishes held until someone confirms it: a printer that finishes outside the shift waits for the next one (overnight shifts supported; auto-advance belt printers do not wait; unset means always staffed, the previous assumption). The estimate also returns the completion clock time, shown as "done ~Tue 14:05". A project with work no printer can take, or a G-code with no print time, is flagged as a lower bound; with nothing estimable at all it is unknown rather than a made-up number.
+
+### Changes
+- `server/project-eta.js`: rewritten as `simulateFarm()` plus `estimateProjectRemaining(db, id, sim)`; `nextOperatorTime()` / `readOperatorHours()`.
+- `server/routes/dashboard.js`: one simulation shared by every project; adds `estimated_completion_at`.
+- `server/routes/projects.js`: `GET /api/projects/:id/eta` adds `completion_at`.
+- `server/routes/settings.js`: `operator_hours_start`, `operator_hours_end`, `operator_days` (admin-only, validated).
+- `client/src/pages/Settings.jsx`: operator hours in the Print Queue section.
+- `client/src/pages/Dashboard.jsx`, `client/src/pages/Projects.jsx`: completion clock time next to the estimate; lower-bound tooltip explains both causes.
+- `server/tests/project-eta.test.js`: rewritten for the simulation (parallel printers, whole plates, in-flight prints, queue order, FIFO, override, caps, operator hours incl. weekdays, overnight shifts, and belt printers). `dashboard.test.js` updated (no eligible printer is now unknown, not "serial time"); `settings.test.js` extended.
+- `docs/api.md`, `docs/web-app.md`.
+
+Verified in the running demo farm: with 08:00 to 17:00 hours set at 20:30, estimates moved from about 6.5 h and 20 h to about 18 h and 43 h, with the simulation taking about 10 ms per Dashboard request.
+
+---
+
 ## 2026-09-28: operator/admin priority override
 
 Requested: alongside first in, first out, a way to put specific work ahead of the queue that only an operator or admin can use. New additive `priority_override` flags on `parts` and `projects`, set through new `PUT /api/parts/:id/priority-override` and `PUT /api/projects/:id/priority-override` routes gated to operator/admin (`403` for an uploader); the general `PUT /:id` routes never change them, so an uploader cannot set one indirectly. The scheduler dispatches overridden work (the part's flag or its project's) first under either queue order and exempts it from the per-part/per-project printer caps. `GET /api/parts/:id/dispatch-status` notes an override (scheduler sync pair). The Projects page shows a Priority badge, and a toggle for operators and admins.

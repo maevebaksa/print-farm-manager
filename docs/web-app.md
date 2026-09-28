@@ -44,7 +44,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/usePinnedPrinters.js` | Per-browser (`localStorage`) pinned-printer set for Fleet's Pinned section |
 | `client/src/components/CommandPalette.jsx` | Global Cmd/Ctrl+K jump-to-anything search, mounted once in `App.jsx` |
 | `client/src/components/GcodeThumbnail.jsx` | Renders a sliced file's embedded plate thumbnail from `GET /api/gcodes/:id/thumbnail`; renders nothing if there is no `gcodeId` or the image fails to load (file has none embedded) |
-| `server/project-eta.js` | `estimateProjectRemaining(db, projectId)`: the rough remaining-time estimate shared by `GET /api/projects/:id/eta` and `GET /api/dashboard`'s `estimated_remaining_secs` per project |
+| `server/project-eta.js` | `simulateFarm(db)` / `estimateProjectRemaining(db, projectId, sim)`: the farm-simulation completion estimate (queue order, whole plates, operator hours) shared by `GET /api/projects/:id/eta` and `GET /api/dashboard` |
 | `client/src/components/PollTimer.jsx` | Shared circular refresh-countdown ring used by Fleet and Dashboard |
 | `client/index.html` | HTML shell with dark background baseline CSS; `body { zoom: 1.2 }` scales the whole app uniformly (see Layout below) |
 | `client/vite.config.js` | Vite config — port 5173, `/api` proxy to 3000 |
@@ -282,6 +282,8 @@ Responsive grid of decommissioned printers — printers that have been pulled fr
 **Single Sign-On section (admin only, hidden entirely for an operator):** a checkbox for the `auto_sso_redirect` setting, saved immediately on toggle (`PUT /api/settings/auto_sso_redirect`) rather than needing a separate Save button. If OIDC itself isn't configured (`GET /api/auth/status`'s `oidcEnabled`), the checkbox is replaced with a note pointing at the environment variables instead, since the toggle would do nothing yet. See `docs/auth.md`'s "Automatic SSO redirect" section for the full behavior, including the `/backup-login` fallback.
 
 **Account Approval section (admin only, hidden entirely for anyone else):** a checkbox for the `require_uploader_approval` setting, same immediate-save-on-toggle pattern as Single Sign-On above (`PUT /api/settings/require_uploader_approval`). See `docs/auth.md`'s "Account approval" section.
+
+**Print Queue section (operator hours):** below the queue policy, the admin-only operator shift (`operator_hours_start`, `operator_hours_end` as time inputs, `operator_days` as weekday checkboxes), saved by the same button. Used only by the completion estimates; both times empty means always staffed.
 
 **Print Queue section:** the admin-only queue policy (`queue_order`, `max_printers_per_part`, `max_printers_per_project`, each saved with `PUT /api/settings/:key`): a Queue order dropdown (Project priority, or First in, first out by upload time) and two cap inputs (0 = unlimited), with a plain-language explanation of each. Non-admins see the current values read-only. When `queue_order` is `fifo`, the Projects list view shows a notice that project and part order no longer decide what prints next.
 

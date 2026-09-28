@@ -148,12 +148,28 @@ describe('GET /api/dashboard: per-project ETA fields', () => {
       VALUES (?, 'mk4s', 'f.bgcode', 'f.bgcode', 1, 300, ?)
     `).run(partId, now);
 
-    const res = await request(app).get('/api/dashboard');
+    // With no printer that can take it, the time is unknown (not "serial time").
+    let res = await request(app).get('/api/dashboard');
     expect(res.status).toBe(200);
-    const proj = res.body.active_projects.find(p => p.id === projectId);
-    // No eligible printers registered: serial time (2 * 300s) with no parallelism to divide by.
-    expect(proj.estimated_remaining_secs).toBe(600);
-    expect(proj.estimated_remaining_incomplete).toBe(false);
+    let proj = res.body.active_projects.find(p => p.id === projectId);
+    expect(proj.estimated_remaining_secs).toBeNull();
+    expect(proj.estimated_remaining_incomplete).toBe(true);
+
+    // One idle MK4S: two 300s plates back to back (operators always on shift
+    // when no hours are configured).
+    const printerId = db.prepare(`
+      INSERT INTO printers (name, ip, api_key, model, status, is_held, created_at)
+      VALUES ('ETA_MK4S', '10.0.0.9', '', 'mk4s', 'IDLE', 0, ?)
+    `).run(now).lastInsertRowid;
+    try {
+      res = await request(app).get('/api/dashboard');
+      proj = res.body.active_projects.find(p => p.id === projectId);
+      expect(proj.estimated_remaining_secs).toBeGreaterThanOrEqual(599);
+      expect(proj.estimated_remaining_secs).toBeLessThanOrEqual(600);
+      expect(proj.estimated_remaining_incomplete).toBe(false);
+    } finally {
+      db.prepare('DELETE FROM printers WHERE id = ?').run(printerId);
+    }
   });
 });
 

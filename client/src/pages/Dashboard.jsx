@@ -51,6 +51,13 @@ function formatMaterial(grams) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+// Clock time a project's last plate should finish (estimated_completion_at /
+// completion_at from server/project-eta.js), e.g. "Tue 14:05".
+function formatCompletionAt(ms) {
+  if (!ms) return null;
+  return new Date(ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 export default function Dashboard() {
   const [data,  setData]  = useState(null);
   const [clock, setClock] = useState(new Date());
@@ -360,8 +367,11 @@ export default function Dashboard() {
                         <span style={{ color: '#fbbf24' }}>
                           {proj.estimated_remaining_secs > 0 ? `~${formatDuration(proj.estimated_remaining_secs)}` : 'done'}
                         </span>
+                        {proj.estimated_remaining_secs > 0 && proj.estimated_completion_at && (
+                          <span style={{ color: '#64748b' }}> · done ~{formatCompletionAt(proj.estimated_completion_at)}</span>
+                        )}
                         {proj.estimated_remaining_incomplete && (
-                          <span style={{ color: '#64748b' }} title="Some remaining G-code files have no estimated print time set, so this is a lower bound">
+                          <span style={{ color: '#64748b' }} title="Lower bound: some remaining G-code files have no print time, or some parts have no printer that can take them right now">
                             {' '}(at least)
                           </span>
                         )}
