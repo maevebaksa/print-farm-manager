@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-09-28: fix OctoPrint webcam URLs reported as an unreachable loopback address
+
+Reported: webcams still failing after the camera proxy shipped, on a server with no reverse proxy or CDN involved (ruling out caching), with the proxy's own error log showing `Could not reach camera: connect ECONNREFUSED 127.0.0.1:8080`.
+
+That's OctoPrint itself: when a webcam isn't set up through OctoPrint's recommended HAProxy passthrough, `GET /api/settings` reports the webcam URL as an absolute `http://127.0.0.1:<port>/...` (or `localhost`), meaningful only from the printer's own Pi (where mjpg-streamer actually listens), not from anything fetching it externally, this server's camera proxy included. `getCameraUrl`'s existing `resolve()` only rewrote *relative* URLs against the printer's real host; an already-absolute URL (loopback or not) passed straight through unchanged. This bug predates the camera proxy: the old direct-to-browser behavior sent this same broken loopback URL straight to the browser, which would have tried to load `127.0.0.1` from the *visitor's own machine* and failed just as silently, with no error text to notice it by.
+
+Now substitutes the printer's real host specifically when the reported URL's host is `127.0.0.1` or `localhost`, keeping the webcam's own reported port (commonly different from OctoPrint's own, e.g. 8080 vs. 5000) and path; a genuinely different absolute URL (an actual external webcam server) is left untouched. The substituted host has to be `printer.ip` with any of *its own* `:port` stripped first, not glued onto the webcam's separate port, since `printer.ip` can itself already carry a nonstandard port for OctoPrint's own API (a real case caught while writing the regression test, would have produced an invalid double-port URL).
+
+### Changes
+- `server/drivers/octoprint.js`: `getCameraUrl`'s `resolve()` now substitutes the printer's real host for an absolute `127.0.0.1`/`localhost` webcam URL.
+- `server/tests/octoprint-driver.test.js`: new regression tests for the loopback substitution (with and without an explicit port), including the double-port case against a printer whose `ip` itself carries a port.
+
+Confirmed via a real error report from the reporter's own OctoPrint instance (`ECONNREFUSED 127.0.0.1:8080`), not guessed from protocol docs; the fix logic itself is unvalidated against real hardware from this session (`node --check` and the regex verified directly in isolation, since this machine's `better-sqlite3` binding fails to load and neither the server nor `npm test` can run locally, same limitation disclosed on every test this session).
+
+---
+
 ## 2026-09-28: fix Dashboard fleet grid collapsing to a single vertical column
 
 Reported: right after the previous entry's cell-sizing change shipped, the per-model printer grid on the Dashboard rendered as a single narrow column, every cell stacked vertically, instead of flowing left to right.
