@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-09-28: fix Dashboard fleet grid collapsing to a single vertical column
+
+Reported: right after the previous entry's cell-sizing change shipped, the per-model printer grid on the Dashboard rendered as a single narrow column, every cell stacked vertically, instead of flowing left to right.
+
+That change applied its computed width to the cell grid itself, nested two levels inside an otherwise auto-sized, `flexDirection: column` chip (the chip had no explicit width; its content, the grid, was asking for `100%` of that not-yet-resolved width). At least the reporter's browser resolved that ambiguity by collapsing to the grid's intrinsic minimum, a single `minmax(60px, 1fr)` column. Fleet.jsx's own equivalent chip-width formula (already shipped, already working) applies to the chip itself, a flex-wrap item resolved directly against its parent in one clean step, not a nested child; matched that pattern here instead.
+
+### Changes
+- `client/src/components/FleetStatusGrid.jsx`: the width formula (renamed `chipWidth`, was `cellsWidth`) now sets the outer chip's own `width`; the inner cell grid is just `width: '100%'` of that.
+
+No automated test: this repo has no client-side test framework, and this is a pure CSS/layout change. Verified `npm run build` succeeds; could not exercise the real page in a live browser to confirm the fix visually, this machine's `better-sqlite3` native binding fails to load so the server cannot start locally, the same limitation disclosed on every test this session. Diagnosed from the reported symptom and the known flex/grid percentage-resolution gotcha, not directly observed.
+
+---
+
 ## 2026-09-28: log the actual error when the camera proxy can't reach a printer
 
 Reported: a camera proxy request failing with a 502, but the only diagnostic available was the bare status code (seen via the browser's own error toast/console), not the specific reason (connection refused, DNS failure, timeout, etc.) needed to actually fix anything. The JSON response body already carries that detail, but reading it requires the browser's Network tab, which isn't always convenient to walk through remotely.

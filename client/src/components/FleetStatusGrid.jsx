@@ -118,10 +118,19 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
           // times that (so a 2-cell chip doesn't stretch absurdly wide just
           // because the page has room), and never past CELL_MAX_VW regardless.
           const naturalWidth = group.length * (CELL_MIN_PX + CELL_GAP_PX) - CELL_GAP_PX;
-          const cellsWidth = `min(100%, ${CELL_MAX_VW}vw, ${naturalWidth * CELL_GROWTH}px)`;
+          // Applied to the chip itself (like Fleet.jsx's own chip-width
+          // formula), not a nested child: a flex item's width is resolved
+          // directly against its flex-wrap parent, one clean step. Setting it
+          // on a grid nested two levels inside an otherwise auto-sized,
+          // column-direction flex chip instead left the chip's own width
+          // ambiguous (its content was asking for 100% of a not-yet-resolved
+          // parent), which one or more browsers collapsed to the grid's
+          // intrinsic minimum: a single column, stacking every cell vertically.
+          const chipWidth = `min(100%, ${CELL_MAX_VW}vw, ${naturalWidth * CELL_GROWTH}px)`;
           return (
           <div key={model} style={{
             display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+            width: chipWidth,
             background: '#0d1117', border: '1px solid #1a2030', borderRadius: 8,
             padding: '8px 10px',
           }}>
@@ -135,14 +144,13 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
             </div>
 
             {/* Printer cells: a grid, not a flex-wrap of fixed boxes, so each
-                cell's minmax(CELL_MIN_PX, 1fr) column stretches to fill
-                whatever width this chip actually has (cellsWidth above)
-                instead of staying a fixed size regardless of how much room
-                is available. */}
+                cell's minmax(CELL_MIN_PX, 1fr) column stretches to fill the
+                chip's own width (set explicitly above) instead of staying a
+                fixed size regardless of how much room is available. */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: `repeat(auto-fill, minmax(${CELL_MIN_PX}px, 1fr))`,
-              gap: CELL_GAP_PX, width: cellsWidth,
+              gap: CELL_GAP_PX, width: '100%',
             }}>
               {group.map(printer => {
                 const c = cellColors(printer);
