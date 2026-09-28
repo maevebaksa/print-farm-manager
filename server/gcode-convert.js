@@ -212,7 +212,9 @@ function removeEmptyLines(text) {
   return ret;
 }
 
-function readBlocks(buf) {
+// wantType (optional) decodes only blocks whose type it accepts; the rest are
+// skipped without decompressing, so reading metadata never pays for the G-code.
+function readBlocks(buf, wantType = null) {
   if (buf.length < 10 || buf.toString('ascii', 0, 4) !== 'GCDE') throw new Error('not a .bgcode file (bad magic)');
   const checksumSize = buf.readUInt16LE(8) === 0 ? 0 : 4;
   const blocks = [];
@@ -232,6 +234,10 @@ function readBlocks(buf) {
     const paramsSize = type === BLOCK.THUMBNAIL ? 6 : 2;
     const dataOffset = paramsOffset + paramsSize;
     if (dataOffset + dataSize > buf.length) throw new Error('truncated .bgcode block data');
+    if (wantType && !wantType(type)) {
+      offset = dataOffset + dataSize + checksumSize;
+      continue;
+    }
     const raw = buf.subarray(dataOffset, dataOffset + dataSize);
     const block = { type, params: buf.subarray(paramsOffset, dataOffset) };
     if (type !== BLOCK.THUMBNAIL) block.encoding = block.params.readUInt16LE(0);
@@ -354,4 +360,21 @@ function toPlainGcode(filename, buf) {
   return null;
 }
 
-module.exports = { toPlainGcode, bgcodeToGcode, threeMfToGcode, heatshrinkDecode, meatpackDecode };
+// Metadata-only read of a .bgcode: { file, printer, print, slicer } as arrays of
+// [key, value] pairs from the INI-encoded metadata blocks (a JSON-encoded
+// slicer block is skipped). G-code and thumbnail blocks are never decompressed.
+function readBgcodeMetadata(buf) {
+  const metaTypes = new Set([BLOCK.FILE_META, BLOCK.PRINTER_META, BLOCK.PRINT_META, BLOCK.SLICER_META]);
+  const out = { file: [], printer: [], print: [], slicer: [] };
+  for (const b of readBlocks(buf, (t) => metaTypes.has(t))) {
+    if (b.encoding !== METADATA_ENCODING.INI) continue;
+    const pairs = decodeIni(b.data);
+    if (b.type === BLOCK.FILE_META) out.file.push(...pairs);
+    else if (b.type === BLOCK.PRINTER_META) out.printer.push(...pairs);
+    else if (b.type === BLOCK.PRINT_META) out.print.push(...pairs);
+    else out.slicer.push(...pairs);
+  }
+  return out;
+}
+
+module.exports = { toPlainGcode, bgcodeToGcode, threeMfToGcode, readBgcodeMetadata, heatshrinkDecode, meatpackDecode };

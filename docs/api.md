@@ -771,6 +771,46 @@ Cancels a job. Returns `409` if status is not `queued` (only queued jobs can be 
 
 ---
 
+## Slicer upload (OctoPrint and Moonraker compatible)
+
+`server/routes/slicer-upload.js`. One base URL per printer group, outside `/api`:
+
+```
+http://<farm-host>:3000/slicer/<group name, URL-encoded>
+```
+
+PrusaSlicer and OrcaSlicer upload to it as a physical printer: host type **OctoPrint** (PrusaSlicer) or **Octo/Klipper** or **Moonraker** (OrcaSlicer), with the base URL as the hostname and a farm API key (Account > API Keys) as the API key. Implemented from the slicers' own client code (PrusaSlicer 2.9.0 `src/slic3r/Utils/OctoPrint.cpp`, OrcaSlicer `src/slic3r/Utils/OctoPrint.cpp` and `Moonraker.cpp`), not yet validated with a real slicer.
+
+**Auth:** `X-Api-Key: <farm API key>` (what both slicers send) or `Authorization: Bearer <key>`. `401` with no or an invalid key, `403` for an account pending approval. **Group:** must exist in `printer_groups`, else `404`.
+
+| Method and path (under the base URL) | Emulates | Response |
+|---|---|---|
+| `GET /api/version` | OctoPrint connection test | `{ "api": "0.1", "server": "1.10.0", "text": "OctoPrint 1.10.0 (Print Farm Manager)" }` (PrusaSlicer requires `api` and a `text` starting with `OctoPrint`) |
+| `GET /api/server` | OctoPrint | `{ "version": "1.10.0", "safemode": null }` |
+| `POST /api/files/local` | OctoPrint upload | multipart `file` (required), `print`, `path`, `select` (accepted, see below). `201`, OctoPrint's upload response shape |
+| `GET /server/info` | Moonraker connection test | `{ "result": { "klippy_state": "ready", ... } }` |
+| `GET /server/files/roots` | Moonraker | `{ "result": [{ "name": "gcodes", "path": "/gcodes", "permissions": "rw" }] }` |
+| `POST /server/files/upload` | Moonraker upload | multipart `file`, `root`, `plateindex` (accepted). `201`, `{ "result": { "item": { "path": "<name>", "root": "gcodes" }, "print_started": false, "print_queued": true, ... } }` |
+| `POST /printer/print/start` | Moonraker start | `{ "result": "ok" }`: a no-op, the upload already queued the print |
+
+**What an upload does:** it never goes straight to a printer. In one transaction it creates (on first use) the uploader's own active project `Uploads: <user name>`, a Part named after the file (one plate: `target_qty` = parts per plate, read from a `4x Name` filename prefix, else 1), and a G-code restricted to this group (`allowed_groups = ["<group>"]`), attributed to the uploader, `approved = 0` if the account has `requires_print_approval`. Then it sweeps for idle printers. "Upload" and "Upload and print" behave the same: the scheduler decides when it runs (queue order, caps). A `completed` uploads project is reopened, like `POST /api/parts`.
+
+**Printer model:** read from the file's own `printer_model` metadata (`server/gcode-metadata.js`: `.gcode` comment lines, `.bgcode` metadata blocks, or a sliced `.3mf`'s plate G-code) and matched to `printer_models` by normalized id or label ("MK4S" = `mk4s`, "COREONE" = "Core One", "Bambu Lab X1 Carbon" contains "X1 Carbon"). If the file has none, the group's model is used when every active printer in the group is the same model.
+
+**Errors:** `400` if the model cannot be determined in a mixed group, if the file was sliced for a model the group has no printers of, or if the group has no active printers and the file names no model; `415` for anything but `.gcode`/`.gco`/`.g`/`.bgcode`/`.3mf`. A rejected upload leaves no file or row behind. The stored filename is reduced to a safe basename.
+
+```json
+{
+  "files": { "local": { "name": "4x Bracket.gcode", "path": "4x Bracket.gcode", "origin": "local", "refs": { "resource": "http://farm:3000/slicer/Rack%20A/api/files/local/4x%20Bracket.gcode" } } },
+  "done": true,
+  "effectiveSelect": false,
+  "effectivePrint": false,
+  "farm_gcode_id": 42
+}
+```
+
+---
+
 ## Scheduler
 
 ### `POST /api/scheduler/dispatch`

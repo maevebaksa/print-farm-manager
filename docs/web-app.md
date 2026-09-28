@@ -12,7 +12,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 - **Settings page** — CSV import UI for the printer registry, with flagged-row resolution
 - **Projects page** — project/part/G-code management and production tracking
 - **Jobs page** — live job queue with filters and cancel action
-- **Account page**: the signed-in user's own API keys: create one (shown once), revoke one
+- **Account page**: the signed-in user's own API keys: create one (shown once), revoke one; and the per-group slicer upload URLs
 - **Users page**: admin only: add accounts, change roles, remove access
 
 ## Key Files
@@ -357,6 +357,8 @@ Live job queue that polls `GET /api/jobs` every 15 seconds.
 `client/src/pages/Account.jsx`
 
 Self-service page for the signed-in user's own API keys. `GET /api/api-keys` lists them (never `key_hash`); the create form (`POST /api/api-keys`) shows the plaintext key exactly once, in a callout the operator must dismiss explicitly ("Done, I copied it") rather than one that just disappears. `DELETE /api/api-keys/:id` revokes; a revoked key shows greyed out with a `REVOKED` badge instead of being removed from the list, so `last_used_at` history stays visible.
+
+**Upload from your slicer section:** lists every printer group (`GET /api/groups`) with its slicer upload URL (`window.location.origin + /slicer/<group>`, see [api.md](api.md#slicer-upload-octoprint-and-moonraker-compatible)) and a Copy button, plus setup instructions for PrusaSlicer and OrcaSlicer. Shown to every role, since uploaders are the ones who send prints from a slicer.
 
 ## Users Page
 

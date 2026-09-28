@@ -84,6 +84,15 @@ app.delete('/api/notifications/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Slicer-compatible upload endpoint (OctoPrint and Moonraker APIs), one base
+// URL per printer group: /slicer/<group>. Outside /api (a slicer's host URL
+// is a plain base path), so it does its own API key auth, and it is registered
+// before the SPA catch-all below or GET /slicer/.../api/version would get
+// index.html. The scheduler only exists once the server is listening, hence
+// the lazy getter. See routes/slicer-upload.js.
+let slicerScheduler = null;
+app.use('/slicer', require('./routes/slicer-upload')(db, () => slicerScheduler));
+
 // Serve built React client (production mode)
 const clientDist = path.join(__dirname, '../client/dist');
 if (!fs.existsSync(path.join(clientDist, 'index.html'))) {
@@ -110,6 +119,7 @@ const server = app.listen(PORT, () => {
 
   const poller    = new PrinterPoller(db);
   const scheduler = new JobScheduler(db, poller);
+  slicerScheduler = scheduler;
 
   // Mount projects, parts, and gcodes routers here so they have access to the
   // scheduler: projects for complete/reactivate, parts for the sweep after adding a

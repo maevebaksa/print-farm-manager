@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-09-28: slicer upload endpoint (OctoPrint and Moonraker compatible), one URL per printer group
+
+Requested: upload straight from PrusaSlicer or OrcaSlicer, with each printer group having its own URL. New endpoint at `/slicer/<group>` emulates the parts of the OctoPrint API (PrusaSlicer "OctoPrint", OrcaSlicer "Octo/Klipper") and the Moonraker API (OrcaSlicer "Moonraker") those slicers call: the connection tests (`/api/version`, `/server/info`), the uploads (`/api/files/local`, `/server/files/upload`), and Moonraker's follow-up `/printer/print/start`. Each call was taken from the slicers' own client code (PrusaSlicer 2.9.0 and current OrcaSlicer `OctoPrint.cpp` / `Moonraker.cpp`), including PrusaSlicer's requirement that `/api/version` return `api` and a `text` starting with "OctoPrint", and that a base URL with a path is kept (so a per-group path works).
+
+Auth is a farm API key in the slicer's API key field (sent as `X-Api-Key`). An upload never goes straight to a printer: it becomes a queued Part in the uploader's own `Uploads: <name>` project, restricted to that group, attributed to them, subject to their print approval flag, and dispatched by the scheduler like anything else (so the queue order and printer caps apply). The printer model is read from the file's own `printer_model` metadata (new `server/gcode-metadata.js`, which the next change extends to print time and material), falling back to the group's model when the group is single-model; an ambiguous or mismatched model is rejected with a clear message rather than guessed. Stored filenames are sanitized to a safe basename.
+
+Found while building it: the existing `POST /api/gcodes/upload` stores files as `Date.now() + "_" + originalname` without sanitizing the client-supplied name. Not changed here; reported separately.
+
+### Changes
+- `server/routes/slicer-upload.js`: new.
+- `server/gcode-metadata.js`: new. Reads `; key = value` metadata from `.gcode` head/tail, `.bgcode` metadata blocks, and sliced `.3mf` plates; maps a slicer's printer model to the registry.
+- `server/gcode-convert.js`: `readBgcodeMetadata()` reads only the metadata blocks.
+- `server/index.js`: mounts `/slicer` before the SPA catch-all, with a lazy scheduler reference.
+- `client/src/pages/Account.jsx`: "Upload from your slicer" section with each group's URL.
+- `server/tests/slicer-upload.test.js`: new (both APIs' connection tests and uploads, auth, model detection, rejections leaving nothing behind, path traversal, print approval).
+- `docs/api.md` (new Slicer upload section), `docs/auth.md`, `docs/web-app.md`.
+
+Verified with scripted requests matching each slicer's calls, against the test suite and the running app (curl as PrusaSlicer would). Not yet validated with a real PrusaSlicer or OrcaSlicer install.
+
+---
+
 ## 2026-09-28: admin print queue setting: first in, first out, and per-part/per-project printer caps
 
 Requested: for a shared (student) farm, prints should run first in, first out by when their G-code was uploaded, with no project getting priority, as an admin setting; plus limits on how many printers one piece of work can take while others are waiting, so the farm runs several people's prints in parallel.

@@ -7,6 +7,8 @@ Every route under `/api/*` except the ones listed below requires a signed-in use
 1. **Session cookie**: the browser client. `POST /api/auth/login` (or the bootstrap/OIDC flows below) sets an httpOnly `pfm_session` cookie; every subsequent request includes it automatically.
 2. **API key**: for scripts, OrcaSlicer, or any tool calling the REST API directly. Send `Authorization: Bearer <key>`. A key acts as its owning user for every request: full access, not scoped to specific routes. Generated and revoked from Account → API Keys in the app; the plaintext is shown exactly once, at creation.
 
+The slicer upload endpoint (`/slicer/<group>/...`, see [api.md](api.md#slicer-upload-octoprint-and-moonraker-compatible)) sits outside `/api` and does its own check with the same API keys, also accepting them as `X-Api-Key: <key>`, which is what PrusaSlicer and OrcaSlicer send.
+
 Both resolve to the same `req.user` shape server-side (`{ id, email, name, role, oidc_subject, created_at, last_login_at }`): route handlers never need to know which one was used, except where noted.
 
 ## Public routes (no auth required)
