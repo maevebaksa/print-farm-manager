@@ -168,8 +168,8 @@ module.exports = (db, scheduler = null) => {
     const approved = req.user.requires_print_approval ? 0 : 1;
 
     const gcode = db.prepare(`
-      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, ams_slot, allowed_groups, required_material, required_color, approved, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, material_grams, ams_slot, allowed_groups, required_material, required_color, approved, uploaded_by_user_id, uploaded_by_name, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       part_id,
       printer_model,
@@ -183,6 +183,8 @@ module.exports = (db, scheduler = null) => {
       parsedRequiredMaterial,
       parsedRequiredColor,
       approved,
+      req.user.id ?? null,
+      req.user.name ?? null,
       Date.now()
     );
 

@@ -28,6 +28,20 @@ function displayJobStatus(job) {
   return job.status;
 }
 
+// Whose part a job belongs to: the part's creator, falling back to the G-code's
+// uploader for parts that predate user tracking (both joined by GET /api/jobs).
+function jobOwner(job) {
+  return job.part_owner_name || job.gcode_uploaded_by_name || null;
+}
+
+// Tooltip spelling out both facts when the file came from someone else.
+function jobOwnerTitle(job) {
+  const parts = [];
+  if (job.part_owner_name) parts.push(`Part added by ${job.part_owner_name}`);
+  if (job.gcode_uploaded_by_name) parts.push(`G-code uploaded by ${job.gcode_uploaded_by_name}`);
+  return parts.join(', ') || 'Owner unknown (created before user tracking)';
+}
+
 const STATUS_OPTIONS = ['all', 'queued', 'uploading', 'printing', 'finished', 'failed', 'cancelled'];
 
 function formatTime(ms) {
@@ -186,6 +200,11 @@ export default function Jobs() {
                 <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 2 }}>
                   {job.project_name} · {job.printer_name} <span style={{ color: '#64748b', fontFamily: 'monospace', fontSize: 11 }}>({job.printer_model})</span>
                 </div>
+                {jobOwner(job) && (
+                  <div title={jobOwnerTitle(job)} style={{ color: '#94a3b8', fontSize: 12, marginBottom: 2 }}>
+                    Owner: {jobOwner(job)}
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#64748b', fontSize: 12 }}>
                   <span>
                     {formatTime(job.started_at)}
@@ -215,6 +234,7 @@ export default function Jobs() {
                 <th style={{ padding: '6px 10px', fontWeight: 600 }}></th>
                 <th style={{ padding: '6px 10px', fontWeight: 600 }}>Part</th>
                 <th style={{ padding: '6px 10px', fontWeight: 600 }}>Project</th>
+                <th style={{ padding: '6px 10px', fontWeight: 600 }}>Owner</th>
                 <th style={{ padding: '6px 10px', fontWeight: 600 }}>Printer</th>
                 <th style={{ padding: '6px 10px', fontWeight: 600 }}>Model</th>
                 <th style={{ padding: '6px 10px', fontWeight: 600 }}>Status</th>
@@ -239,6 +259,9 @@ export default function Jobs() {
                     </td>
                     <td style={{ padding: '8px 10px' }}>{job.part_name}</td>
                     <td style={{ padding: '8px 10px', color: '#94a3b8' }}>{job.project_name}</td>
+                    <td title={jobOwnerTitle(job)} style={{ padding: '8px 10px', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                      {jobOwner(job) || <span style={{ color: '#475569' }}>Unknown</span>}
+                    </td>
                     <td style={{ padding: '8px 10px' }}>{job.printer_name}</td>
                     <td style={{ padding: '8px 10px' }}>
                       <span style={{

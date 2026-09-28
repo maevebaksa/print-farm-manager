@@ -4,6 +4,7 @@ const Papa = require('papaparse');
 const axios = require('axios');
 const router = express.Router();
 const events = require('../events');
+const { sortByName } = require('../natural-sort');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -95,6 +96,7 @@ module.exports = (db) => {
       WHERE p.is_active = 1
       ORDER BY p.name
     `).all();
+    sortByName(printers); // natural order: mini2 before mini10
 
     // Per-lane filament state (klipper-filament-sync, see server/poller.js _syncLanes)
     // is attached here so the Fleet cards, Webcams page, and Dashboard hover preview

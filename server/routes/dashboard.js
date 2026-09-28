@@ -1,6 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const { estimateProjectRemaining } = require('../project-eta');
+const { sortByName } = require('../natural-sort');
 
 // Completed job statuses — 'done' is a legacy alias retained for backward compat with older data.
 const DONE_STATUSES = "('finished', 'done')";
@@ -26,6 +27,7 @@ module.exports = (db) => {
       WHERE p.is_active = 1
       ORDER BY p.name
     `).all();
+    sortByName(printers); // natural order: mini2 before mini10, same as GET /api/printers
 
     // Derive fleet stats from the live printer list
     const printing = printers.filter(p => p.status === 'PRINTING').length;

@@ -196,9 +196,9 @@ module.exports = (db, scheduler = null) => {
     const maxRow = db.prepare('SELECT MAX(sort_order) AS max FROM parts WHERE project_id = ?').get(project_id);
     const sortOrder = (maxRow?.max ?? -1) + 1;
     const result = db.prepare(`
-      INSERT INTO parts (project_id, name, target_qty, sort_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(project_id, name, parseInt(target_qty, 10), sortOrder, now, now);
+      INSERT INTO parts (project_id, name, target_qty, sort_order, created_at, updated_at, created_by_user_id, created_by_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(project_id, name, parseInt(target_qty, 10), sortOrder, now, now, req.user?.id ?? null, req.user?.name ?? null);
 
     // A new part always starts open and unmet, so reopen a completed project immediately
     // so it's active by the time the operator uploads G-code for the part, rather than

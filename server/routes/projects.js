@@ -39,9 +39,9 @@ module.exports = (db, scheduler = null) => {
     if (!name) return res.status(400).json({ error: 'name is required' });
     const now = Date.now();
     const result = db.prepare(`
-      INSERT INTO projects (name, description, created_at, updated_at)
-      VALUES (?, ?, ?, ?)
-    `).run(name, description || null, now, now);
+      INSERT INTO projects (name, description, created_at, updated_at, created_by_user_id, created_by_name)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(name, description || null, now, now, req.user?.id ?? null, req.user?.name ?? null);
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(result.lastInsertRowid);
     res.status(201).json(project);
   });
@@ -232,19 +232,21 @@ module.exports = (db, scheduler = null) => {
 
     db.transaction(() => {
       const projResult = db.prepare(`
-        INSERT INTO projects (name, description, status, priority, created_at, updated_at)
-        VALUES (?, ?, 'draft', 0, ?, ?)
-      `).run(name, source.description ?? null, now, now);
+        INSERT INTO projects (name, description, status, priority, created_at, updated_at, created_by_user_id, created_by_name)
+        VALUES (?, ?, 'draft', 0, ?, ?, ?, ?)
+      `).run(name, source.description ?? null, now, now, req.user?.id ?? null, req.user?.name ?? null);
       newProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(projResult.lastInsertRowid);
 
       for (const part of sourceParts) {
         const partResult = db.prepare(`
           INSERT INTO parts (project_id, name, target_qty, completed_qty, status, sort_order,
-                             print_time_seconds, material_grams, created_at, updated_at)
-          VALUES (?, ?, ?, 0, 'open', ?, ?, ?, ?, ?)
+                             print_time_seconds, material_grams, created_at, updated_at,
+                             created_by_user_id, created_by_name)
+          VALUES (?, ?, ?, 0, 'open', ?, ?, ?, ?, ?, ?, ?)
         `).run(
           newProject.id, part.name, part.target_qty, part.sort_order,
-          part.print_time_seconds ?? null, part.material_grams ?? null, now, now
+          part.print_time_seconds ?? null, part.material_grams ?? null, now, now,
+          req.user?.id ?? null, req.user?.name ?? null
         );
         copiedParts++;
 
@@ -267,12 +269,15 @@ module.exports = (db, scheduler = null) => {
 
           db.prepare(`
             INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate,
-                                est_print_secs, material_grams, ams_slot, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                est_print_secs, material_grams, ams_slot, created_at,
+                                uploaded_by_user_id, uploaded_by_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             partResult.lastInsertRowid, gcode.printer_model, gcode.filename, newFilepath,
             gcode.parts_per_plate, gcode.est_print_secs ?? null, gcode.material_grams ?? null,
-            gcode.ams_slot ?? null, now
+            // The copied file was still uploaded by the original uploader, not
+            // whoever duplicated the project (they own the new parts instead).
+            gcode.ams_slot ?? null, now, gcode.uploaded_by_user_id ?? null, gcode.uploaded_by_name ?? null
           );
           copiedGcodes++;
         }

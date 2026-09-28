@@ -525,6 +525,14 @@ function GcodeEstimateRow({ gc, onDelete, onApprove, onSaved, filamentTypes, fil
         }}>
           {gc.printer_model}
         </span>
+        {gc.uploaded_by_name && (
+          <span
+            title={`Uploaded by ${gc.uploaded_by_name}`}
+            style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
+            {gc.uploaded_by_name}
+          </span>
+        )}
         {/* approved defaults to 1 for every G-code except one uploaded by an
             account flagged requires_print_approval (see Users page); the
             scheduler excludes it from dispatch until this is cleared. */}
@@ -1855,7 +1863,16 @@ export default function Projects() {
                   aria-hidden="true"
                   style={{ color: '#334155', fontSize: 16, cursor: 'grab', flexShrink: 0, userSelect: 'none', lineHeight: 1 }}
                 >⠿</span>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{part.name}</span>
+                <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>{part.name}</span>
+                  {/* Who added this part (parts.created_by_name, a snapshot taken at
+                      creation). Absent on parts that predate user tracking. */}
+                  {part.created_by_name && (
+                    <span title="Added by" style={{ fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      by {part.created_by_name}
+                    </span>
+                  )}
+                </span>
               </div>
 
               {/* Progress */}

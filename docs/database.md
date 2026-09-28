@@ -109,9 +109,13 @@ CREATE TABLE IF NOT EXISTS projects (
   required_color    TEXT,                   -- optional project-wide default; gcode-level overrides
   allowed_groups    TEXT,                   -- nullable JSON array; optional project-wide default; gcode-level overrides
   created_at        INTEGER NOT NULL,
-  updated_at        INTEGER NOT NULL
+  updated_at        INTEGER NOT NULL,
+  created_by_user_id INTEGER,               -- migration; who created it (no FK)
+  created_by_name   TEXT                    -- migration; snapshot, not joined at read time
 );
 ```
+
+**`created_by_user_id`/`created_by_name`** (migration, also on `parts`; `gcodes` has the equivalent `uploaded_by_user_id`/`uploaded_by_name`): which signed-in user created the project or part, or uploaded the G-code, so the Projects and Jobs pages can show whose parts everything belongs to. Same convention as `printer_events.user_id`/`user_name`: no FK, and the name is a snapshot taken at insert time, so attribution survives the user being renamed or deleted. `NULL` on rows created before this migration. Duplicating a project (`POST /api/projects/:id/duplicate`) attributes the new project and parts to whoever duplicated it, while each copied G-code keeps its original uploader. Jobs have no owner column: the scheduler creates job rows, so `GET /api/jobs` joins the owner from the job's part and G-code instead.
 
 ### parts
 
@@ -129,7 +133,9 @@ CREATE TABLE IF NOT EXISTS parts (
   print_time_seconds  INTEGER,               -- legacy; superseded by gcodes.est_print_secs
   material_grams      REAL,                  -- legacy; superseded by gcodes.material_grams
   created_at          INTEGER NOT NULL,
-  updated_at          INTEGER NOT NULL
+  updated_at          INTEGER NOT NULL,
+  created_by_user_id  INTEGER,               -- migration; see projects above
+  created_by_name     TEXT                   -- migration; snapshot
 );
 ```
 
@@ -158,7 +164,9 @@ CREATE TABLE IF NOT EXISTS gcodes (
   required_material  TEXT,               -- nullable; overrides the project default below when set
   required_color     TEXT,               -- nullable; overrides the project default below when set
   approved           INTEGER NOT NULL DEFAULT 1,  -- 0 if the uploader requires print approval; see below
-  created_at         INTEGER NOT NULL
+  created_at         INTEGER NOT NULL,
+  uploaded_by_user_id INTEGER,           -- migration; who uploaded it (see projects above)
+  uploaded_by_name   TEXT                -- migration; snapshot
 );
 ```
 

@@ -134,7 +134,7 @@ Revokes (soft delete, the row and its `last_used_at` history are kept). `404` if
 
 ### `GET /api/printers`
 
-Returns all active printers (`is_active = 1`) ordered by name.
+Returns all active printers (`is_active = 1`) in natural name order (`mini2` before `mini10`, case-insensitive; `server/natural-sort.js`). `GET /api/dashboard`'s `printers` uses the same order.
 
 ```json
 [
@@ -531,6 +531,8 @@ Required: `name`. Optional: `description`.
 
 Returns `201` with created project (`status` defaults to `"draft"`).
 
+Records the signed-in user as `created_by_user_id`/`created_by_name` on the new project (returned in the `201` body).
+
 ### `PUT /api/projects/:id`
 
 Partial update. Accepts: `name`, `description`, `status` (`draft` | `active` | `paused` | `completed`).
@@ -589,6 +591,8 @@ If no printer has the exact required color and the `color_tolerance` setting is 
 Required: `project_id`, `name`, `target_qty`.
 
 A new part always starts `open` with `completed_qty: 0`. If the parent project's status is `completed`, it's reactivated to `active` immediately (same as `POST /api/projects/:id/reactivate`) without a separate manual reactivate step. A scheduler sweep also runs at this point, but it can't dispatch the new part itself yet: the scheduler's candidate query requires a matching G-code, and a brand-new part has none. The part becomes an actual dispatch candidate once G-code is uploaded for it (see `POST /api/gcodes/upload`, which triggers its own sweep).
+
+Records the signed-in user as `created_by_user_id`/`created_by_name` on the new part (returned in the `201` body and on `GET /api/parts`).
 
 ### `PUT /api/parts/:id`
 
@@ -680,6 +684,8 @@ Returns `201` with created G-code record. Returns `409` if a G-code for this `(p
 
 A part only becomes a real dispatch candidate once it has at least one matching, *approved* G-code (the scheduler's candidate query joins on `gcodes` and checks `approved = 1`). The created record's `approved` field is `0`, not the usual `1`, if the uploading account (`req.user`) has `requires_print_approval` set; see [docs/auth.md](auth.md)'s Print approval section and `POST /api/gcodes/:id/approve` below. A successful upload triggers a scheduler sweep immediately regardless, so an idle printer can pick up the part right away instead of waiting for a manual dispatch or the next printer status transition; an unapproved G-code just won't be a candidate that sweep finds anything for yet.
 
+Records the uploading user as `uploaded_by_user_id`/`uploaded_by_name` on the new G-code (returned in the `201` body and on `GET /api/gcodes`).
+
 ### `PUT /api/gcodes/:id`
 
 Update `est_print_secs`, `material_grams`, `allowed_groups`, `required_material`, and/or `required_color` for a G-code. Omitting a field leaves it unchanged; sending `null` (or, for the time/material fields, `""`) clears it back to "inherit from project / unrestricted".
@@ -728,7 +734,22 @@ Historical jobs (`finished`, `failed`, `cancelled`) are retained with their `gco
 
 Returns jobs with part/project/printer names joined. Supports query params: `?printer_id=N`, `?part_id=N`, `?project_id=N`, `?status=printing`.
 
-Each job includes: `part_name`, `project_id`, `project_name`, `printer_name`, `printer_model`, `printer_is_held`, `printer_status`.
+Each job includes: `part_name`, `project_id`, `project_name`, `printer_name`, `printer_model`, `printer_is_held`, `printer_status`, `part_owner_user_id`, `part_owner_name`, `gcode_uploaded_by_user_id`, `gcode_uploaded_by_name`.
+
+The owner fields are joined from the job's part (`parts.created_by_*`) and G-code (`gcodes.uploaded_by_*`); any of them is `null` for rows created before user tracking, and the uploader fields are `null` if the job's G-code row no longer exists.
+
+```json
+{
+  "id": 42,
+  "status": "printing",
+  "part_name": "Clip",
+  "project_name": "Brackets",
+  "part_owner_user_id": 3,
+  "part_owner_name": "Alice",
+  "gcode_uploaded_by_user_id": 5,
+  "gcode_uploaded_by_name": "Bob"
+}
+```
 
 Job statuses: `uploading` | `printing` | `queued` | `finished` | `failed` | `cancelled`.
 

@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 
 module.exports = (db) => {
-  // GET /api/jobs — list with optional filters, joined with part/project/printer names
+  // GET /api/jobs: list with optional filters, joined with part/project/printer names.
+  // Owner fields come from the job's part (created_by) and G-code (uploaded_by):
+  // the scheduler creates job rows, so a job has no owner column of its own.
   router.get('/', (req, res) => {
     const { printer_id, part_id, project_id, status } = req.query;
 
@@ -15,11 +17,16 @@ module.exports = (db) => {
         printers.name     AS printer_name,
         printers.model    AS printer_model,
         printers.is_held  AS printer_is_held,
-        printers.status   AS printer_status
+        printers.status   AS printer_status,
+        parts.created_by_user_id AS part_owner_user_id,
+        parts.created_by_name    AS part_owner_name,
+        gcodes.uploaded_by_user_id AS gcode_uploaded_by_user_id,
+        gcodes.uploaded_by_name    AS gcode_uploaded_by_name
       FROM jobs
       JOIN parts    ON parts.id    = jobs.part_id
       JOIN projects ON projects.id = parts.project_id
       JOIN printers ON printers.id = jobs.printer_id
+      LEFT JOIN gcodes ON gcodes.id = jobs.gcode_id
       WHERE 1=1
     `;
     const params = [];
@@ -44,11 +51,16 @@ module.exports = (db) => {
         printers.name     AS printer_name,
         printers.model    AS printer_model,
         printers.is_held  AS printer_is_held,
-        printers.status   AS printer_status
+        printers.status   AS printer_status,
+        parts.created_by_user_id AS part_owner_user_id,
+        parts.created_by_name    AS part_owner_name,
+        gcodes.uploaded_by_user_id AS gcode_uploaded_by_user_id,
+        gcodes.uploaded_by_name    AS gcode_uploaded_by_name
       FROM jobs
       JOIN parts    ON parts.id    = jobs.part_id
       JOIN projects ON projects.id = parts.project_id
       JOIN printers ON printers.id = jobs.printer_id
+      LEFT JOIN gcodes ON gcodes.id = jobs.gcode_id
       WHERE jobs.id = ?
     `).get(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job not found' });

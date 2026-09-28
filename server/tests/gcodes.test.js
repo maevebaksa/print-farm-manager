@@ -18,7 +18,8 @@ beforeAll(() => {
       name TEXT NOT NULL,
       status TEXT DEFAULT 'draft',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT
     );
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +29,8 @@ beforeAll(() => {
       completed_qty INTEGER DEFAULT 0,
       status TEXT DEFAULT 'open',
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      created_by_user_id INTEGER, created_by_name TEXT
     );
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +46,8 @@ beforeAll(() => {
       required_material TEXT,
       required_color TEXT,
       approved INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT
     );
     CREATE TABLE printers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +85,7 @@ beforeAll(() => {
   db.exec(`INSERT INTO printer_models VALUES ('a1',   'A1',         'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('p1s',  'P1S',        'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('a1m',  'A1 Mini',    'bambu')`); // requires_print_approval tests only, kept unused elsewhere so (part_id, printer_model) never collides
+  db.exec(`INSERT INTO printer_models VALUES ('mini', 'MINI+',      'prusa')`); // uploaded_by attribution test only, same reason
 
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
 
@@ -332,6 +336,25 @@ describe('POST /api/gcodes/upload: requires_print_approval', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.approved).toBe(0);
+    uploadedPath = res.body.filepath;
+  });
+
+  test('records who uploaded the G-code (id and name snapshot)', async () => {
+    currentUser = { id: 3, name: 'Casey', role: 'operator', requires_print_approval: 0 };
+    const tmpFile = makeTempGcode('attributed.bgcode');
+
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', tmpFile)
+      .field('part_id', '1')
+      .field('parts_per_plate', '1')
+      .field('printer_model', 'mini');
+
+    fs.unlinkSync(tmpFile);
+
+    expect(res.status).toBe(201);
+    expect(res.body.uploaded_by_user_id).toBe(3);
+    expect(res.body.uploaded_by_name).toBe('Casey');
     uploadedPath = res.body.filepath;
   });
 });

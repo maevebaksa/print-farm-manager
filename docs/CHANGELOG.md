@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-09-28: natural printer name order, and track who owns parts and uploaded files
+
+Reported: printer lists put "mini10" between "mini1" and "mini2". The earlier command palette fix (see "command palette sorts mini10 before mini9" below) only patched that one component's tiebreak; the root cause is `GET /api/printers` and `GET /api/dashboard` sorting with SQLite's plain text `ORDER BY p.name`, which every page (Fleet, Dashboard, Webcams, the Jobs printer filter) inherits. SQLite has no natural collation, so both endpoints now re-sort in JS with a shared numeric-aware comparator (`Intl.Collator` with `numeric: true`).
+
+Requested: see whose parts everything belongs to. Projects and parts now record who created them, and G-codes record who uploaded them, as a user id plus a name snapshot (the same convention `printer_events` already uses: no foreign key, so attribution survives a user being renamed or deleted). Jobs are created by the scheduler rather than a person, so they get no column of their own; `GET /api/jobs` joins the owner from the job's part and G-code. Rows created before this change show no owner ("Unknown" on the Jobs page). Duplicating a project attributes the new project and parts to whoever duplicated it, while copied G-codes keep their original uploader.
+
+### Changes
+- `server/natural-sort.js`: new shared natural-order comparator.
+- `server/routes/printers.js`, `server/routes/dashboard.js`: printer lists in natural name order.
+- `server/db.js`: additive migrations for `projects.created_by_user_id/created_by_name`, `parts.created_by_user_id/created_by_name`, `gcodes.uploaded_by_user_id/uploaded_by_name`.
+- `server/routes/projects.js`, `server/routes/parts.js`, `server/routes/gcodes.js`, `server/index.js` (catalog-print placeholder G-code): record the signed-in user on create/upload/duplicate.
+- `server/routes/jobs.js`: `part_owner_*` and `gcode_uploaded_by_*` joined onto every job.
+- `client/src/pages/Projects.jsx`: "by <user>" under each part name, uploader name on each G-code row.
+- `client/src/pages/Jobs.jsx`: Owner column (and mobile card line), part creator with G-code uploader fallback, both in the tooltip.
+- `server/tests/natural-sort.test.js`, `server/tests/user-attribution.test.js`: new. `dashboard.test.js` (natural order), `gcodes.test.js` (uploader recorded), `jobs-route.test.js` (owner joins), `backup-restore.test.js` (new columns export and restore); other suites' inline schemas gained the new columns.
+- `docs/database.md`, `docs/api.md`, `docs/web-app.md`: new columns, response fields, and UI.
+
+---
+
 ## 2026-09-28: fix .bgcode thumbnails compressed with Deflate never showing
 
 Found while writing the OctoPrint .bgcode converter (entry below): `fromBgcode` decoded Deflate-compressed (compression type 1) blocks as raw Deflate, but Prusa's reference implementation libbgcode (src/LibBGCode/binarize/binarize.cpp) writes them with `deflateInit`, a zlib-wrapped stream. A real Deflate-compressed thumbnail therefore failed to decode and was skipped silently, so the G-code list showed no thumbnail. PrusaSlicer usually stores thumbnails uncompressed, which is likely why nobody noticed. The test fixture builder made the same raw-Deflate assumption, so the existing test passed against the bug.

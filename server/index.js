@@ -430,9 +430,9 @@ const server = app.listen(PORT, () => {
     ).get(part.id, printer.model);
     if (!gcode) {
       const result = db.prepare(`
-        INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, created_at)
-        VALUES (?, ?, ?, '', ?, ?)
-      `).run(part.id, printer.model, `External upload via ${printer.name}`, qty, now);
+        INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, created_at, uploaded_by_user_id, uploaded_by_name)
+        VALUES (?, ?, ?, '', ?, ?, ?, ?)
+      `).run(part.id, printer.model, `External upload via ${printer.name}`, qty, now, req.user?.id ?? null, req.user?.name ?? null);
       gcode = db.prepare('SELECT * FROM gcodes WHERE id = ?').get(result.lastInsertRowid);
     }
 

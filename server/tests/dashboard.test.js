@@ -156,3 +156,20 @@ describe('GET /api/dashboard: per-project ETA fields', () => {
     expect(proj.estimated_remaining_incomplete).toBe(false);
   });
 });
+
+describe('GET /api/dashboard: printer ordering', () => {
+  test('sorts printer names naturally (mini2 before mini10), not as plain text', async () => {
+    const now = Date.now();
+    const insert = db.prepare("INSERT INTO printers (name, ip, api_key, model, created_at) VALUES (?, '10.0.0.1', '', 'mini', ?)");
+    const ids = ['mini10', 'mini1', 'mini2', 'Mini3'].map(n => insert.run(n, now).lastInsertRowid);
+    try {
+      const res = await request(app).get('/api/dashboard');
+      expect(res.status).toBe(200);
+      const names = res.body.printers.map(p => p.name).filter(n => /^mini/i.test(n));
+      expect(names).toEqual(['mini1', 'mini2', 'Mini3', 'mini10']);
+    } finally {
+      db.prepare(`DELETE FROM printers WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+    }
+  });
+});
+
