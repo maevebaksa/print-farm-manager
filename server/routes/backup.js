@@ -2,6 +2,7 @@ const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
+const { blockUploaderPrinterAdmin } = require('../auth');
 
 const router   = express.Router();
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
@@ -112,7 +113,7 @@ module.exports = (db) => {
   });
 
   // POST /api/backup/restore — replace all farm data from a backup JSON file
-  router.post('/restore', async (req, res) => {
+  router.post('/restore', blockUploaderPrinterAdmin, async (req, res) => {
     let tmpPath = null;
     try {
       await runUpload(req, res);

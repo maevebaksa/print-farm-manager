@@ -10,24 +10,28 @@ import ColorSwatch from '../components/ColorSwatch';
 import usePinnedPrinters from '../usePinnedPrinters';
 import { useAuth } from '../AuthContext';
 
-// Widest a single model's chip is allowed to grow (as a percentage of the
-// viewport) before wrapping its own printers onto another row within the
-// same chip, rather than stretching the chip itself wider. A vw-based cap
-// rather than a fixed column count so it scales with the window automatically
-// (see the per-model layout below): roughly 2 full-width chips side by side
-// on any screen size, since 2 * CHIP_MAX_VW + gaps stays under 100vw.
-const CHIP_MAX_VW = 42;
+// Widest a single model's chip is allowed to grow before wrapping its own
+// printers onto another row within the same chip, rather than stretching the
+// chip itself wider: exactly half the chip container (minus half the gap), so
+// two full-width chips always fit side by side. A container percentage, not
+// the vw cap this used to be: under the app-wide CSS zoom (index.html) vw is
+// scaled too, so 42vw came out as ~50% of the window and, with the sidebar
+// taking its share, a large model's chip could never share a row. A
+// percentage of the container is also what was meant all along (vw counted
+// the sidebar's width as if chips could use it).
+const CHIP_ROW_GAP_PX = 20;
+const CHIP_MAX_WIDTH = `(100% - ${CHIP_ROW_GAP_PX}px) / 2`;
 // Horizontal padding (left + right) of the chip's own rectangle, below: the
 // width math has to account for it or a single-card chip's minmax(220px, 1fr)
 // grid column overflows the chip's border by exactly this much.
 const CHIP_PADDING_X = 28;
-// The vw cap above is meant to stop a large model's chip from dominating the
-// row, not to starve a small one: at a narrow-ish window (e.g. the browser
-// snapped to half a smaller laptop screen), CHIP_MAX_VW can resolve to less
-// than two cards' width, so a 2+ printer model gets squeezed to 1 column even
-// though the window has room for 2. Floors the vw cap at exactly what 2 cards
-// need, so a 2-up (or larger) chip never loses its second column to the vw
-// term specifically; it can still be narrower than this via the naturalWidth/
+// The half-width cap above is meant to stop a large model's chip from
+// dominating the row, not to starve a small one: at a narrow-ish window (e.g.
+// the browser snapped to half a smaller laptop screen), CHIP_MAX_WIDTH can
+// resolve to less than two cards' width, so a 2+ printer model gets squeezed
+// to 1 column even though the window has room for 2. Floors the cap at exactly
+// what 2 cards need, so a 2-up (or larger) chip never loses its second column
+// to the cap term specifically; it can still be narrower than this via the naturalWidth/
 // 100% terms below (a 1-card group, or a genuinely narrow/mobile viewport).
 const TWO_UP_MIN_PX = 2 * 230 - 10 + CHIP_PADDING_X;
 
@@ -91,6 +95,9 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
   // than hide the button, so it's clear why rather than silently missing.
   const { user } = useAuth();
   const canSetReady = user.role !== 'uploader';
+  // Decommissioning is printer management, blocked for uploaders server-side
+  // (auth.blockUploaderPrinterAdmin), so the button is not offered to them.
+  const canManagePrinters = user.role !== 'uploader';
   const setReadyTitle = 'The uploader role cannot confirm a printer is ready for new work';
 
   // Confirmed-qty input — pre-filled from the last finished job's parts_per_plate.
@@ -412,7 +419,7 @@ function PrinterCard({ printer, selected, onToggleSelect, onSetReady, onBadPrint
         </div>
       )}
 
-      {!isPrinting && (
+      {!isPrinting && canManagePrinters && (
         <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 2 }}>
           <button onClick={() => onDecommission(printer.id, (needsConfirmation && printer.last_parts_per_plate != null) ? parseInt(confirmedQty, 10) : null)} style={{ background: 'none', color: '#475569', border: '1px solid #2d3748', borderRadius: 6, padding: '3px 8px', fontSize: 11, cursor: 'pointer' }}>
             Decommission
@@ -427,6 +434,9 @@ export default function Fleet() {
   const navigate                              = useNavigate();
   const { user }                              = useAuth();
   const canSetReady                           = user.role !== 'uploader';
+  // Bulk Edit changes printers' loaded material/color/group (PUT /api/printers/:id),
+  // which uploaders cannot do; see PrinterCard's canManagePrinters.
+  const canManagePrinters                     = user.role !== 'uploader';
   const [confirm, confirmModal]               = useConfirm();
   const [showToast, toastEl]                  = useToast();
   const [printers, setPrinters]               = useState([]);
@@ -881,7 +891,7 @@ export default function Fleet() {
           <PollTimer lastPolled={lastPolled} intervalMs={15000} />
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
+          {canManagePrinters && <button
             onClick={toggleBulkEditMode}
             title="Select printers to set their loaded material, color, or group all at once"
             style={{
@@ -891,7 +901,7 @@ export default function Fleet() {
             }}
           >
             {bulkEditMode ? 'Done' : 'Bulk Edit'}
-          </button>
+          </button>}
           <button
             onClick={sweep}
             title="Manually trigger job dispatch now. This normally happens automatically, use it to start jobs on idle machines without waiting for the next cycle."
@@ -1159,7 +1169,7 @@ export default function Fleet() {
           per line instead of showing mostly-empty full-width rows.
           Chip width is a CSS min() of three things, not a fixed pixel cap:
           exactly as wide as this group's cards need (so a 1-2 printer group
-          stays small), never wider than CHIP_MAX_VW of the viewport (so a
+          stays small), never wider than half the container (so a
           large group wraps onto more rows within its own chip instead of
           stretching arbitrarily wide, and (the actual point) that cap
           scales with the window: more columns fit per chip on a wide
@@ -1167,18 +1177,18 @@ export default function Fleet() {
           never wider than the container itself (100%, so a chip still
           shrinks correctly on a narrow/mobile viewport, same as the
           uncapped grid always did). */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: CHIP_ROW_GAP_PX, alignItems: 'flex-start' }}>
         {Object.entries(grouped).map(([model, group]) => {
           const naturalWidth = `${group.length * 230 - 10 + CHIP_PADDING_X}px`;
-          // The inner max(CHIP_MAX_VW vw, TWO_UP_MIN_PX) is the vw cap, floored so
+          // The inner max(CHIP_MAX_WIDTH, TWO_UP_MIN_PX) is the half-width cap, floored so
           // it never drops below 2-cards-wide (see TWO_UP_MIN_PX above). The outer
           // max(220px + padding, ...) floors the whole thing at one card wide plus
           // the chip's own padding: on a narrow/mobile viewport even that floored
-          // vw cap can still resolve below one card (min(100%, ...) already brings
+          // cap can still resolve below one card (min(100%, ...) already brings
           // it down there), which would otherwise squeeze a card's own
           // minmax(220px, 1fr) column below its own minimum, overflowing the
           // chip's border instead of wrapping to 1-per-row.
-          const chipWidth = `max(${220 + CHIP_PADDING_X}px, min(100%, ${naturalWidth}, max(${CHIP_MAX_VW}vw, ${TWO_UP_MIN_PX}px)))`;
+          const chipWidth = `max(${220 + CHIP_PADDING_X}px, min(100%, ${naturalWidth}, max(${CHIP_MAX_WIDTH}, ${TWO_UP_MIN_PX}px)))`;
           return (
             <div key={model} style={{
               width: chipWidth, background: '#111827', border: '1px solid #1e2433',

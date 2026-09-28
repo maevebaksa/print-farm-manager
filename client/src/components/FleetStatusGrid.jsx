@@ -34,11 +34,13 @@ const ROW_STATUSES = ['PRINTING', 'FINISHED', 'IDLE', 'ERROR', 'STOPPED', 'OFFLI
 // has, not a fixed box: CELL_MIN_PX is the floor (never smaller than before
 // felt cramped), CELL_GROWTH caps how much wider than "just enough for this
 // many cells" a chip may stretch (so a 2-printer chip doesn't balloon to fill
-// the whole row), and CELL_MAX_VW is the absolute ceiling regardless of count.
+// the whole row), and CELL_MAX_PCT (of the chip container, not the viewport:
+// vw is inflated by the app-wide CSS zoom in index.html and also counted the
+// sidebar) is the absolute ceiling regardless of count.
 const CELL_MIN_PX = 60;
 const CELL_GAP_PX = 4;
 const CELL_GROWTH = 1.6;
-const CELL_MAX_VW = 60;
+const CELL_MAX_PCT = 70;
 
 function cellColors(printer) {
   // Held printer (awaiting operator sign-off) renders as green regardless of status.
@@ -116,7 +118,7 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
           // How wide this chip's cells are allowed to grow: never below what
           // CELL_MIN_PX needs for this many cells, never more than CELL_GROWTH
           // times that (so a 2-cell chip doesn't stretch absurdly wide just
-          // because the page has room), and never past CELL_MAX_VW regardless.
+          // because the page has room), and never past CELL_MAX_PCT regardless.
           const naturalWidth = group.length * (CELL_MIN_PX + CELL_GAP_PX) - CELL_GAP_PX;
           // Applied to the chip itself (like Fleet.jsx's own chip-width
           // formula), not a nested child: a flex item's width is resolved
@@ -126,7 +128,7 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
           // ambiguous (its content was asking for 100% of a not-yet-resolved
           // parent), which one or more browsers collapsed to the grid's
           // intrinsic minimum: a single column, stacking every cell vertically.
-          const chipWidth = `min(100%, ${CELL_MAX_VW}vw, ${naturalWidth * CELL_GROWTH}px)`;
+          const chipWidth = `min(${CELL_MAX_PCT}%, ${naturalWidth * CELL_GROWTH}px)`;
           return (
           <div key={model} style={{
             display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,

@@ -164,7 +164,7 @@ const server = app.listen(PORT, () => {
 
   // Recommission a printer — returns it to the active fleet and immediately dispatches
   // a job if one is available. Operator has completed investigation; no hold needed.
-  app.post('/api/printers/:id/recommission', (req, res) => {
+  app.post('/api/printers/:id/recommission', auth.blockUploaderPrinterAdmin, (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
     db.prepare(`

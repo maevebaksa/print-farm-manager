@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-09-28: uploaders can no longer add, remove, or reconfigure printers; Fleet model chips fit two per row again
+
+Requested: the uploader role should not be able to add or remove printers or edit their settings. Until now an uploader was only kept from Set Ready; every printer management route was open to it. A new `auth.blockUploaderPrinterAdmin` (a `blockRole('uploader')`) now guards adding (single and CSV import), editing (`PUT /api/printers/:id`: rename, connection, camera, loaded filament, group, decommission note), deleting, decommissioning, and recommissioning printers, the add/edit form's connection and camera probes, the printer model and group registries, and backup restore (which replaces the whole printer table, so it was a back door to the same thing). Each returns `403`. The client hides the matching controls for uploaders so they never see a button that would fail. Reading printers, models, and groups stays open, and the uploader's existing abilities (Bad Print, linking or cataloguing a print, printer notes, all project and G-code work) are unchanged.
+
+Reported (flagged in the previous entry's summary): the Fleet page's per-model chips were capped at `42vw`, meant as "two chips side by side". Under the app-wide `zoom: 1.2`, `vw` is scaled too, so the cap came out near half the window and, with the sidebar taking its share, a large model's chip could never share a row (measured in Chromium: a 968px chip in a 1637px content area at a 1920px window). The cap is now half the chip container itself, `(100% - gap) / 2`, which is zoom-proof and is what the `vw` cap approximated in the first place; after the fix that chip is 806px. The Dashboard's `FleetStatusGrid` had the same `vw` ceiling (`60vw`) and now uses 70% of its container.
+
+### Changes
+- `server/auth.js`: `blockUploaderPrinterAdmin`.
+- `server/routes/printers.js`, `server/routes/models.js`, `server/routes/groups.js`, `server/routes/backup.js`, `server/index.js`: the gate on every printer management route listed above.
+- `client/src/pages/Settings.jsx`: Printer Models, Groups, Add Printer, Import, and Restore hidden for uploaders.
+- `client/src/pages/Fleet.jsx`: Bulk Edit and Decommission hidden for uploaders; chip cap is half the container instead of `42vw`.
+- `client/src/pages/PrinterDetail.jsx`: Rename and Edit hidden for uploaders.
+- `client/src/pages/Decommissioned.jsx`: Recommission hidden and the note read-only for uploaders.
+- `client/src/components/FleetStatusGrid.jsx`: chip ceiling 70% of the container instead of `60vw`.
+- `server/tests/uploader-printer-permissions.test.js`: new. Every gated route 403s for an uploader and changes nothing; operators keep access; reads stay open.
+- `docs/auth.md`, `docs/api.md`, `docs/web-app.md`: the new restrictions and the chip width rules.
+
+Verified in the built app in headless Chromium: logged in as a real uploader account, every listed control was absent and direct `PUT`/`DELETE`/`POST` calls to `/api/printers` returned `403`; chip widths measured before and after at 1440 and 1920px windows.
+
+---
+
 ## 2026-09-28: fix Sign out and login screen pushed below the fold by the 120% scale, and drag-and-drop gaps
 
 Reported: after the whole-app 120% scale (`body { zoom: 1.2 }`, see "scale the whole app 120%" below), reaching the user name and Sign out button at the bottom of the sidebar needed a long scroll, and the login screen scrolled the same way. That entry assumed `100vh` stays correct under zoom; under standardized CSS zoom (Chrome 128+, Firefox 126+) it does not: `vh` inside the zoomed body is scaled too, so `#layout { height: 100vh }` was 120% of the real window. Reproduced in Chromium 141 at a 1440x850 window: the document was 1020px tall and Sign out sat at y=964. Full-height layouts now use `height: 100%` chained from `html`/`body`/`#root`, which resolves against the real window; after the fix the document is 850px and Sign out sits at y=794 to 831. Same for the login screen and the Dashboard.

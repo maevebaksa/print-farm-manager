@@ -4,6 +4,7 @@ import { buildColorHexMap } from '../filamentColorHex';
 import ColorSwatch from '../components/ColorSwatch';
 import GcodeThumbnail from '../components/GcodeThumbnail';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../AuthContext';
 
 function formatTimestamp(ms) {
   if (!ms) return '—';
@@ -77,6 +78,11 @@ const detailInputStyle = {
 };
 
 export default function PrinterDetail() {
+  // Renaming and editing a printer's connection/camera/group settings is
+  // printer management, blocked for uploaders server-side
+  // (auth.blockUploaderPrinterAdmin), so the Rename and Edit buttons are hidden.
+  const { user } = useAuth();
+  const canManagePrinters = user?.role !== 'uploader';
   const { id } = useParams();
   const navigate = useNavigate();
 
@@ -426,7 +432,7 @@ export default function PrinterDetail() {
           ) : (
             <>
               <span style={{ fontWeight: 800, fontSize: 20, color: '#e2e8f0' }}>{printer.name}</span>
-              <button
+              {canManagePrinters && <button
                 onClick={startRename}
                 title="Rename printer"
                 style={{
@@ -437,7 +443,7 @@ export default function PrinterDetail() {
                 }}
               >
                 Rename
-              </button>
+              </button>}
               {printer.is_active ? (
                 <span style={{
                   background: sc.bg, color: sc.text,
@@ -745,7 +751,7 @@ export default function PrinterDetail() {
                 Belt printer, auto-advance
               </span>
             )}
-            <button
+            {canManagePrinters && <button
               onClick={startEditDetails}
               style={{
                 background: 'none', border: '1px solid #2d3748',
@@ -755,7 +761,7 @@ export default function PrinterDetail() {
               }}
             >
               Edit
-            </button>
+            </button>}
           </div>
         )}
 

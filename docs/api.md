@@ -132,6 +132,12 @@ Revokes (soft delete, the row and its `last_used_at` history are kept). `404` if
 
 ## Printers
 
+Printer management routes return `403` for the `uploader` role (see [auth.md](auth.md#roles)): `POST /api/printers`, `POST /api/printers/import`, `PUT /api/printers/:id`, `DELETE /api/printers/:id`, `POST /api/printers/:id/decommission`, `POST /api/printers/:id/complete-and-decommission`, `POST /api/printers/:id/recommission`, `POST /api/printers/test-connection`, `POST /api/printers/list-cameras`, plus `POST`/`DELETE /api/models`, `POST`/`DELETE /api/groups`, and `POST /api/backup/restore`:
+
+```json
+{ "error": "Uploaders cannot add, remove, or change printers or printer settings" }
+```
+
 ### `GET /api/printers`
 
 Returns all active printers (`is_active = 1`) in natural name order (`mini2` before `mini10`, case-insensitive; `server/natural-sort.js`). `GET /api/dashboard`'s `printers` uses the same order.
@@ -908,6 +914,8 @@ Downloads a full farm snapshot as `farm-backup-YYYY-MM-DD.json`. Includes `print
 **Response:** `Content-Disposition: attachment` JSON file.
 
 ### `POST /api/backup/restore`
+
+`403` for the `uploader` role (a restore replaces the printer table; see Printers above).
 
 Replaces all farm data from a previously exported backup file. Clears the DB and rewrites all tables; gcode files are written to `server/gcode/`. Since `filepath` stores only the filename, no path rewriting is needed — the restored DB works correctly on any machine. Each `gcode_files` key must be a bare filename — any key that isn't (e.g. containing `/`, `\`, or equal to `.`/`..`) is rejected with `400` before anything is written to disk, since it would otherwise be able to resolve outside `server/gcode/`.
 

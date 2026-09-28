@@ -45,6 +45,11 @@ const CREDENTIAL_HELP = {
 
 export default function Settings() {
   const { user } = useAuth();
+  // Adding, importing, or removing printers and editing the printer model and
+  // group registries is operator/admin work; uploaders only queue prints. The
+  // server enforces this (auth.blockUploaderPrinterAdmin); hiding the sections
+  // here just keeps uploaders from seeing controls that would 403.
+  const canManagePrinters = user?.role !== 'uploader';
   const [showToast, toastEl] = useToast();
   const [confirm, confirmModal] = useConfirm();
   const [importing, setImporting] = useState(false);
@@ -709,6 +714,7 @@ export default function Settings() {
       )}
 
       {/* Printer Models */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Printer Models</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -795,8 +801,10 @@ export default function Settings() {
           <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{modelFormError}</div>
         )}
       </section>
+      )}
 
       {/* Groups */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Groups</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -861,6 +869,7 @@ export default function Settings() {
           <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{groupFormError}</div>
         )}
       </section>
+      )}
 
       {/* Filament Library */}
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
@@ -1087,6 +1096,7 @@ export default function Settings() {
       </section>
 
       {/* Add Single Printer */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Add Printer</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 12 }}>
@@ -1394,8 +1404,10 @@ export default function Settings() {
           </div>
         )}
       </section>
+      )}
 
       {/* CSV Import */}
+      {canManagePrinters && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Import Printer Registry</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -1507,6 +1519,7 @@ export default function Settings() {
           </div>
         )}
       </section>
+      )}
 
       {/* Farm Name */}
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
@@ -1745,8 +1758,9 @@ export default function Settings() {
             Export Farm
           </button>
 
-          {/* Restore */}
-          <form onSubmit={handleRestore} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Restore replaces the printer table, so it is printer management:
+              hidden from uploaders (the server 403s it for them too). */}
+          {canManagePrinters && <form onSubmit={handleRestore} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <input
               ref={restoreFileRef}
               type="file"
@@ -1779,7 +1793,7 @@ export default function Settings() {
             >
               {restoring ? 'Restoring…' : 'Restore Farm'}
             </button>
-          </form>
+          </form>}
         </div>
 
         {restoreError && (

@@ -1,4 +1,5 @@
 const express = require('express');
+const { blockUploaderPrinterAdmin } = require('../auth');
 
 // Connectors are code-level — each requires a driver implementation.
 // This list is the authoritative set of valid connector values.
@@ -16,7 +17,7 @@ module.exports = (db) => {
   });
 
   // POST /api/models — add a new printer model
-  router.post('/', (req, res) => {
+  router.post('/', blockUploaderPrinterAdmin, (req, res) => {
     const { model_id, label, connector } = req.body;
     if (!model_id || !label || !connector) {
       return res.status(400).json({ error: 'model_id, label, and connector are required' });
@@ -40,7 +41,7 @@ module.exports = (db) => {
 
   // DELETE /api/models/:model_id — remove a model
   // Blocked if any active printers currently use this model.
-  router.delete('/:model_id', (req, res) => {
+  router.delete('/:model_id', blockUploaderPrinterAdmin, (req, res) => {
     const { model_id } = req.params;
     const inUse = db.prepare(
       'SELECT COUNT(*) as count FROM printers WHERE model = ? AND is_active = 1'

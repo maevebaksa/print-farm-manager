@@ -5,6 +5,7 @@ const axios = require('axios');
 const router = express.Router();
 const events = require('../events');
 const { sortByName } = require('../natural-sort');
+const { blockUploaderPrinterAdmin } = require('../auth');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -154,7 +155,7 @@ module.exports = (db) => {
   // saved) and the printer-edit form (whatever is currently in the fields, saved or
   // not). Never touches a driver's cached persistent connection (Bambu, Centauri, CC2):
   // each driver's testConnection() opens and tears down its own connection.
-  router.post('/test-connection', async (req, res) => {
+  router.post('/test-connection', blockUploaderPrinterAdmin, async (req, res) => {
     const { type, ip, api_key, serial_number } = req.body;
     if (!type) return res.status(400).json({ error: 'type is required' });
     if (!ip) return res.status(400).json({ error: 'ip is required' });
@@ -180,7 +181,7 @@ module.exports = (db) => {
   // printer-edit forms (a crowsnest setup can register more than one). Same
   // no-id-required shape as test-connection, so it works before a printer is saved.
   // Connectors without listCameras (everything but Klipper today) always return [].
-  router.post('/list-cameras', async (req, res) => {
+  router.post('/list-cameras', blockUploaderPrinterAdmin, async (req, res) => {
     const { type, ip, api_key, serial_number } = req.body;
     if (!type) return res.status(400).json({ error: 'type is required' });
     if (!ip) return res.status(400).json({ error: 'ip is required' });
@@ -209,7 +210,7 @@ module.exports = (db) => {
   });
 
   // POST /api/printers — add single printer
-  router.post('/', (req, res) => {
+  router.post('/', blockUploaderPrinterAdmin, (req, res) => {
     const { name, ip, api_key, serial_number, group_name, type, model } = req.body;
     const printerType = type || 'prusa';
     const requiresApiKey = !NO_API_KEY_TYPES.has(printerType);
@@ -245,7 +246,7 @@ module.exports = (db) => {
   });
 
   // PUT /api/printers/:id — update printer
-  router.put('/:id', (req, res) => {
+  router.put('/:id', blockUploaderPrinterAdmin, (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
 
@@ -357,7 +358,7 @@ module.exports = (db) => {
   });
 
   // DELETE /api/printers/:id
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', blockUploaderPrinterAdmin, (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
     db.prepare('DELETE FROM printers WHERE id = ?').run(req.params.id);
@@ -365,7 +366,7 @@ module.exports = (db) => {
   });
 
   // POST /api/printers/:id/decommission — remove from active duty
-  router.post('/:id/decommission', (req, res) => {
+  router.post('/:id/decommission', blockUploaderPrinterAdmin, (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
     const now = Date.now();
@@ -383,7 +384,7 @@ module.exports = (db) => {
   // the machine is decommissioned instead of released to take the next job. If the reduced count
   // drops the part below its target, the part (and its project) reopens and re-enters the queue for
   // the next available printer.
-  router.post('/:id/complete-and-decommission', (req, res) => {
+  router.post('/:id/complete-and-decommission', blockUploaderPrinterAdmin, (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
 
@@ -668,7 +669,7 @@ module.exports = (db) => {
   });
 
   // POST /api/printers/import — CSV bulk import
-  router.post('/import', upload.single('file'), (req, res) => {
+  router.post('/import', blockUploaderPrinterAdmin, upload.single('file'), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
