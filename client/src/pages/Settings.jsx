@@ -380,6 +380,12 @@ export default function Settings() {
   // Color tolerance: RGB-distance fallback the scheduler uses only when no printer
   // has the exact required color loaded (server/color-distance.js, server/scheduler.js).
   const [colorTolerance, setColorTolerance] = useState('');
+  // Print queue policy (admin-only keys; see server/scheduler.js _queuePolicy)
+  const [queueOrder, setQueueOrder] = useState('priority');
+  const [maxPerPart, setMaxPerPart] = useState('0');
+  const [maxPerProject, setMaxPerProject] = useState('0');
+  const [queueError, setQueueError] = useState(null);
+  const [savingQueue, setSavingQueue] = useState(false);
   const [colorToleranceError, setColorToleranceError] = useState(null);
 
   // Upload retry window: how long the scheduler keeps retrying a failing upload on
@@ -414,6 +420,9 @@ export default function Settings() {
         if (data.farm_name) setFarmName(data.farm_name);
         setAutoSsoRedirect(data.auto_sso_redirect === '1');
         setColorTolerance(data.color_tolerance ?? '0');
+        setQueueOrder(data.queue_order || 'priority');
+        setMaxPerPart(data.max_printers_per_part ?? '0');
+        setMaxPerProject(data.max_printers_per_project ?? '0');
         setRetryWindow(data.upload_retry_window_min ?? '15');
         setRequireUploaderApproval(data.require_uploader_approval === '1');
       })
@@ -474,6 +483,28 @@ export default function Settings() {
       showToast('Saved');
     } catch (err) {
       setBatchSizeError(err.message);
+    }
+  }
+
+  async function handleSaveQueuePolicy() {
+    setQueueError(null);
+    setSavingQueue(true);
+    try {
+      for (const [key, value] of [['queue_order', queueOrder], ['max_printers_per_part', maxPerPart], ['max_printers_per_project', maxPerProject]]) {
+        const res = await fetch(`/api/settings/${key}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: String(value).trim() === '' ? '0' : value }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Save failed (${res.status})`);
+      }
+      showToast('Saved');
+    } catch (err) {
+      setQueueError(err.message);
+      showToast('Save failed: ' + err.message, 'error');
+    } finally {
+      setSavingQueue(false);
     }
   }
 
@@ -1602,6 +1633,57 @@ export default function Settings() {
           )}
         </section>
       )}
+
+      {/* Print Queue (admin-only settings; read-only for everyone else) */}
+      <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Print Queue</h2>
+        <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
+          Decides which waiting print a free printer takes next. <strong style={{ color: '#94a3b8' }}>Project priority</strong> follows
+          the project order on the Projects page, then part order within each project.{' '}
+          <strong style={{ color: '#94a3b8' }}>First in, first out</strong> ignores both and runs prints in the order their G-code
+          was uploaded (upload time, not print time), so nobody's project jumps the line.
+          {user?.role !== 'admin' && ' Only an admin can change these.'}
+        </p>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Queue order</label>
+            <select
+              value={queueOrder}
+              disabled={user?.role !== 'admin'}
+              onChange={e => setQueueOrder(e.target.value)}
+              style={{ ...inputStyle, width: 220 }}
+            >
+              <option value="priority">Project priority</option>
+              <option value="fifo">First in, first out (upload time)</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Max printers per part</label>
+            <input type="number" min={0} value={maxPerPart} disabled={user?.role !== 'admin'}
+              onChange={e => setMaxPerPart(e.target.value)} style={{ ...inputStyle, width: 90 }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Max printers per project</label>
+            <input type="number" min={0} value={maxPerProject} disabled={user?.role !== 'admin'}
+              onChange={e => setMaxPerProject(e.target.value)} style={{ ...inputStyle, width: 90 }} />
+          </div>
+          {user?.role === 'admin' && (
+            <button
+              onClick={handleSaveQueuePolicy}
+              disabled={savingQueue}
+              style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: savingQueue ? 'not-allowed' : 'pointer', opacity: savingQueue ? 0.7 : 1 }}
+            >
+              {savingQueue ? 'Saving…' : 'Save'}
+            </button>
+          )}
+        </div>
+        <p style={{ color: '#64748b', fontSize: 12, marginTop: 10 }}>
+          Printer caps (0 = unlimited) stop one part or project from taking over the farm while other prints are waiting:
+          once it has that many printers busy, its next print waits for other queued work first. If nothing else is
+          waiting, it still gets the printer, so no printer sits idle because of a cap.
+        </p>
+        {queueError && <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{queueError}</div>}
+      </section>
 
       {/* Dispatch Settings */}
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>

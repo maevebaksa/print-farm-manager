@@ -966,6 +966,9 @@ export default function Projects() {
   const [loading, setLoading]             = useState(true);
 
   // List filters: only Active shows by default (see SHOW_*_KEY above)
+  // Admin queue policy (Settings > Print Queue). In 'fifo' mode the project and
+  // part order below no longer decides what prints next, so the list says so.
+  const [queueOrder, setQueueOrder] = useState('priority');
   const [showDraft, setShowDraft] = useState(() => {
     try { return JSON.parse(localStorage.getItem(SHOW_DRAFT_KEY) || 'false'); }
     catch (_) { return false; }
@@ -1100,6 +1103,7 @@ export default function Projects() {
     fetch('/api/filaments/types').then(r => r.json()).then(setFilamentTypes).catch(() => {});
     fetch('/api/filaments/colors').then(r => r.json()).then(setFilamentColors).catch(() => {});
     fetch('/api/groups').then(r => r.json()).then(groups => setAllGroups(groups.map(g => g.name))).catch(() => {});
+    fetch('/api/settings').then(r => r.json()).then(st => setQueueOrder(st.queue_order || 'priority')).catch(() => {});
   }, []);
 
   function toggleShowDraft(v)     { setShowDraft(v);     localStorage.setItem(SHOW_DRAFT_KEY, JSON.stringify(v)); }
@@ -1543,6 +1547,12 @@ export default function Projects() {
             </button>
           </div>
         </div>
+
+        {queueOrder === 'fifo' && (
+          <div style={{ background: '#131720', border: '1px solid #2d3748', borderRadius: 6, padding: '8px 12px', fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+            Prints run first in, first out by G-code upload time (Settings, Print Queue). Project and part order here do not change what prints next.
+          </div>
+        )}
 
         {(draftCount > 0 || pausedCount > 0 || completedCount > 0) && (
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>

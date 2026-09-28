@@ -352,3 +352,44 @@ describe('GET /api/parts/:id/dispatch-status: color tolerance', () => {
     expect(res.body.dispatchable).toBe(true);
   });
 });
+
+describe('GET /api/parts/:id/dispatch-status: printer caps (mirrors scheduler _atPrinterCap)', () => {
+  function setSetting(key, value) {
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, String(value));
+  }
+
+  test('notes a part at max_printers_per_part without blocking it', async () => {
+    const partId = seedPart(seedProject(), { target_qty: 100 });
+    seedGcode(partId);
+    seedPrinter();
+    db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(partId);
+    setSetting('max_printers_per_part', 1);
+
+    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.status).toBe(200);
+    expect(res.body.notes.join(' ')).toMatch(/per-part printer cap \(1 of 1/);
+    expect(res.body.dispatchable).toBe(true); // a cap is a note, never a blocker
+  });
+
+  test('notes a project at max_printers_per_project', async () => {
+    const projectId = seedProject();
+    const busy = seedPart(projectId, { target_qty: 100 });
+    const partId = seedPart(projectId, { target_qty: 100 });
+    seedGcode(partId);
+    seedPrinter();
+    db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(busy);
+    setSetting('max_printers_per_project', 1);
+
+    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.body.notes.join(' ')).toMatch(/per-project printer cap \(1 of 1/);
+  });
+
+  test('no cap note when caps are unset', async () => {
+    const partId = seedPart(seedProject(), { target_qty: 100 });
+    seedGcode(partId);
+    seedPrinter();
+    db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(partId);
+    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.body.notes.join(' ')).not.toMatch(/printer cap/);
+  });
+});

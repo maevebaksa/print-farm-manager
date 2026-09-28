@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS parts (
 
 A Part is **open** while `completed_qty < target_qty`. It transitions to **closed** automatically when `completed_qty >= target_qty`. `completed_qty` is allowed to exceed `target_qty` (expected due to plate-based printing — never dispatch half a plate).
 
-`sort_order` controls dispatch priority within a project — the scheduler picks the lowest `sort_order` part first. Set via `PUT /api/parts/reorder`. New parts default to `0` and fall back to `created_at` as a tiebreaker.
+`sort_order` controls dispatch priority within a project (under the default `queue_order = "priority"`; ignored under `"fifo"`, see docs/api.md's Dispatch order): the scheduler picks the lowest `sort_order` part first. Set via `PUT /api/parts/reorder`. New parts default to `0` and fall back to `created_at` as a tiebreaker.
 
 `print_time_seconds` and `material_grams` on parts are legacy columns retained for schema compatibility but no longer written to. Time and material estimates are now stored per-gcode (see below) so they can vary by printer model.
 

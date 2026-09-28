@@ -212,3 +212,35 @@ describe('PUT /api/settings/require_uploader_approval', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('queue policy settings (queue_order, max_printers_per_part/project)', () => {
+  afterEach(() => { currentUser = { id: 1, role: 'admin' }; });
+
+  test('admin can switch queue_order to fifo', async () => {
+    const res = await request(app).put('/api/settings/queue_order').send({ value: 'fifo' });
+    expect(res.status).toBe(200);
+    expect(db.prepare("SELECT value FROM settings WHERE key = 'queue_order'").get().value).toBe('fifo');
+  });
+
+  test('rejects an unknown queue_order', async () => {
+    const res = await request(app).put('/api/settings/queue_order').send({ value: 'random' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/"priority" or "fifo"/);
+  });
+
+  test('admin can set printer caps, 0 meaning unlimited', async () => {
+    expect((await request(app).put('/api/settings/max_printers_per_part').send({ value: '2' })).status).toBe(200);
+    expect((await request(app).put('/api/settings/max_printers_per_project').send({ value: '0' })).status).toBe(200);
+  });
+
+  test('rejects a negative or non-integer cap', async () => {
+    expect((await request(app).put('/api/settings/max_printers_per_part').send({ value: '-1' })).status).toBe(400);
+    expect((await request(app).put('/api/settings/max_printers_per_project').send({ value: '1.5' })).status).toBe(400);
+  });
+
+  test.each(['queue_order', 'max_printers_per_part', 'max_printers_per_project'])('an operator cannot change %s', async (key) => {
+    currentUser = { id: 2, role: 'operator' };
+    const res = await request(app).put(`/api/settings/${key}`).send({ value: key === 'queue_order' ? 'fifo' : '1' });
+    expect(res.status).toBe(403);
+  });
+});

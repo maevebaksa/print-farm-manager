@@ -64,6 +64,32 @@ module.exports = (db, scheduler = null) => {
       blockers.push(`Jobs already printing cover the remaining ${remaining} part(s) — waiting for them to finish`);
     }
 
+    // Printer caps (max_printers_per_part / max_printers_per_project), mirroring
+    // scheduler.js's _queuePolicy and _atPrinterCap. Not a blocker: caps are
+    // work-conserving, so a capped part still dispatches when nothing else is
+    // waiting. Keep in sync with the scheduler (see CLAUDE.md's sync-pairs table).
+    const capSetting = (key) => {
+      const n = parseInt(db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value, 10);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+    const maxPerPart = capSetting('max_printers_per_part');
+    const maxPerProject = capSetting('max_printers_per_project');
+    if (maxPerPart > 0) {
+      const n = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE part_id = ? AND status IN ('uploading', 'printing')").get(part.id).n;
+      if (n >= maxPerPart) {
+        notes.push(`At the per-part printer cap (${n} of ${maxPerPart} printers): other waiting work goes first, this part only gets another printer when nothing else is queued for it`);
+      }
+    }
+    if (maxPerProject > 0) {
+      const n = db.prepare(`
+        SELECT COUNT(*) AS n FROM jobs JOIN parts ON parts.id = jobs.part_id
+        WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing')
+      `).get(part.project_id).n;
+      if (n >= maxPerProject) {
+        notes.push(`Project is at the per-project printer cap (${n} of ${maxPerProject} printers): other waiting work goes first, this project only gets another printer when nothing else is queued for it`);
+      }
+    }
+
     const gcodes = db.prepare('SELECT * FROM gcodes WHERE part_id = ?').all(part.id);
     if (gcodes.length === 0) {
       blockers.push('No G-code uploaded — upload one per printer model this part can print on');

@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-09-28: admin print queue setting: first in, first out, and per-part/per-project printer caps
+
+Requested: for a shared (student) farm, prints should run first in, first out by when their G-code was uploaded, with no project getting priority, as an admin setting; plus limits on how many printers one piece of work can take while others are waiting, so the farm runs several people's prints in parallel.
+
+Until now the scheduler always walked candidates by project priority, then part order within the project (the Projects page drag order). A new admin-only `queue_order` setting keeps that as the default (`priority`) and adds `fifo`, which orders by the matching G-code's upload time (`gcodes.created_at`) and ignores project and part order entirely. New admin-only `max_printers_per_part` and `max_printers_per_project` settings (0 = unlimited) make a part or project that already has that many printers uploading or printing wait behind other eligible work. They are work-conserving: if nothing uncapped is waiting, the capped work still gets the printer rather than leaving it idle. The cap check runs before the dispatch lock (job row) is written, so a skipped candidate leaves nothing behind. No part-count path is touched: this only changes which eligible part is picked.
+
+### Changes
+- `server/scheduler.js`: `_queuePolicy()` and `_atPrinterCap()`; `_reserveCandidate` orders by upload time under `fifo` and skips capped candidates; `_reserveJob` runs the color passes with caps first, then without.
+- `server/routes/settings.js`: `queue_order`, `max_printers_per_part`, `max_printers_per_project` (admin-only, validated).
+- `server/routes/parts.js`: `dispatch-status` notes a part or project at its cap (sync pair with the scheduler).
+- `client/src/pages/Settings.jsx`: new Print Queue section.
+- `client/src/pages/Projects.jsx`: notice in the list view when the queue is first in, first out.
+- `server/tests/scheduler-queue-policy.test.js`: new (priority vs FIFO, part and project caps, work-conserving fallback, no stray job rows). `settings.test.js` and `dispatch-status.test.js` extended.
+- `docs/api.md` (settings keys and a new Dispatch order section), `docs/database.md`, `docs/web-app.md`.
+
+---
+
 ## 2026-09-28: uploaders can no longer add, remove, or reconfigure printers; Fleet model chips fit two per row again
 
 Requested: the uploader role should not be able to add or remove printers or edit their settings. Until now an uploader was only kept from Set Ready; every printer management route was open to it. A new `auth.blockUploaderPrinterAdmin` (a `blockRole('uploader')`) now guards adding (single and CSV import), editing (`PUT /api/printers/:id`: rename, connection, camera, loaded filament, group, decommission note), deleting, decommissioning, and recommissioning printers, the add/edit form's connection and camera probes, the printer model and group registries, and backup restore (which replaces the whole printer table, so it was a back door to the same thing). Each returns `403`. The client hides the matching controls for uploaders so they never see a button that would fail. Reading printers, models, and groups stays open, and the uploader's existing abilities (Bad Print, linking or cataloguing a print, printer notes, all project and G-code work) are unchanged.

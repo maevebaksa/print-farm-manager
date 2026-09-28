@@ -783,6 +783,15 @@ Triggers an immediate dispatch sweep — queries all currently idle, non-held pr
 
 Called by the Projects UI when a project is activated or resumed.
 
+### Dispatch order
+
+When a printer is free, the scheduler (`server/scheduler.js` `_reserveCandidate`) walks the eligible parts (open part, active project, approved G-code for this printer's model, group/material/color match) in queue order and takes the first one that still needs prints:
+
+- `queue_order = "priority"` (default): `projects.priority`, then `projects.created_at`, then `parts.sort_order`, then `parts.created_at`. This is the drag order on the Projects page.
+- `queue_order = "fifo"`: `gcodes.created_at` of the part's G-code for this printer's model, oldest first. A duplicated project's G-codes count from when they were duplicated.
+
+With `max_printers_per_part` or `max_printers_per_project` set, a candidate whose part or project already has that many jobs `uploading`/`printing` is skipped in favor of the next eligible one, before any job row (dispatch lock) is written. Only if every eligible candidate is capped does the scheduler take a capped one anyway, so a cap never idles a printer. `GET /api/parts/:id/dispatch-status` adds a note (not a blocker) when a part or its project is at its cap.
+
 ---
 
 ## Notifications
@@ -827,8 +836,11 @@ Body: `{ "value": "..." }`. Allowed keys:
 | `color_tolerance` | integer 0-450 | Any authenticated user. RGB-distance (server/color-distance.js) fallback the scheduler and `GET /api/parts/:id/dispatch-status` use when no printer has the exact required color loaded; `0` (the default) disables it. See `docs/database.md`'s `printers` section and the scheduler note below. |
 | `upload_retry_window_min` | integer 1-180 | How many minutes the scheduler keeps retrying a failing upload on later sweeps (roughly every 15s, tied to the poller's cycle) before finally holding the printer for operator confirmation. Default `15`. See `jobs.upload_first_failed_at` in [docs/database.md](database.md). |
 | `require_uploader_approval` | `"0"` or `"1"` | Admin-only. Off by default. Whether a new `uploader` account auto-provisioned via OIDC must be approved (`POST /api/users/:id/approve`) before it can sign in; see [docs/auth.md](auth.md)'s Account approval section. |
+| `queue_order` | `"priority"` or `"fifo"` | Admin-only. Which waiting print a free printer takes next. `priority` (the default when unset): project priority, then part `sort_order`. `fifo`: first in, first out by the matching G-code's upload time (`gcodes.created_at`); project and part order are ignored. See the Scheduler section below. |
+| `max_printers_per_part` | integer 0-1000 | Admin-only. `0` (default) = unlimited. How many printers one part may have uploading or printing while other eligible work is waiting. Work-conserving: never leaves a printer idle. |
+| `max_printers_per_project` | integer 0-1000 | Admin-only. Same as above, counted across all of a project's parts. |
 
-Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect` or `require_uploader_approval`.
+Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, `queue_order`, `max_printers_per_part`, or `max_printers_per_project`.
 
 ---
 
