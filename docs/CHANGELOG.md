@@ -35,6 +35,19 @@ Separately confirmed, not a change: `DELETE /api/users/:id` already refuses to d
 
 ---
 
+## 2026-09-28: Job History table no longer scrolls horizontally
+
+Reported: the per-printer Job History table (Printer Detail page) showed a horizontal scrollbar under normal viewing, several `whiteSpace: nowrap` columns (Part, Project, Started, Duration, Status) were each sized to their full natural content width by the browser's default table layout, and the sum routinely exceeded the container.
+
+Switched the table to `tableLayout: fixed` with explicit column-width percentages (`<colgroup>`), so columns share the container's actual width instead of expanding to fit their content; every cell already truncates with `textOverflow: ellipsis` (the File column's inner span did already; the others gained `overflow: hidden` to make the fixed width actually clip instead of visually overflowing its cell).
+
+### Changes
+- `client/src/pages/PrinterDetail.jsx`: Job History table given a fixed layout with a `<colgroup>`, and consistent overflow/ellipsis truncation on every cell; outer wrapper no longer scrolls.
+
+Client-only change: `npm run build` succeeds. Could not verify in a live browser, this session's dev server needs `better-sqlite3` to start and that native binding still fails to load on this machine (same limitation disclosed all session); the fix is a straightforward CSS table-layout change with no new interaction to test.
+
+---
+
 ## 2026-09-28: user groups with per-group printers and permissions, plus Quick Print
 
 Requested: custom user groups where an admin sets each group's own settings, including which printers members may upload to, an admin group and an operator group, and a quick way to upload one file and print it once.

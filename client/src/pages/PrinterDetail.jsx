@@ -933,12 +933,21 @@ export default function PrinterDetail() {
             Job History ({jobHistory.total.toLocaleString()})
           </div>
 
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <div style={{ width: '100%', overflow: 'hidden' }}>
+            <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 13 }}>
+              <colgroup>
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '24%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '7%' }} />
+                <col style={{ width: '10%' }} />
+              </colgroup>
               <thead>
                 <tr style={{ color: '#475569', textAlign: 'left', borderBottom: '1px solid #1e2433' }}>
                   {['Part', 'Project', 'File', 'Started', 'Duration', 'Parts', 'Status'].map(h => (
-                    <th key={h} style={{ padding: '6px 10px', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+                    <th key={h} style={{ padding: '6px 10px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -950,18 +959,18 @@ export default function PrinterDetail() {
                     : '#fcd34d';
                   return (
                     <tr key={job.id} style={{ borderBottom: '1px solid #1a1f2e' }}>
-                      <td style={{ padding: '7px 10px', color: '#cbd5e1', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.part_name ?? '—'}</td>
-                      <td style={{ padding: '7px 10px', color: '#94a3b8', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.project_name ?? '—'}</td>
-                      <td style={{ padding: '7px 10px', color: '#64748b', fontFamily: 'monospace', fontSize: 11, maxWidth: 160 }}>
+                      <td style={{ padding: '7px 10px', color: '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.part_name ?? '—'}</td>
+                      <td style={{ padding: '7px 10px', color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.project_name ?? '—'}</td>
+                      <td style={{ padding: '7px 10px', color: '#64748b', fontFamily: 'monospace', fontSize: 11, overflow: 'hidden' }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
                           <GcodeThumbnail gcodeId={job.gcode_id} size={22} />
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.gcode_filename ?? '—'}</span>
                         </span>
                       </td>
-                      <td style={{ padding: '7px 10px', color: '#64748b', whiteSpace: 'nowrap' }}>{formatTimestamp(job.started_at)}</td>
-                      <td style={{ padding: '7px 10px', color: '#94a3b8', whiteSpace: 'nowrap' }}>{formatDuration(job.duration_ms)}</td>
+                      <td style={{ padding: '7px 10px', color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTimestamp(job.started_at)}</td>
+                      <td style={{ padding: '7px 10px', color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatDuration(job.duration_ms)}</td>
                       <td style={{ padding: '7px 10px', color: '#94a3b8', textAlign: 'center' }}>{job.parts_per_plate}</td>
-                      <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '7px 10px', overflow: 'hidden', whiteSpace: 'nowrap' }}>
                         <span style={{ color: statusColor, fontWeight: 600, fontSize: 11, textTransform: 'uppercase' }}>{job.status}</span>
                       </td>
                     </tr>
