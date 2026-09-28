@@ -38,7 +38,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const auth = require('../auth');
-const { readPrinterModelName, matchRegistryModel } = require('../gcode-metadata');
+const { readPrinterModelName, matchRegistryModel, readPrintStats } = require('../gcode-metadata');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 const ACCEPTED_EXTENSIONS = ['.gcode', '.gco', '.g', '.bgcode', '.3mf'];
@@ -154,6 +154,7 @@ module.exports = (db, getScheduler = () => null) => {
           return reject(400, `Could not tell which printer model this file is for (group "${req.groupName}" has ${groupModels.join(', ')}). Slice with a printer profile whose printer_model matches one of them.`);
         }
 
+        const stats = readPrintStats(displayName, buf); // print time, grams, filament type from the header
         const user = req.user;
         const now = Date.now();
         const partsPerPlate = partsPerPlateFromName(displayName);
@@ -184,10 +185,13 @@ module.exports = (db, getScheduler = () => null) => {
 
           gcodeId = db.prepare(`
             INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, allowed_groups, approved,
+                                est_print_secs, material_grams, material_type,
                                 uploaded_by_user_id, uploaded_by_name, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(partId, printerModel, displayName, req.file.filename, partsPerPlate,
-                 JSON.stringify([req.groupName]), approved, user.id, user.name, now).lastInsertRowid;
+                 JSON.stringify([req.groupName]), approved,
+                 stats.est_print_secs, stats.material_grams, stats.material_type,
+                 user.id, user.name, now).lastInsertRowid;
         })();
 
         console.log(`[slicer] ${user.name} queued "${displayName}" for ${printerModel} in group "${req.groupName}"${approved ? '' : ' (pending approval)'}`);

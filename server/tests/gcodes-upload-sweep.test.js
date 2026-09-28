@@ -66,7 +66,7 @@ beforeEach(() => {
       allowed_groups TEXT, required_material TEXT, required_color TEXT,
       approved INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
-      uploaded_by_user_id INTEGER, uploaded_by_name TEXT
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT, material_type TEXT
     );
     CREATE TABLE printer_models (
       model_id TEXT PRIMARY KEY, label TEXT NOT NULL, connector TEXT NOT NULL

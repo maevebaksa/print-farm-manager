@@ -166,15 +166,18 @@ CREATE TABLE IF NOT EXISTS gcodes (
   approved           INTEGER NOT NULL DEFAULT 1,  -- 0 if the uploader requires print approval; see below
   created_at         INTEGER NOT NULL,
   uploaded_by_user_id INTEGER,           -- migration; who uploaded it (see projects above)
-  uploaded_by_name   TEXT                -- migration; snapshot
+  uploaded_by_name   TEXT,               -- migration; snapshot
+  material_type      TEXT                -- migration; filament type(s) from the file's slicer header, display only
 );
 ```
+
+**`material_type`** (migration): the filament type(s) the slicer wrote in the file header (`PLA`, or `PETG, PLA` for multi-material), shown next to the G-code on the Projects page. Deliberately display only and never copied into `required_material`: that would stop the G-code dispatching to any printer that does not have the material set as loaded. `NULL` for older rows and for files without the header.
 
 **Uniqueness on `(part_id, printer_model)`** is enforced at the application layer, not as a DB constraint, so the error message shown to the operator is clear and specific.
 
 **`approved`:** 1 for every G-code except one uploaded by an account with `users.requires_print_approval = 1`, which starts at 0 (`POST /api/gcodes/upload`, see below). The scheduler's dispatch candidate query and `GET /api/parts/:id/dispatch-status` both check `approved = 1`: an unapproved G-code is simply never a dispatch candidate, the same mechanism as one with no matching printer, not a new hold/job state. `POST /api/gcodes/:id/approve` (admin-or-operator) clears it back to 1.
 
-`est_print_secs` and `material_grams` are **per-plate** values (i.e., covering all parts on one plate, not one part). They are auto-populated from the filename on upload when the Bambu-style naming convention is detected, and can be edited later via `PUT /api/gcodes/:id`. Since each gcode belongs to one `printer_model`, the stats system can break down elapsed time and material used by model across a project's completed jobs.
+`est_print_secs` and `material_grams` are **per-plate** values (i.e., covering all parts on one plate, not one part). They are read on upload from the file's own slicer header (PrusaSlicer, OrcaSlicer, ideaMaker; `server/gcode-metadata.js`), falling back to what the upload form sent (auto-populated from the filename when the Bambu-style naming convention is detected), and can be edited later via `PUT /api/gcodes/:id`. Since each gcode belongs to one `printer_model`, the stats system can break down elapsed time and material used by model across a project's completed jobs.
 
 **Targeting cascade (`allowed_groups`, `required_material`, `required_color`):** all three follow the same gcode-overrides-project pattern. The scheduler's dispatch candidate query and the `GET /api/parts/:id/dispatch-status` diagnostic both evaluate `COALESCE(gcodes.X, projects.X)`: a value set on the gcode always wins; otherwise the project's default (if any) applies; if neither is set, the field is unrestricted. `allowed_groups` differs from the material/color pair only in shape: it is a JSON array (a gcode or project can allow multiple groups), matched with `EXISTS (SELECT 1 FROM json_each(...) WHERE value = ?)` against the candidate printer's `group_name`, instead of a scalar equality check.
 

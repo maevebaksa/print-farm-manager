@@ -680,8 +680,8 @@ Upload a G-code file and create a DB record. `Content-Type: multipart/form-data`
 - `part_id` (required)
 - `parts_per_plate` (required)
 - `printer_model` (required) — must be a registered model ID
-- `est_print_secs` (optional) — per-plate print time in seconds
-- `material_grams` (optional) — per-plate material weight in grams
+- `est_print_secs` (optional): per-plate print time in seconds. Used only when the file's own header has no print time (see below)
+- `material_grams` (optional): per-plate material weight in grams. Used only when the file's own header has no filament weight
 - `ams_slot` (optional) — Bambu only
 - `allowed_groups` (optional): JSON array string e.g. `'["Rack A","Rack B"]'`; restricts dispatch to printers in one of these groups. Omitted or empty means unrestricted at the G-code level (falls back to the project's `allowed_groups`, if any; see `PUT /api/projects/:id/groups`)
 - `required_material` / `required_color` (optional): overrides the project's defaults for this G-code specifically
@@ -691,6 +691,8 @@ Returns `201` with created G-code record. Returns `409` if a G-code for this `(p
 A part only becomes a real dispatch candidate once it has at least one matching, *approved* G-code (the scheduler's candidate query joins on `gcodes` and checks `approved = 1`). The created record's `approved` field is `0`, not the usual `1`, if the uploading account (`req.user`) has `requires_print_approval` set; see [docs/auth.md](auth.md)'s Print approval section and `POST /api/gcodes/:id/approve` below. A successful upload triggers a scheduler sweep immediately regardless, so an idle printer can pick up the part right away instead of waiting for a manual dispatch or the next printer status transition; an unapproved G-code just won't be a candidate that sweep finds anything for yet.
 
 Records the uploading user as `uploaded_by_user_id`/`uploaded_by_name` on the new G-code (returned in the `201` body and on `GET /api/gcodes`).
+
+**Print stats from the file header:** `est_print_secs`, `material_grams`, and `material_type` are read from the uploaded file's own slicer metadata (`server/gcode-metadata.js` `readPrintStats`) and take precedence over the form fields above, which stay as the fallback for a file that does not say. Supported: PrusaSlicer (`.gcode` and `.bgcode`: `estimated printing time (normal mode)`, `total filament used [g]` or the summed `filament used [g]`, `filament_type`), OrcaSlicer (same keys, or with a Bambu profile `total estimated time:` and `total filament weight [g] :`; also inside a sliced `.3mf`), and ideaMaker (`;Print Time:` seconds, grams computed from `;Material#N Used:` length, `;Filament Diameter #N:` and `;Filament Density #N:`, and `;Filament Type #N:`). Rules follow Moonraker's metadata parser and the slicers' own writer code. `material_type` is display only: it is never copied into `required_material`. The slicer upload endpoint records the same three fields.
 
 ### `PUT /api/gcodes/:id`
 

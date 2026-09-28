@@ -387,7 +387,7 @@ function GcodeUploadPanel({ part, onUploaded, filamentTypes, filamentColors, pro
       )}
 
       <p style={{ margin: 0, fontSize: 11, color: '#475569' }}>
-        Tip: filenames with a model, print time, and weight (e.g. <span className="mono">bracket_MK4S_2h30m_45g.gcode</span>) auto-fill these fields — you can adjust them after upload.
+        Print time, filament weight, and filament type are read from the file's own slicer header on upload (PrusaSlicer, OrcaSlicer, ideaMaker), overriding these fields. For a file without that header, a filename with a model, print time, and weight (e.g. <span className="mono">bracket_MK4S_2h30m_45g.gcode</span>) fills them instead. You can adjust them after upload.
       </p>
 
       {bambuNeedsThreemf && (
@@ -541,6 +541,16 @@ function GcodeEstimateRow({ gc, onDelete, onApprove, onSaved, filamentTypes, fil
         }}>
           {gc.printer_model}
         </span>
+        {/* Filament type the slicer recorded in the file header (display only,
+            see db.js's gcodes.material_type migration comment). */}
+        {gc.material_type && (
+          <span
+            title="Filament type from the file's slicer header"
+            style={{ background: '#0f172a', border: '1px solid #2d3748', color: '#94a3b8', borderRadius: 3, padding: '1px 6px', fontSize: 11, flexShrink: 0 }}
+          >
+            {gc.material_type}
+          </span>
+        )}
         {gc.uploaded_by_name && (
           <span
             title={`Uploaded by ${gc.uploaded_by_name}`}

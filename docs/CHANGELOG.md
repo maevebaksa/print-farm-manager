@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-09-28: read print time and filament from the file's slicer header (PrusaSlicer, OrcaSlicer, ideaMaker)
+
+Requested: for every uploaded file, take the print time and material from the file header rather than the filename. Until now `est_print_secs` and `material_grams` only came from a filename convention (`..._2h30m_45g.gcode`) or manual entry, so most real slicer output arrived with no estimate at all, which also starved the project ETA.
+
+`server/gcode-metadata.js` `readPrintStats()` now reads print time, filament grams, and filament type from the file itself on every upload (`POST /api/gcodes/upload` and the slicer endpoint), and the header value wins over the form's filename-derived value. Formats: PrusaSlicer `.gcode`/`.bgcode` (`estimated printing time (normal mode)`, `total filament used [g]` or the summed per-extruder `filament used [g]`, `filament_type`); OrcaSlicer (the same keys, or `total estimated time:` and `total filament weight [g] :` with a Bambu printer profile, including inside a sliced `.3mf`); ideaMaker (`;Print Time:` in seconds, and grams computed from `;Material#N Used:` length with the file's own filament diameter and density). The rules follow Moonraker's metadata parser and the slicers' own writer code (OrcaSlicer `GCodeProcessor.cpp` / `GCode.cpp`, `get_time_dhms` format). Only the head and tail of a plain G-code file are scanned, and `.bgcode` metadata is read without decompressing the G-code.
+
+The filament type is stored in a new additive column, `gcodes.material_type`, and shown on the Projects page. It is deliberately not copied into `required_material`, which would stop the print dispatching to any printer without that material set as loaded.
+
+### Changes
+- `server/gcode-metadata.js`: `readPrintStats()` and `parseDhms()`.
+- `server/db.js`: `gcodes.material_type` migration.
+- `server/routes/gcodes.js`, `server/routes/slicer-upload.js`: record header print time, grams, and type on upload.
+- `client/src/pages/Projects.jsx`: filament type chip on G-code rows; upload hint explains the header takes precedence.
+- `server/tests/gcode-metadata.test.js`: new (each slicer's format, `.bgcode` and `.3mf`, large-file tail, unreadable files). `gcodes.test.js` (header beats form values), `slicer-upload.test.js`, `backup-restore.test.js` (new column round-trips); inline schemas gained the column.
+- `docs/api.md`, `docs/database.md`, `docs/web-app.md`.
+
+PrusaSlicer parsing was checked against real PrusaSlicer 2.8.1 output (prusa3d/libbgcode's `tests/data`: 3m 41s, 0.75 g, PLA). OrcaSlicer and ideaMaker parsing was checked against lines built to their documented formats, not against files from those slicers; ideaMaker's format comes from Moonraker's parser since ideaMaker is closed source. Existing G-codes are not re-read; only new uploads get the header values.
+
+---
+
 ## 2026-09-28: slicer upload endpoint (OctoPrint and Moonraker compatible), one URL per printer group
 
 Requested: upload straight from PrusaSlicer or OrcaSlicer, with each printer group having its own URL. New endpoint at `/slicer/<group>` emulates the parts of the OctoPrint API (PrusaSlicer "OctoPrint", OrcaSlicer "Octo/Klipper") and the Moonraker API (OrcaSlicer "Moonraker") those slicers call: the connection tests (`/api/version`, `/server/info`), the uploads (`/api/files/local`, `/server/files/upload`), and Moonraker's follow-up `/printer/print/start`. Each call was taken from the slicers' own client code (PrusaSlicer 2.9.0 and current OrcaSlicer `OctoPrint.cpp` / `Moonraker.cpp`), including PrusaSlicer's requirement that `/api/version` return `api` and a `text` starting with "OctoPrint", and that a base URL with a path is kept (so a per-group path works).

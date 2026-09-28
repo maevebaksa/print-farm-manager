@@ -132,6 +132,12 @@ try { db.exec('ALTER TABLE parts ADD COLUMN created_by_user_id INTEGER'); } catc
 try { db.exec('ALTER TABLE parts ADD COLUMN created_by_name TEXT'); } catch (_) {}
 try { db.exec('ALTER TABLE gcodes ADD COLUMN uploaded_by_user_id INTEGER'); } catch (_) {}
 try { db.exec('ALTER TABLE gcodes ADD COLUMN uploaded_by_name TEXT'); } catch (_) {}
+// Filament type(s) the slicer recorded in the file's own header ("PLA", or
+// "PETG, PLA" for a multi-material print), read on upload by
+// server/gcode-metadata.js readPrintStats. Display only: deliberately not
+// copied into required_material, which would stop the print dispatching to
+// any printer without that material set as loaded.
+try { db.exec('ALTER TABLE gcodes ADD COLUMN material_type TEXT'); } catch (_) {}
 
 // Printer models — source of truth for which models this farm supports.
 // New installs start empty; operator adds models in Settings.

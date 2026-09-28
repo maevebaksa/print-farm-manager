@@ -47,7 +47,7 @@ beforeAll(() => {
       required_color TEXT,
       approved INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
-      uploaded_by_user_id INTEGER, uploaded_by_name TEXT
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT, material_type TEXT
     );
     CREATE TABLE printers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +86,7 @@ beforeAll(() => {
   db.exec(`INSERT INTO printer_models VALUES ('p1s',  'P1S',        'bambu')`);
   db.exec(`INSERT INTO printer_models VALUES ('a1m',  'A1 Mini',    'bambu')`); // requires_print_approval tests only, kept unused elsewhere so (part_id, printer_model) never collides
   db.exec(`INSERT INTO printer_models VALUES ('mini', 'MINI+',      'prusa')`); // uploaded_by attribution test only, same reason
+  db.exec(`INSERT INTO printer_models VALUES ('hdr',  'Header Test', 'prusa')`); // header print-stats test only, same reason
 
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
 
@@ -355,6 +356,28 @@ describe('POST /api/gcodes/upload: requires_print_approval', () => {
     expect(res.status).toBe(201);
     expect(res.body.uploaded_by_user_id).toBe(3);
     expect(res.body.uploaded_by_name).toBe('Casey');
+    uploadedPath = res.body.filepath;
+  });
+});
+
+describe('POST /api/gcodes/upload: print stats from the file header', () => {
+  let uploadedPath;
+  afterEach(() => {
+    if (uploadedPath && fs.existsSync(uploadedPath)) fs.unlinkSync(uploadedPath);
+    uploadedPath = null;
+  });
+
+  test('header print time, grams, and filament type win over form values', async () => {
+    const tmp = path.join(os.tmpdir(), `hdr_${Date.now()}.gcode`);
+    fs.writeFileSync(tmp, 'G28\n; filament used [g] = 12.5\n; estimated printing time (normal mode) = 2h 0m 0s\n; filament_type = PETG\n');
+    const res = await request(app)
+      .post('/api/gcodes/upload')
+      .attach('file', tmp)
+      .field('part_id', '1').field('parts_per_plate', '1').field('printer_model', 'hdr')
+      .field('est_print_secs', '60').field('material_grams', '1');
+    fs.unlinkSync(tmp);
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ est_print_secs: 7200, material_grams: 12.5, material_type: 'PETG', required_material: null });
     uploadedPath = res.body.filepath;
   });
 });

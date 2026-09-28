@@ -106,7 +106,7 @@ beforeEach(() => {
       allowed_groups    TEXT,
       required_material TEXT,
       required_color    TEXT,
-      uploaded_by_user_id INTEGER, uploaded_by_name TEXT
+      uploaded_by_user_id INTEGER, uploaded_by_name TEXT, material_type TEXT
     );
     CREATE TABLE jobs (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,11 +190,11 @@ beforeEach(() => {
     INSERT INTO gcodes
       (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, created_at,
        ams_slot, material_grams, allowed_groups, required_material, required_color,
-       uploaded_by_user_id, uploaded_by_name)
+       uploaded_by_user_id, uploaded_by_name, material_type)
     VALUES
       (1, 'x1c', 'part.gcode', 'part_stub.gcode', 4, 3600, ?,
        2, 45.5, '["Bambu Farm"]', 'PETG', 'Red',
-       9, 'Casey')
+       9, 'Casey', 'PETG')
   `).run(now);
 
   // Two types, two colors, and "Galaxy Black" linked to BOTH types (not just one) so a
@@ -272,6 +272,7 @@ describe('Backup export/restore — column round-trip regression', () => {
       required_color: 'Red',
       uploaded_by_user_id: 9,
       uploaded_by_name: 'Casey',
+      material_type: 'PETG',
     });
     expect(res.body.printer_events[0]).toMatchObject({
       user_id: 7,
@@ -293,7 +294,7 @@ describe('Backup export/restore — column round-trip regression', () => {
       db.prepare("UPDATE printers SET serial_number = '', loaded_material = NULL, loaded_color = NULL, auto_advance = 0, camera_uid = NULL, camera_rotation = 0, camera_flip_h = 0").run();
       db.prepare("UPDATE projects SET required_material = NULL, required_color = NULL, allowed_groups = NULL, created_by_user_id = NULL, created_by_name = NULL").run();
       db.prepare("UPDATE parts SET print_time_seconds = NULL, material_grams = NULL, created_by_user_id = NULL, created_by_name = NULL").run();
-      db.prepare("UPDATE gcodes SET ams_slot = NULL, material_grams = NULL, allowed_groups = NULL, required_material = NULL, required_color = NULL, uploaded_by_user_id = NULL, uploaded_by_name = NULL").run();
+      db.prepare("UPDATE gcodes SET ams_slot = NULL, material_grams = NULL, allowed_groups = NULL, required_material = NULL, required_color = NULL, uploaded_by_user_id = NULL, uploaded_by_name = NULL, material_type = NULL").run();
       db.prepare("UPDATE jobs SET upload_first_failed_at = NULL").run();
 
       const restoreRes = await request(app)
@@ -337,7 +338,7 @@ describe('Backup export/restore — column round-trip regression', () => {
       expect(gcode.allowed_groups).toBe('["Bambu Farm"]');
       expect(gcode.required_material).toBe('PETG');
       expect(gcode.required_color).toBe('Red');
-      expect(gcode).toMatchObject({ uploaded_by_user_id: 9, uploaded_by_name: 'Casey' });
+      expect(gcode).toMatchObject({ uploaded_by_user_id: 9, uploaded_by_name: 'Casey', material_type: 'PETG' });
 
       // restore explicitly wipes and reinserts printer_events (no FK to printers to
       // cascade through, unlike printer_lanes), so this proves that reinsert step
