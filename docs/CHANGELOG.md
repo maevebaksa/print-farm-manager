@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-09-28: OctoPrint prints .bgcode and sliced .3mf, and no longer reports a print that never started
+
+Reported: jobs dispatched to an OctoPrint printer stayed on "Uploading" in Fleet and no print ever appeared in OctoPrint. Two causes, both confirmed from OctoPrint's own API docs and source (docs/api/files.rst, src/octoprint/server/api/files.py, src/octoprint/filemanager), not guessed:
+
+1. OctoPrint only accepts plain G-code (`.gcode`, `.gco`, `.g`). The farm accepts `.bgcode` (PrusaSlicer's default for MK4/XL/MINI) and `.3mf`, and the driver sent them as-is. OctoPrint refused them, the driver threw a bare "Request failed with status code ...", and the scheduler kept retrying for the 15 minute upload window with Fleet showing "Uploading" the whole time. The driver now converts `.bgcode` and sliced `.3mf` to plain G-code before upload (new `server/gcode-convert.js`), and rejects file types it cannot print with a message that says why.
+2. OctoPrint answers `201 Created` even when it did not start the print (printer not connected/ready in OctoPrint, or an API key without the PRINT permission), reporting that only as `effectivePrint: false`. The driver treated any 2xx as success, so the job was marked printing while nothing ran. That is now an upload failure, so the normal retry-then-hold flow applies.
+
+HTTP errors from OctoPrint now carry OctoPrint's own error text in the log, and a 403 names the API key permissions needed (FILES_UPLOAD, PRINT, and FILES_DELETE to overwrite an existing file name, which a repeat print of the same part does).
+
+The `.bgcode` decoder is a dependency-free port of Prusa's libbgcode (MeatPack decoder, heatshrink v0.4.1 decoder, zlib-wrapped Deflate) and was checked byte for byte against libbgcode's own reference conversions (`tests/data/mini_cube_b` and `mini_cube_ps2.8.1`, which use PrusaSlicer's default Heatshrink 12/4 + MeatPack encoding). A sliced `.3mf` uses `Metadata/plate_1.gcode` (the entry name OrcaSlicer's bbs_3mf.cpp writes, and the plate the Bambu driver prints), or the only plate if there is just one. An unsliced model `.3mf` is rejected.
+
+Also closes out the earlier OctoPrint webcam entries below: `npm test` now runs in full in this environment (49 suites, 786 tests passing), including the webcam regression tests those entries could only check with `node --check`, and `npm run build` succeeds.
+
+Implemented from protocol docs and reference sources, not yet validated on hardware: no real OctoPrint printer was used in this session.
+
+### Changes
+- `server/gcode-convert.js`: new. `.bgcode` to G-code (mirrors libbgcode's from_binary_to_ascii output) and sliced `.3mf` plate G-code extraction.
+- `server/drivers/octoprint.js`: `uploadAndPrint` converts `.bgcode`/`.3mf` before upload, rejects unsupported types up front, treats `effectivePrint: false` as a failure, and puts OctoPrint's error text (plus a permission hint on 403) in the thrown error.
+- `server/gcode-thumbnail.js`: exports its ZIP reader helpers for reuse.
+- `server/tests/gcode-convert.test.js`: new. Heatshrink, MeatPack, bgcode and 3mf conversion tests.
+- `server/tests/octoprint-driver.test.js`: regression tests for conversion, unsupported types, `effectivePrint: false`, and the 403 message (all fail on the previous driver).
+- `server/tests/support/gcode-fixtures.js`: `buildBgcode` accepts a block encoding and exact pre-compressed bytes.
+- `docs/multi-brand.md`: OctoPrint notes cover accepted file types, conversion, and the `effectivePrint` check.
+
+---
+
 ## 2026-09-28: fix OctoPrint loopback webcam fix: real IP, wrong port
 
 Reported: after the previous entry's fix shipped (substitute the printer's real host for a `127.0.0.1` webcam URL, keeping OctoPrint's own reported port), the resulting URL still failed: `ECONNREFUSED <printer's real IP>:8080`. A live test confirmed `http://<ip>:8080/...` refused from outside the Pi entirely (mjpg-streamer there is bound to `127.0.0.1` only, not the Pi's real interface), while `http://<ip>/webcam/?action=snapshot`, no port, does work.

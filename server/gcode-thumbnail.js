@@ -166,4 +166,4 @@ function extractThumbnail(filename, buf) {
   return null;
 }
 
-module.exports = { extractThumbnail, fromBgcode, fromThreeMf };
+module.exports = { extractThumbnail, fromBgcode, fromThreeMf, readZipEntries, readZipEntryData };

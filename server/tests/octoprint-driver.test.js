@@ -7,6 +7,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const octoprint = require('../drivers/octoprint');
+const { buildBgcode, buildZip } = require('./support/gcode-fixtures');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 
@@ -171,6 +172,82 @@ describe('uploadAndPrint', () => {
 
     await expect(octoprint.uploadAndPrint(fakePrinter, fullPath, filename))
       .rejects.toMatchObject({ code: 'UPLOAD_CONFLICT' });
+  });
+
+  test('converts a .bgcode to plain G-code and uploads it under a .gcode name', async () => {
+    const filename = `octoprint_bg_${Date.now()}.bgcode`;
+    const fullPath = path.join(GCODE_DIR, filename);
+    fs.writeFileSync(fullPath, buildBgcode([{ type: 1, data: Buffer.from('G28\nG1 X1\n') }]));
+    filesToClean.push(fullPath);
+    axios.post.mockResolvedValueOnce({ data: { done: true, effectivePrint: true } });
+
+    const FormData = require('form-data');
+    const appendSpy = jest.spyOn(FormData.prototype, 'append');
+    await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
+
+    const fileCall = appendSpy.mock.calls.find(([name]) => name === 'file');
+    expect(Buffer.isBuffer(fileCall[1])).toBe(true);
+    expect(fileCall[1].toString()).toContain('G28\nG1 X1\n');
+    expect(fileCall[2].filename).toBe(filename.replace(/\.bgcode$/, '.gcode'));
+    appendSpy.mockRestore();
+  });
+
+  test('extracts the plate G-code from a sliced .3mf and uploads it', async () => {
+    const filename = `octoprint_3mf_${Date.now()}.gcode.3mf`;
+    const fullPath = path.join(GCODE_DIR, filename);
+    fs.writeFileSync(fullPath, buildZip([{ name: 'Metadata/plate_1.gcode', data: Buffer.from('G28\n') }]));
+    filesToClean.push(fullPath);
+    axios.post.mockResolvedValueOnce({ data: { effectivePrint: true } });
+
+    const FormData = require('form-data');
+    const appendSpy = jest.spyOn(FormData.prototype, 'append');
+    await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
+
+    const fileCall = appendSpy.mock.calls.find(([name]) => name === 'file');
+    expect(fileCall[1].toString()).toBe('G28\n');
+    expect(fileCall[2].filename).toBe(filename.replace(/\.gcode\.3mf$/, '.gcode'));
+    appendSpy.mockRestore();
+  });
+
+  test('rejects an unsliced .3mf without contacting OctoPrint', async () => {
+    const filename = `octoprint_model_${Date.now()}.3mf`;
+    const fullPath = path.join(GCODE_DIR, filename);
+    fs.writeFileSync(fullPath, buildZip([{ name: '3D/3dmodel.model', data: Buffer.from('<model/>') }]));
+    filesToClean.push(fullPath);
+
+    await expect(octoprint.uploadAndPrint(fakePrinter, fullPath, filename)).rejects.toThrow(/no sliced G-code/);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('rejects a file type OctoPrint cannot print without contacting it', async () => {
+    const filename = `octoprint_model_${Date.now()}.stl`;
+    const fullPath = createTestFile(filename);
+
+    await expect(octoprint.uploadAndPrint(fakePrinter, fullPath, filename)).rejects.toThrow(/only accepts/);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('throws when OctoPrint stores the file but does not start the print (effectivePrint false)', async () => {
+    // Real-world: OctoPrint answers 201 but skips print=true when the printer is not
+    // connected/ready or the key lacks PRINT; this used to mark the job printing
+    // while nothing ran.
+    const filename = `octoprint_noprint_${Date.now()}.gcode`;
+    const fullPath = createTestFile(filename);
+    axios.post.mockResolvedValueOnce({ status: 201, data: { done: true, effectiveSelect: false, effectivePrint: false } });
+
+    await expect(octoprint.uploadAndPrint(fakePrinter, fullPath, filename))
+      .rejects.toThrow(/did not start the print/);
+  });
+
+  test('includes OctoPrint\'s error text and a permission hint on 403', async () => {
+    const filename = `octoprint_403_${Date.now()}.gcode`;
+    const fullPath = createTestFile(filename);
+    axios.post.mockRejectedValueOnce({ response: { status: 403, data: { error: 'File already exists, cannot overwrite due to a lack of permissions' } } });
+
+    const err = await octoprint.uploadAndPrint(fakePrinter, fullPath, filename).catch(e => e);
+    expect(err.message).toMatch(/HTTP 403: File already exists/);
+    expect(err.message).toMatch(/FILES_DELETE/);
+    expect(err.code).toBeUndefined();
   });
 
   test('rethrows non-409 errors unchanged', async () => {

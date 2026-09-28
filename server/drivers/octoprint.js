@@ -13,6 +13,7 @@ const fs = require('fs');
 const FormData = require('form-data');
 const { resolveHost } = require('../mdns-resolve');
 const { describeConnectionError } = require('../connection-test-helpers');
+const { toPlainGcode } = require('../gcode-convert');
 
 function headers(printer) {
   return { 'X-Api-Key': printer.api_key };
@@ -72,16 +73,50 @@ async function getStatus(printer) {
 // Uploads the G-code file to OctoPrint's "local" file location and starts the print in
 // one call (OctoPrint supports select+print as multipart form fields, unlike PrusaLink
 // which needs a header on the upload and Moonraker which needs a separate print field).
+// Reference: https://docs.octoprint.org/en/main/api/files.html#upload-file-or-create-folder
+//
+// OctoPrint only accepts plain G-code (.gcode/.gco/.g per octoprint/filemanager's
+// type mapping) and answers anything else with an error. A .bgcode or a sliced
+// .3mf is converted to plain G-code here first (see gcode-convert.js) and
+// uploaded under a .gcode name; plain G-code streams straight from disk.
+//
+// A 201 does not mean the print started: OctoPrint still stores the file but
+// silently skips select/print when the printer is not operational/ready or the
+// API key's user lacks the PRINT permission, reporting it only as
+// effectivePrint: false in the response body. That is treated as a failed
+// dispatch (the scheduler retries, then holds), not a running print.
 // Throws UPLOAD_CONFLICT if OctoPrint refuses because the same file is mid-print.
+const PLAIN_GCODE_EXTENSIONS = ['.gcode', '.gco', '.g'];
+
 async function uploadAndPrint(printer, gcodeFullPath, filename) {
   const ip = await resolveHost(printer.ip);
+  const lower = filename.toLowerCase();
+
+  let upload;
+  if (PLAIN_GCODE_EXTENSIONS.some(ext => lower.endsWith(ext))) {
+    upload = { body: fs.createReadStream(gcodeFullPath), filename };
+  } else {
+    let converted;
+    try {
+      converted = toPlainGcode(filename, fs.readFileSync(gcodeFullPath));
+    } catch (err) {
+      throw new Error(`Cannot print "${filename}" on ${printer.name}: ${err.message}`);
+    }
+    if (!converted) {
+      throw new Error(`Cannot print "${filename}" on ${printer.name}: OctoPrint only accepts .gcode, .bgcode (converted) or sliced .3mf (converted)`);
+    }
+    console.log(`[octoprint] ${printer.name}: converted "${filename}" to plain G-code "${converted.filename}" (${(converted.buffer.length / 1048576).toFixed(1)} MB)`);
+    upload = { body: converted.buffer, filename: converted.filename };
+  }
+
   const form = new FormData();
-  form.append('file', fs.createReadStream(gcodeFullPath), { filename });
+  form.append('file', upload.body, { filename: upload.filename, contentType: 'application/octet-stream' });
   form.append('select', 'true');
   form.append('print', 'true');
 
+  let res;
   try {
-    await axios.post(
+    res = await axios.post(
       `http://${ip}/api/files/local`,
       form,
       {
@@ -92,13 +127,27 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
       }
     );
   } catch (err) {
-    if (err.response?.status === 409) {
+    const status = err.response?.status;
+    if (status === 409) {
       throw Object.assign(
         new Error(`409 Conflict on upload — file likely mid-print on ${printer.name}`),
         { code: 'UPLOAD_CONFLICT' }
       );
     }
-    throw err;
+    if (!status) throw err;
+    // OctoPrint's API errors carry a JSON body { "error": "<description>" }.
+    const detail = typeof err.response.data?.error === 'string' ? `: ${err.response.data.error}` : '';
+    const hint = status === 403
+      ? ' (check the API key: its user needs the FILES_UPLOAD and PRINT permissions, plus FILES_DELETE to re-upload a file name that already exists)'
+      : '';
+    throw new Error(`OctoPrint rejected the upload to ${printer.name} (HTTP ${status}${detail})${hint}`, { cause: err });
+  }
+
+  if (res?.data?.effectivePrint === false) {
+    throw new Error(
+      `OctoPrint stored "${upload.filename}" on ${printer.name} but did not start the print ` +
+      '(printer not connected/ready in OctoPrint, or the API key lacks the PRINT permission)'
+    );
   }
 }
 

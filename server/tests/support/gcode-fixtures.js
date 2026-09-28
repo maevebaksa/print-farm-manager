@@ -1,5 +1,6 @@
-// Shared byte-fixture builders for server/gcode-thumbnail.js tests
-// (server/tests/gcode-thumbnail.test.js and server/tests/gcodes-thumbnail-route.test.js).
+// Shared byte-fixture builders for server/gcode-thumbnail.js and
+// server/gcode-convert.js tests (gcode-thumbnail.test.js,
+// gcodes-thumbnail-route.test.js, gcode-convert.test.js, octoprint-driver.test.js).
 // See gcode-thumbnail.js's own header comment for the format specs these follow.
 
 const zlib = require('zlib');
@@ -18,9 +19,13 @@ function buildBgcode(blocks, { checksumType = 0 } = {}) {
       params.writeUInt16LE(b.format, 0);
       params.writeUInt16LE(b.width, 2);
       params.writeUInt16LE(b.height, 4);
+    } else {
+      params.writeUInt16LE(b.encoding ?? 0, 0);
     }
     const uncompressed = b.data || Buffer.alloc(0);
-    const compressed = compression === 1 ? zlib.deflateRawSync(uncompressed) : uncompressed;
+    // compressedData lets a test supply exact compressed bytes (a zlib-wrapped
+    // Deflate stream or a hand-built Heatshrink stream) instead of this default.
+    const compressed = b.compressedData ?? (compression === 1 ? zlib.deflateRawSync(uncompressed) : uncompressed);
 
     const header = Buffer.alloc(compression === 0 ? 8 : 12);
     header.writeUInt16LE(b.type, 0);
