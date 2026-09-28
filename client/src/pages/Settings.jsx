@@ -401,6 +401,18 @@ export default function Settings() {
   const [requireUploaderApproval, setRequireUploaderApproval] = useState(false);
   const [approvalError, setApprovalError] = useState(null);
 
+  // Software Update: admin-only, see docs/deployment.md. updateRepo is the
+  // owner/repo checked for a newer commit; updateStatus is GET /api/update/status's
+  // response (null until the first check completes). The trigger only appears
+  // when updateStatus.canTrigger is true (the operator has opted into the
+  // Docker-socket mount described in docs/deployment.md).
+  const [updateRepo, setUpdateRepo] = useState('');
+  const [updateRepoSaving, setUpdateRepoSaving] = useState(false);
+  const [updateRepoError, setUpdateRepoError] = useState(null);
+  const [updateStatus, setUpdateStatus] = useState(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [triggeringUpdate, setTriggeringUpdate] = useState(false);
+
   useEffect(() => {
     fetch('/api/settings')
       .then(r => r.json())
@@ -411,12 +423,65 @@ export default function Settings() {
         setColorTolerance(data.color_tolerance ?? '0');
         setRetryWindow(data.upload_retry_window_min ?? '15');
         setRequireUploaderApproval(data.require_uploader_approval === '1');
+        setUpdateRepo(data.update_repo || '');
       })
       .catch(() => {});
     if (user?.role === 'admin') {
       fetch('/api/auth/status').then(r => r.json()).then(data => setOidcEnabled(!!data.oidcEnabled)).catch(() => {});
+      checkForUpdate();
     }
   }, [user]);
+
+  async function checkForUpdate() {
+    setCheckingUpdate(true);
+    try {
+      const res = await fetch('/api/update/status');
+      if (res.ok) setUpdateStatus(await res.json());
+    } catch (_) {
+      // advisory only; leave updateStatus as whatever it was (or null)
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function handleSaveUpdateRepo() {
+    setUpdateRepoError(null);
+    setUpdateRepoSaving(true);
+    try {
+      const res = await fetch('/api/settings/update_repo', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: updateRepo.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      showToast('Saved');
+      await checkForUpdate();
+    } catch (err) {
+      setUpdateRepoError(err.message);
+    } finally {
+      setUpdateRepoSaving(false);
+    }
+  }
+
+  async function handleTriggerUpdate() {
+    const ok = await confirm({
+      title: 'Update now?',
+      message: 'This pulls the latest image and recreates this container. The app will be briefly unavailable while it restarts.',
+      confirmLabel: 'Update',
+      danger: true,
+    });
+    if (!ok) return;
+    setTriggeringUpdate(true);
+    try {
+      const res = await fetch('/api/update/trigger', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || 'Update failed to start', 'error'); return; }
+      showToast(data.message || 'Update started');
+    } finally {
+      setTriggeringUpdate(false);
+    }
+  }
 
   async function handleToggleAutoSso(checked) {
     setSsoError(null);
@@ -1587,6 +1652,89 @@ export default function Settings() {
           {approvalError && (
             <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{approvalError}</div>
           )}
+        </section>
+      )}
+
+      {/* Software Update: admin only; see docs/deployment.md for the full
+          security tradeoff of enabling the actual trigger, which this page
+          never explains inline, only links to, deliberately: that decision
+          deserves the operator reading the whole thing, not a paraphrase. */}
+      {user?.role === 'admin' && (
+        <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Software Update</h2>
+          <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
+            Checks the running build's git commit against a GitHub repo's <code style={{ fontFamily: 'monospace', color: '#94a3b8' }}>main</code> branch.
+            See <a href="https://github.com/maevebaksa/print-farm-manager/blob/main/docs/deployment.md" target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>docs/deployment.md</a> for how the update trigger works and the security tradeoff of enabling it.
+          </p>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
+                Repo to check (owner/repo)
+              </label>
+              <input
+                type="text"
+                value={updateRepo}
+                onChange={e => setUpdateRepo(e.target.value)}
+                placeholder="maevebaksa/print-farm-manager"
+                style={{
+                  background: '#0f172a', border: '1px solid #334155', borderRadius: 6,
+                  padding: '6px 10px', color: '#e2e8f0', fontSize: 13, width: 260,
+                }}
+              />
+            </div>
+            <button
+              onClick={handleSaveUpdateRepo}
+              disabled={updateRepoSaving || !updateRepo.trim()}
+              style={{
+                background: '#334155', color: '#e2e8f0', border: 'none', borderRadius: 6,
+                padding: '7px 14px', fontSize: 13, cursor: 'pointer', marginTop: 18,
+                opacity: updateRepoSaving || !updateRepo.trim() ? 0.6 : 1,
+              }}
+            >
+              {updateRepoSaving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          {updateRepoError && (
+            <div style={{ marginBottom: 14, color: '#fca5a5', fontSize: 13 }}>{updateRepoError}</div>
+          )}
+
+          {updateStatus && (
+            <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 14, lineHeight: 1.8 }}>
+              <div>Running: <code style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{updateStatus.currentCommit ? updateStatus.currentCommit.slice(0, 7) : 'unknown'}</code></div>
+              <div>Latest on {updateStatus.repo || '(no repo configured)'}: <code style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{updateStatus.latestCommit ? updateStatus.latestCommit.slice(0, 7) : 'unknown'}</code></div>
+              <div style={{ color: updateStatus.updateAvailable ? '#fbbf24' : '#4ade80', fontWeight: 600 }}>
+                {updateStatus.updateAvailable ? 'Update available' : 'Up to date'}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button
+              onClick={checkForUpdate}
+              disabled={checkingUpdate}
+              style={{
+                background: 'none', border: '1px solid #334155', color: '#94a3b8', borderRadius: 6,
+                padding: '7px 14px', fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              {checkingUpdate ? 'Checking…' : 'Check for updates'}
+            </button>
+            {updateStatus?.canTrigger && (
+              <button
+                onClick={handleTriggerUpdate}
+                disabled={triggeringUpdate}
+                title="Pulls the latest image and recreates this container"
+                style={{
+                  background: '#7f1d1d', color: '#fca5a5', border: 'none', borderRadius: 6,
+                  padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  opacity: triggeringUpdate ? 0.6 : 1,
+                }}
+              >
+                {triggeringUpdate ? 'Starting…' : 'Update now'}
+              </button>
+            )}
+          </div>
         </section>
       )}
 

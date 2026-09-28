@@ -29,13 +29,36 @@ RUN npm run build
 
 # ---- Stage 3: production runtime -------------------------------------------
 FROM node:22-bookworm-slim AS runtime
+ARG TARGETARCH
+ARG GIT_COMMIT=unknown
 ENV NODE_ENV=production
+ENV GIT_COMMIT=$GIT_COMMIT
 WORKDIR /app
 
 COPY package.json ./
 COPY --from=server-deps /app/node_modules ./node_modules
 COPY server ./server
 COPY --from=client-build /app/client/dist ./client/dist
+
+# Docker CLI + Compose plugin: only used by the optional Settings -> Software
+# Update "Update now" trigger (server/routes/update.js), which shells out to
+# `docker compose pull && docker compose up -d` against a bind-mounted copy of
+# docker-compose.yml when the operator has explicitly opted in (mounted the
+# Docker socket and the compose project directory; see docker-compose.yml's
+# commented-out example and its security note). Installed unconditionally so
+# opting in later needs no image rebuild, just adding those two mounts.
+# Static binaries, not apt, to avoid pulling in Docker's own APT repo and its
+# signing-key setup for two binaries.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && DOCKER_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo aarch64 || echo x86_64) \
+    && curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-27.3.1.tgz" | tar -xz -C /tmp \
+    && mv /tmp/docker/docker /usr/local/bin/docker \
+    && rm -rf /tmp/docker \
+    && mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+       "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-${DOCKER_ARCH}" \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 # Persistent state — mount volumes here in production (see docker-compose.yml)
 RUN mkdir -p server/data server/gcode

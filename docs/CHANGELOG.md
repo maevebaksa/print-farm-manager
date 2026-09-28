@@ -23,6 +23,33 @@ No automated test for the client UI: this repo has no client-side test framework
 
 ---
 
+## 2026-09-29: in-app Software Update (Settings), opt-in trigger with a real security tradeoff
+
+Requested: an update manager in Settings, checking the running build against the latest commit, and (explicitly requested after discussing the tradeoff) a one-click trigger to actually apply it.
+
+**Always available, no configuration beyond setting a repo:** `GET /api/update/status` reports the running build's git commit (`GIT_COMMIT`, now baked into the image at build time via a new Docker build-arg set to `github.sha`, `unknown` for a locally-built image) against the latest commit on an admin-configured `update_repo` setting's `main` branch (unauthenticated GitHub API call, `null`/advisory-only on any failure). Settings shows this as a version display with a Check for updates button; this half needs nothing beyond the `update_repo` setting to work on every Docker deployment.
+
+**Opt-in only: the actual trigger.** `POST /api/update/trigger` runs `docker compose pull && docker compose up -d` against a bind-mounted copy of the real `docker-compose.yml`, reusing its already-correct configuration (network mode, volumes, environment) rather than reconstructing it via raw Docker API calls, which could get something wrong. This requires the operator to have bind-mounted the Docker socket and the compose project directory (two new commented-out lines in `docker-compose.yml`), and does nothing (`409`) until both are present, so a farm running the plain, unmodified compose file never has this capability at all. Read `docs/deployment.md` before enabling it: Docker socket access is equivalent to unrestricted root on the host, not scoped to this one container, a tradeoff discussed explicitly with the requester before building this, not a default anyone falls into by accident. Responds to the trigger request immediately, before the update is known to have succeeded: `docker compose up -d`, once the daemon has accepted it, proceeds independently of whether the container issuing the command survives to see it finish, which it usually will not, since replacing that container is the whole point. Output is logged to `server/data/update.log`, the same persisted volume the database lives in, so it survives the container being replaced.
+
+The Docker CLI and Compose plugin are now installed in the production image (static binaries, not apt, to avoid pulling in Docker's own APT repo for two binaries) specifically so enabling the trigger later needs no image rebuild, just the two mounts.
+
+### Changes
+- `Dockerfile`: `runtime` stage installs the Docker CLI + Compose plugin (multi-arch via `TARGETARCH`); new `GIT_COMMIT` build-arg baked in as an `ENV`.
+- `.github/workflows/docker-publish.yml`: passes `build-args: GIT_COMMIT=${{ github.sha }}` to the image build.
+- `docker-compose.yml`: two new commented-out volume lines (Docker socket, compose project dir) with an explicit security note, disabled by default.
+- `server/routes/update.js`: new file, `GET /status` and `POST /trigger`.
+- `server/routes/settings.js`: new `update_repo` setting (admin-only, `owner/repo` shape validated).
+- `server/index.js`: mounts the new router at `/api/update`.
+- `client/src/pages/Settings.jsx`: new Software Update section (admin-only): repo input, status display, Check for updates, and Update now (only shown when `canTrigger`, gated behind `useConfirm`).
+- `docs/deployment.md`: new file, the full mechanism and security tradeoff.
+- `docs/docker-publish.md`: documents the new `GIT_COMMIT` build-arg.
+- `docs/README.md`, `docs/api.md`, `docs/web-app.md`: doc index entry, endpoint docs, UI docs.
+- `server/tests/update-routes.test.js`: new file, covering the status check (no repo configured, up to date, update available, GitHub unreachable, non-200) and the trigger (role gating, `409` when not opted in, success path with `spawn`/`fs` mocked).
+
+Driver-adjacent but not a driver: the Docker CLI/Compose binary versions (27.3.1 / 2.29.7) are pinned but not validated against a real Docker daemon from this session, same as the trigger mechanism as a whole; `node --check` and the mocked test suite are what's actually been run here. This machine's `better-sqlite3` native binding still fails to load, so neither the server nor `npm test` can run locally, the same limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-28: fix OctoPrint loopback webcam fix: real IP, wrong port
 
 Reported: after the previous entry's fix shipped (substitute the printer's real host for a `127.0.0.1` webcam URL, keeping OctoPrint's own reported port), the resulting URL still failed: `ECONNREFUSED <printer's real IP>:8080`. A live test confirmed `http://<ip>:8080/...` refused from outside the Pi entirely (mjpg-streamer there is bound to `127.0.0.1` only, not the Pi's real interface), while `http://<ip>/webcam/?action=snapshot`, no port, does work.

@@ -73,6 +73,7 @@ jobs:
           context: .
           target: runtime
           platforms: ${{ matrix.platform }}
+          build-args: GIT_COMMIT=${{ github.sha }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest

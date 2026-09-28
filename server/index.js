@@ -34,6 +34,7 @@ const modelsRouter       = require('./routes/models')(db);
 const groupsRouter       = require('./routes/groups')(db);
 const filamentsRouter    = require('./routes/filaments')(db);
 const printerJobsRouter  = require('./routes/printer-jobs')(db);
+const updateRouter       = require('./routes/update')(db);
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -77,6 +78,7 @@ app.use('/api/settings',        settingsRouter);
 app.use('/api/models',          modelsRouter);
 app.use('/api/groups',          groupsRouter);
 app.use('/api/filaments',       filamentsRouter);
+app.use('/api/update',          updateRouter);
 
 // Server notifications — surfaced in the Settings UI
 app.get('/api/notifications', (_req, res) => res.json(notifications.list()));

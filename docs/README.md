@@ -31,6 +31,7 @@ Prefer Docker over a local Node.js install? `docker compose up --build print-far
 | [docs/driver-authoring.md](driver-authoring.md) | Connector authoring guide for manufacturers and contributors: driver contract, canonical statuses, registration checklist, hardware test matrix |
 | [docs/filaments.md](filaments.md) | Filament Library — admin-managed type and color lists, API endpoints, client usage |
 | [docs/docker-publish.md](docker-publish.md) | CI workflow that builds and publishes multi-arch Docker images to GHCR |
+| [docs/deployment.md](deployment.md) | Docker deployment; the in-app Software Update feature, its opt-in update trigger, and the security tradeoff of enabling it |
 
 ## Project Structure
 
@@ -58,6 +59,7 @@ print-farm-manager/
 │       ├── models.js     # Printer model registry CRUD
 │       ├── settings.js   # Key/value operator settings (dispatch_batch_size)
 │       ├── account.js    # Self-service account actions (change own password)
+│       ├── update.js     # Software Update status check + opt-in update trigger
 │       ├── backup.js     # Farm export + restore
 │       └── dashboard.js  # TV command center — single-endpoint fleet summary
 ├── client/

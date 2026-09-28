@@ -810,8 +810,9 @@ Body: `{ "value": "..." }`. Allowed keys:
 | `color_tolerance` | integer 0-450 | Any authenticated user. RGB-distance (server/color-distance.js) fallback the scheduler and `GET /api/parts/:id/dispatch-status` use when no printer has the exact required color loaded; `0` (the default) disables it. See `docs/database.md`'s `printers` section and the scheduler note below. |
 | `upload_retry_window_min` | integer 1-180 | How many minutes the scheduler keeps retrying a failing upload on later sweeps (roughly every 15s, tied to the poller's cycle) before finally holding the printer for operator confirmation. Default `15`. See `jobs.upload_first_failed_at` in [docs/database.md](database.md). |
 | `require_uploader_approval` | `"0"` or `"1"` | Admin-only. Off by default. Whether a new `uploader` account auto-provisioned via OIDC must be approved (`POST /api/users/:id/approve`) before it can sign in; see [docs/auth.md](auth.md)'s Account approval section. |
+| `update_repo` | must look like `owner/repo` | Admin-only. GitHub repo the Software Update section (Settings page) checks the running build against, e.g. `maevebaksa/print-farm-manager`. See the Update section below and [docs/deployment.md](deployment.md). |
 
-Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect` or `require_uploader_approval`.
+Returns `400` for unknown keys or failed validation, `403` if a non-admin sends `auto_sso_redirect`, `require_uploader_approval`, or `update_repo`.
 
 ---
 
@@ -869,6 +870,32 @@ Single endpoint that returns all data required by the TV dashboard in one call. 
 - `estimated_remaining_secs` / `estimated_remaining_incomplete`: same rough remaining-time estimate as `GET /api/projects/:id/eta` above (see that entry for what these mean and what they deliberately don't model), computed by the same shared `server/project-eta.js` function.
 
 `recent_activity` is the 12 most recent `finished` or `failed` jobs, each with `part_name` and `printer_name` joined in. (Retained in the payload for compatibility; the dashboard UI no longer renders this list — see [web-app.md](web-app.md).)
+
+---
+
+## Update
+
+Admin-only. Backs the Software Update section of the Settings page; see [docs/deployment.md](deployment.md) for the full mechanism and the security tradeoff of enabling the trigger.
+
+### `GET /api/update/status`
+
+```json
+{
+  "repo": "maevebaksa/print-farm-manager",
+  "currentCommit": "a1b2c3d4e5f6...",
+  "latestCommit": "f6e5d4c3b2a1...",
+  "updateAvailable": true,
+  "canTrigger": false
+}
+```
+
+`currentCommit` comes from the `GIT_COMMIT` environment variable baked into the image at build time (`unknown` for a locally-built image without that build-arg). `latestCommit` is the latest commit on the `update_repo` setting's `main` branch, fetched unauthenticated from the GitHub API; `null` if `update_repo` is not set, the repo is private or nonexistent, or the request fails for any reason. `updateAvailable` is `true` only when both commits are known and differ. `canTrigger` reflects whether the Docker socket and compose project directory are bind-mounted (see below), independent of whether an update is actually available.
+
+### `POST /api/update/trigger`
+
+No body. Runs `docker compose pull && docker compose up -d` against the bind-mounted compose project directory and responds immediately, before the update is known to have succeeded, since the container issuing the request is usually replaced by it. Output is appended to `server/data/update.log`.
+
+`409` with `{ "error": "..." }` if `canTrigger` is false: the operator has not bind-mounted both `/var/run/docker.sock` and the compose project directory (see `docker-compose.yml`'s commented-out example), so there is nothing this route can do.
 
 ---
 

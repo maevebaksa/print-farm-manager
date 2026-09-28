@@ -51,7 +51,7 @@ build (needs: test; matrix: amd64, arm64; skipped on pull_request)
   1. Checkout
   2. Set up Buildx
   3. Log in to GHCR (GITHUB_TOKEN — no PAT needed)
-  4. Build + push image by digest (no tag yet)
+  4. Build + push image by digest (no tag yet), passing build-arg GIT_COMMIT=<the commit SHA that triggered this run>
   5. Export the digest to /tmp/digests and upload as an artifact
 
 merge (needs: build; skipped whenever build is skipped, e.g. on pull_request)
@@ -84,3 +84,7 @@ Fix it once, after the first push completes:
 ## Local equivalent
 
 This workflow builds the same `Dockerfile` described in the [README](../README.md#installation-production) and used by `docker-compose.yml` — it doesn't change what gets built, only automates building it for two architectures and publishing it centrally instead of every user building it locally with `docker compose up --build`.
+
+## GIT_COMMIT build arg
+
+`docker/build-push-action` is passed `build-args: GIT_COMMIT=${{ github.sha }}`, baked into the image as an `ENV` in the `runtime` stage (see `Dockerfile`). This is what powers Settings → Software Update's version display and update check (`server/routes/update.js`, see [docs/deployment.md](deployment.md)): the running container can report exactly which commit it was built from. A local `docker compose up --build` never sets this build-arg, so a locally-built image reports `GIT_COMMIT` as `unknown`, harmless (the update check just has nothing to compare) but worth knowing if that value looks wrong while testing.

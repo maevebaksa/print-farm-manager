@@ -34,6 +34,22 @@ services:
     volumes:
       - farm-data:/app/server/data
       - farm-gcode:/app/server/gcode
+      # Optional, opt-in only: enables Settings -> Software Update's "Update
+      # now" button (server/routes/update.js), which otherwise only shows
+      # version info and does nothing privileged. Uncomment both lines below
+      # to enable it. Read this before doing so:
+      #
+      # Mounting the Docker socket gives this container full control over the
+      # Docker daemon on this host, equivalent to unrestricted root on the
+      # host, not scoped to this container. Anyone with admin access to the
+      # app (or anyone who compromises it) can do anything to this machine,
+      # not just update this one container. Only enable this if you accept
+      # that tradeoff; see docs/deployment.md for the full explanation. The
+      # ":ro" project-directory mount does not reduce this risk: a process
+      # that can talk to the Docker socket does not need to write your files
+      # to do damage.
+      # - /var/run/docker.sock:/var/run/docker.sock
+      # - .:/deploy:ro
 
   # Development — hot reload for both server and client, no local Node.js
   # install required. Behind the `dev` profile so a bare `docker compose up`
