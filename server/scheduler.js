@@ -387,7 +387,8 @@ class JobScheduler extends EventEmitter {
     const toleranceSetting = this.db.prepare("SELECT value FROM settings WHERE key = 'color_tolerance'").get();
     const tolerance = toleranceSetting ? parseInt(toleranceSetting.value, 10) || 0 : 0;
 
-    for (const respectCaps of [true, false]) {
+    const capModes = policy.capsActive ? [true, false] : [false];
+    for (const respectCaps of capModes) {
       const exact = this._reserveCandidate(printer, driver, false, 0, policy, respectCaps);
       if (exact) return exact;
 
@@ -418,7 +419,14 @@ class JobScheduler extends EventEmitter {
   // on the next dispatch with no restart.
   _queuePolicy() {
     const get = (key) => this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value;
-    return { fifo: get('queue_order') === 'fifo' };
+    // Whether any active project has set its own plate cap at all: when none
+    // has, skip the uncapped-retry pass entirely (see the capModes loop
+    // above), the same optimization the old settings-based cap had, now
+    // sourced from the projects table instead of a single global setting.
+    const capsActive = !!this.db.prepare(
+      "SELECT 1 FROM projects WHERE status = 'active' AND max_concurrent_plates > 0 LIMIT 1"
+    ).get();
+    return { fifo: get('queue_order') === 'fifo', capsActive };
   }
 
   // True when this candidate's project already has as many printers

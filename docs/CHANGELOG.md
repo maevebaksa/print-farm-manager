@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-09-28: fix CI: missing-file dispatch notified twice, not once
+
+CI still failed after the previous fix (50d3777): `scheduler-file.test.js`'s GCODE_MISSING tests expected `notifications.add` exactly once but got two calls. Cause: switching the per-project plate cap to always run both the capped and uncapped dispatch passes (`for (const respectCaps of [true, false])`, unconditionally, in the earlier commit) meant a printer with no capped work anywhere still walked the same missing-file candidate twice, once per pass, notifying twice. The old settings-based cap had a `capsActive` guard that skipped the second pass entirely when no cap was configured; that guard was dropped when the cap moved off a single global setting, since "is any cap configured" was no longer a single value to check.
+
+Restored the same guard, now sourced from the `projects` table (`capsActive`: does any active project have `max_concurrent_plates` set at all) instead of a settings row. When nothing on the farm has a cap, dispatch runs its normal single pass again, exactly as before this feature; the two-pass capped/uncapped retry only happens once something is actually capped.
+
+### Changes
+- `server/scheduler.js`: `_queuePolicy` computes `capsActive` from `projects.max_concurrent_plates`; the dispatch loop's `capModes` is `[true, false]` only when `capsActive`, `[false]` otherwise, restoring the pre-existing single-pass behavior for the common uncapped case.
+
+---
+
 ## 2026-09-28: fix CI: four test files missing the new projects column
 
 CI went red on `main` after the per-project plate cap commit (86d098a): `server/scheduler.js`'s candidate query now always selects `projects.max_concurrent_plates`, but four test files build their own in-memory schema and hadn't been updated, `SqliteError: no such column: projects.max_concurrent_plates` in every test that reaches the scheduler's candidate SQL or `GET /api/parts/:id/dispatch-status`.
