@@ -27,6 +27,19 @@ const LEGEND_ITEMS = [
 
 const ROW_STATUSES = ['PRINTING', 'FINISHED', 'IDLE', 'ERROR', 'STOPPED', 'OFFLINE'];
 
+// Cell sizing: a fixed 54x44px looked fine for a mixed fleet (many small
+// per-model chips packing the page) but noticeably small for a fleet
+// dominated by one or two models (a handful of wide chips leaving most of
+// the page unused). Cells now grow to fill the room their own chip actually
+// has, not a fixed box: CELL_MIN_PX is the floor (never smaller than before
+// felt cramped), CELL_GROWTH caps how much wider than "just enough for this
+// many cells" a chip may stretch (so a 2-printer chip doesn't balloon to fill
+// the whole row), and CELL_MAX_VW is the absolute ceiling regardless of count.
+const CELL_MIN_PX = 60;
+const CELL_GAP_PX = 4;
+const CELL_GROWTH = 1.6;
+const CELL_MAX_VW = 60;
+
 function cellColors(printer) {
   // Held printer (awaiting operator sign-off) renders as green regardless of status.
   // Keep this condition identical to Fleet.jsx and Printers.jsx (see CLAUDE.md sync pairs).
@@ -99,7 +112,14 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
           mostly-empty full-width row per model. A model with many printers still
           gets a wide chip whose own cell row wraps internally as before. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-start' }}>
-        {Object.entries(grouped).map(([model, group]) => (
+        {Object.entries(grouped).map(([model, group]) => {
+          // How wide this chip's cells are allowed to grow: never below what
+          // CELL_MIN_PX needs for this many cells, never more than CELL_GROWTH
+          // times that (so a 2-cell chip doesn't stretch absurdly wide just
+          // because the page has room), and never past CELL_MAX_VW regardless.
+          const naturalWidth = group.length * (CELL_MIN_PX + CELL_GAP_PX) - CELL_GAP_PX;
+          const cellsWidth = `min(100%, ${CELL_MAX_VW}vw, ${naturalWidth * CELL_GROWTH}px)`;
+          return (
           <div key={model} style={{
             display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
             background: '#0d1117', border: '1px solid #1a2030', borderRadius: 8,
@@ -114,8 +134,16 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
               <div style={{ fontSize: 11, color: '#374151', flexShrink: 0 }}>×{group.length}</div>
             </div>
 
-            {/* Printer cells */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {/* Printer cells: a grid, not a flex-wrap of fixed boxes, so each
+                cell's minmax(CELL_MIN_PX, 1fr) column stretches to fill
+                whatever width this chip actually has (cellsWidth above)
+                instead of staying a fixed size regardless of how much room
+                is available. */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(auto-fill, minmax(${CELL_MIN_PX}px, 1fr))`,
+              gap: CELL_GAP_PX, width: cellsWidth,
+            }}>
               {group.map(printer => {
                 const c = cellColors(printer);
                 const link = webUiLink(printer);
@@ -127,14 +155,14 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
                     onMouseLeave={onLeave}
                     onClick={link ? () => window.open(link.url, '_blank') : undefined}
                     style={{
-                      width: 54, height: 44, borderRadius: 6,
+                      height: 48, borderRadius: 6,
                       background: c.bg, border: `1px solid ${c.border}`,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       cursor: link ? 'pointer' : 'default',
                     }}
                   >
                     <span style={{
-                      fontFamily: 'monospace', fontSize: 8, color: c.text,
+                      fontFamily: 'monospace', fontSize: 9, color: c.text,
                       textAlign: 'center', padding: '0 3px',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       width: '100%',
@@ -149,7 +177,8 @@ export default function FleetStatusGrid({ printers, allModels, title = 'Fleet St
             {/* Per-model status summary */}
             <RowSummary group={group} />
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Color legend */}

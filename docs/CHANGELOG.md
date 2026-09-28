@@ -2,6 +2,20 @@
 
 ---
 
+## 2026-09-28: Dashboard fleet grid cells grow to fill their chip instead of staying a fixed size
+
+Requested: the Dashboard's per-model cell grid looked great on a mixed 9-printer fleet (many small chips already packing the page) but small on a fleet with 10 printers of one model (one wide chip leaving most of the page empty). Asked to touch up the sizing generally and make it scale better.
+
+Cells were a flex-wrap of fixed 54x44px boxes regardless of how much room their chip actually had. Switched to a CSS grid, `repeat(auto-fill, minmax(CELL_MIN_PX, 1fr))`, so a cell stretches to fill available width instead of staying constant. The chip's own width is capped at `min(100%, CELL_MAX_VW vw, naturalWidth * CELL_GROWTH)`: the `naturalWidth * CELL_GROWTH` term is what usually governs it, letting a chip grow to 1.6x what its cells need at the floor size, so a many-printer single-model chip stretches noticeably while a 2-printer chip only grows modestly instead of ballooning to fill the row on its own; `CELL_MAX_VW` is just the absolute ceiling regardless of count. Also bumped the floor size itself (54x44 to 60px-wide-minimum x48) and the printer-name font size (8px to 9px) slightly, since the fixed size felt tight even before this.
+
+### Changes
+- `client/src/components/FleetStatusGrid.jsx`: new `CELL_MIN_PX`/`CELL_GAP_PX`/`CELL_GROWTH`/`CELL_MAX_VW` constants; per-model cell container is now a CSS grid with a computed width instead of a flex-wrap of fixed-size boxes.
+- `docs/web-app.md`: Dashboard Page section documents the new cell sizing formula.
+
+No automated test: this repo has no client-side test framework, and this is a pure CSS/layout change. Verified `npm run build` succeeds; could not exercise the real page in a live browser, same `better-sqlite3` limitation disclosed on every test this session.
+
+---
+
 ## 2026-09-28: fix Fleet's Bulk Edit Color dropdown, empty since the Printers merge
 
 Reported: the Bulk Edit bar's Color dropdown never showed any actual colors, just the "Color…" placeholder, so bulk color assignment was unusable.
