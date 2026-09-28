@@ -92,7 +92,7 @@ export default function Dashboard() {
   if (!data) {
     return (
       <div style={{
-        background: '#0a0f1a', height: '100vh',
+        background: '#0a0f1a', height: '100%',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: '#475569', fontSize: 18,
       }}>
@@ -112,7 +112,7 @@ export default function Dashboard() {
       ref={dashRef}
       style={{
         background: '#0a0f1a',
-        minHeight: '100vh',
+        minHeight: '100%', // not 100vh: see index.html's zoom caveat
         fontFamily: 'system-ui, -apple-system, sans-serif',
         color: '#e2e8f0',
         userSelect: 'none',

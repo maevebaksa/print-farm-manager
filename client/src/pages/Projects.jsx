@@ -70,6 +70,22 @@ const STATUS_MENU = {
   completed: [{ label: 'Re-activate',     action: 'reactivate' }],
 };
 
+// Row-reorder drag helpers, shared by the project list and part list rows.
+// Firefox refuses to start an HTML5 drag unless dragstart puts some data on
+// the DataTransfer, so reordering silently did nothing there; the id payload
+// itself is unused (state tracks the dragged row). A file dragged in from the
+// desktop is not a reorder: rows ignore it and let the window-level file drop
+// in Projects() handle it, rather than lighting up a row highlight that
+// nothing clears (dragend never fires for an external file drag).
+function startRowDrag(e, id) {
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(id));
+}
+
+function isFileDrag(e) {
+  return Array.from(e.dataTransfer?.types || []).includes('Files');
+}
+
 function StatusDropdown({ project, onTransition }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -1014,31 +1030,50 @@ export default function Projects() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardFile, setWizardFile] = useState(null); // pre-attached when opened by dropping a file; picked inside the wizard otherwise
   const [dragActive, setDragActive] = useState(false);
-  const dragDepthRef = useRef(0); // dragenter/dragleave fire on every child too; only the count hitting 0 means "left the page"
+  const dragDepthRef = useRef(0); // dragenter/dragleave fire on every child too; only the count hitting 0 means "left the window"
 
-  function handleDragEnter(e) {
-    if (!e.dataTransfer.types.includes('Files')) return; // don't react to the internal row-reorder drag
-    e.preventDefault();
-    dragDepthRef.current += 1;
-    setDragActive(true);
-  }
-  function handleDragOver(e) {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    e.preventDefault();
-  }
-  function handleDragLeave(e) {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) setDragActive(false);
-  }
-  function handleDrop(e) {
-    if (!e.dataTransfer.types.includes('Files')) return;
-    e.preventDefault();
-    dragDepthRef.current = 0;
-    setDragActive(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) { setWizardFile(file); setWizardOpen(true); }
-  }
+  // File drops are caught on the whole window while this page is mounted, not
+  // just on the page's own content div: that div is only as tall as its
+  // content, so a file dropped on the sidebar or the empty space below the
+  // list used to miss every handler, and the browser's default action opened
+  // the file itself, navigating away from the app. Row-reorder drags carry no
+  // 'Files' type, so they are ignored here (see the row handlers below).
+  useEffect(() => {
+    const isFileDrag = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+    function onEnter(e) {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepthRef.current += 1;
+      setDragActive(true);
+    }
+    function onOver(e) {
+      if (!isFileDrag(e)) return;
+      e.preventDefault(); // required for the drop event to fire at all
+    }
+    function onLeave(e) {
+      if (!isFileDrag(e)) return;
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) setDragActive(false);
+    }
+    function onDrop(e) {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepthRef.current = 0;
+      setDragActive(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file) { setWizardFile(file); setWizardOpen(true); }
+    }
+    window.addEventListener('dragenter', onEnter);
+    window.addEventListener('dragover', onOver);
+    window.addEventListener('dragleave', onLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onEnter);
+      window.removeEventListener('dragover', onOver);
+      window.removeEventListener('dragleave', onLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
 
   function closeWizard() {
     setWizardOpen(false);
@@ -1390,12 +1425,12 @@ export default function Projects() {
     );
 
     return (
-      <div onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      <div>
         {toastEl}
         {confirmModal}
 
         {/* Full-page hint while a file is dragged over the page (not the internal
-            project/part row-reorder drag, which handleDragEnter ignores). Dropping
+            project/part row-reorder drag, which the window-level file handlers ignore). Dropping
             anywhere opens the upload wizard with that file already attached. */}
         {dragActive && createPortal(
           <div style={{
@@ -1603,9 +1638,9 @@ export default function Projects() {
               <div
                 key={p.id}
                 draggable
-                onDragStart={() => setProjectDragSrc(p.id)}
-                onDragOver={e => { e.preventDefault(); if (!isDragging) setProjectDragOver(p.id); }}
-                onDrop={e => { e.preventDefault(); dropProject(p.id); }}
+                onDragStart={e => { startRowDrag(e, p.id); setProjectDragSrc(p.id); }}
+                onDragOver={e => { if (isFileDrag(e)) return; e.preventDefault(); if (!isDragging) setProjectDragOver(p.id); }}
+                onDrop={e => { if (isFileDrag(e)) return; e.preventDefault(); dropProject(p.id); }}
                 onDragEnd={() => { setProjectDragSrc(null); setProjectDragOver(null); }}
                 style={{
                   background: '#1e2433',
@@ -1671,12 +1706,12 @@ export default function Projects() {
   try { projectGroups = detailProject.allowed_groups ? JSON.parse(detailProject.allowed_groups) : []; } catch (_) {}
 
   return (
-    <div onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <div>
       {toastEl}
       {confirmModal}
 
       {/* Drag-and-drop G-code upload works here too, not just the project list
-          (see the list view's return above for handleDragEnter/Over/Leave/Drop,
+          (see the window-level file drag handlers near the top of Projects(),
           dragActive, and wizardOpen/wizardFile: this view previously had none of
           this wiring at all, so dropping a file on an open project's part list,
           arguably the single most natural place to do it, silently did nothing). */}
@@ -1842,9 +1877,9 @@ export default function Projects() {
           <div
             key={part.id}
             draggable
-            onDragStart={() => setPartDragSrc(part.id)}
-            onDragOver={e => { e.preventDefault(); if (!isPartDragging) setPartDragOver(part.id); }}
-            onDrop={e => { e.preventDefault(); dropPart(part.id); }}
+            onDragStart={e => { startRowDrag(e, part.id); setPartDragSrc(part.id); }}
+            onDragOver={e => { if (isFileDrag(e)) return; e.preventDefault(); if (!isPartDragging) setPartDragOver(part.id); }}
+            onDrop={e => { if (isFileDrag(e)) return; e.preventDefault(); dropPart(part.id); }}
             onDragEnd={() => { setPartDragSrc(null); setPartDragOver(null); }}
             style={{
               background: '#1e2433',

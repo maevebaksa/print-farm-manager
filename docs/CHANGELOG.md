@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-09-28: fix Sign out and login screen pushed below the fold by the 120% scale, and drag-and-drop gaps
+
+Reported: after the whole-app 120% scale (`body { zoom: 1.2 }`, see "scale the whole app 120%" below), reaching the user name and Sign out button at the bottom of the sidebar needed a long scroll, and the login screen scrolled the same way. That entry assumed `100vh` stays correct under zoom; under standardized CSS zoom (Chrome 128+, Firefox 126+) it does not: `vh` inside the zoomed body is scaled too, so `#layout { height: 100vh }` was 120% of the real window. Reproduced in Chromium 141 at a 1440x850 window: the document was 1020px tall and Sign out sat at y=964. Full-height layouts now use `height: 100%` chained from `html`/`body`/`#root`, which resolves against the real window; after the fix the document is 850px and Sign out sits at y=794 to 831. Same for the login screen and the Dashboard.
+
+Reported: "drag and drop is broken". Could not reproduce a failure in Chromium, with or without the zoom: project and part row reordering and file drops onto the page content all worked in a scripted test. Two real gaps were found and fixed instead. Row reordering never put data on the drag in `dragstart`, which Firefox requires before it will start an HTML5 drag at all, so reordering did nothing in Firefox. And the G-code file drop only listened on the page's content div, which is only as tall as its content, so a file dropped on the sidebar or the empty space below the list was not caught, and the browser opened the file itself, navigating away from the app. File drops are now caught anywhere in the window while the Projects page is open. Rows also no longer light up for a file dragged over them (that highlight could stick, since `dragend` never fires for a file dragged in from the desktop). If drag-and-drop still fails for you, the browser and the exact drag (reordering or file drop) will pin it down.
+
+### Changes
+- `client/index.html`: `html, body, #root { height: 100% }`; corrected the zoom comment about `vh`.
+- `client/src/App.jsx`: `#layout` is `height: 100%`, not `100vh`.
+- `client/src/pages/Login.jsx`, `client/src/pages/Dashboard.jsx`: `100%` instead of `100vh`.
+- `client/src/pages/Projects.jsx`: window-level file drop listeners replace the per-view div handlers; row `dragstart` sets `text/plain` data; rows ignore file drags.
+- `docs/web-app.md`: the zoom `vh` caveat, window-wide file drop, and the Firefox drag note.
+
+Verified with the built app in headless Chromium 141 (layout measurements, screenshots at 1440x850, 1440x420, and 390x844, scripted row drags and file drops). Not tested in Firefox or Safari: none is available in this environment.
+
+---
+
 ## 2026-09-28: natural printer name order, and track who owns parts and uploaded files
 
 Reported: printer lists put "mini10" between "mini1" and "mini2". The earlier command palette fix (see "command palette sorts mini10 before mini9" below) only patched that one component's tiebreak; the root cause is `GET /api/printers` and `GET /api/dashboard` sorting with SQLite's plain text `ORDER BY p.name`, which every page (Fleet, Dashboard, Webcams, the Jobs printer filter) inherits. SQLite has no natural collation, so both endpoints now re-sort in JS with a shared numeric-aware comparator (`Intl.Collator` with `numeric: true`).
