@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-09-29: fix CI: test schemas missing the new user_groups columns, plus a bad test INSERT
+
+CI failed on main (e3f5ec4): the per-uploader plate cap commit added `can_delete_projects`, `can_cancel_active_jobs`, and `max_concurrent_plates` to `user_groups`, and `server/routes/user-groups.js`'s INSERT/UPDATE statements name them explicitly, but five test files' in-memory schemas were never updated to match: `user-groups.test.js` (real crash: `POST /api/user-groups` 500s against a table missing the columns it inserts into), and four scheduler test files whose minimal `user_groups` table lacked `max_concurrent_plates`, which `server/scheduler.js`'s `_queuePolicy` now always queries. Separately, one of the new per-uploader tests in `scheduler-queue-policy.test.js` had a bad raw INSERT (7 values for an 8-column list), a typo introduced when writing that test, unrelated to the schema gap.
+
+### Changes
+- `server/tests/user-groups.test.js`: `user_groups` table gains `can_delete_projects`, `can_cancel_active_jobs`, `max_concurrent_plates`.
+- `server/tests/scheduler-targeting.test.js`, `scheduler-sweep.test.js`, `scheduler-file.test.js`, `scheduler-finished.test.js`: `user_groups` table gains `max_concurrent_plates`.
+- `server/tests/scheduler-queue-policy.test.js`: fixed the mismatched INSERT (added the missing `parts_per_plate` value).
+
+---
+
 ## 2026-09-28: client for the new permissions; Quick Print moves to Projects; Parts row overflow fix
 
 Three client-side changes landing together: the admin UI for the two permission flags and the plate cap from the previous entry (that entry's own change list named `UserGroups.jsx` one commit early; it actually lands here), Quick Print's home page, and an unrelated layout bug.

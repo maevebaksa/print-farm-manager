@@ -538,7 +538,7 @@ describe('_sweepInBatches: ceiling interaction through the real wave loop', () =
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT, user_group_id INTEGER);
-      CREATE TABLE user_groups (id INTEGER PRIMARY KEY, allowed_printer_ids TEXT, allowed_printer_groups TEXT);
+      CREATE TABLE user_groups (id INTEGER PRIMARY KEY, max_concurrent_plates INTEGER, allowed_printer_ids TEXT, allowed_printer_groups TEXT);
       CREATE TABLE gcodes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,

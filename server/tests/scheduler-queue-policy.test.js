@@ -132,7 +132,7 @@ describe('per-uploader plate cap (user_groups.max_concurrent_plates)', () => {
     const db = makeDb({}, { 1: 1 }); // E's uploader (group 1) capped at 1; priority order: Early first
     db.prepare("INSERT INTO parts (id, project_id, name, target_qty, created_at, updated_at) VALUES (3, 1, 'E2', 100, 300, 300)").run();
     // Same uploader (user 10) as part E's gcode, just a different part in the same project.
-    db.prepare("INSERT INTO gcodes (id, part_id, printer_model, filename, filepath, parts_per_plate, uploaded_by_user_id, created_at) VALUES (3, 3, 'mk4s', ?, ?, 10, 300)").run(gcodeFilename, gcodeFilename);
+    db.prepare("INSERT INTO gcodes (id, part_id, printer_model, filename, filepath, parts_per_plate, uploaded_by_user_id, created_at) VALUES (3, 3, 'mk4s', ?, ?, 1, 10, 300)").run(gcodeFilename, gcodeFilename);
     addActiveJob(db, 1); // E is printing: its uploader (user 10) is at their cap
     expect(await dispatchedPartId(db)).toBe(2); // L's part, not the same uploader's E2
   });
