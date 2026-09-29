@@ -129,7 +129,7 @@ Any signed-in user. Built-in groups first, then custom groups.
 
 ### `POST /api/user-groups`
 
-Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the seven boolean flags (`can_approve`, `can_set_ready`, `can_manage_printers`, `can_quick_print`, `can_delete_projects`, `can_cancel_active_jobs`, `requires_approval`; defaults follow the role), `max_concurrent_plates` (positive integer or `null`), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
+Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the nine boolean flags (`can_approve`, `can_set_ready`, `can_manage_printers`, `can_quick_print`, `can_delete_projects`, `can_cancel_active_jobs`, `can_manage_settings`, `can_manage_others_work`, `requires_approval`; defaults follow the role), `max_concurrent_plates` (positive integer or `null`), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
 
 ### `PUT /api/user-groups/:id`
 
@@ -861,6 +861,8 @@ Single job with same joins, including `printer_is_held` and `printer_status`. `4
 
 Cancels a job. A `queued` job is a plain status flip, open to anyone who can reach it: it never reached a printer. An `uploading`/`printing` job is a live print: gated by the `can_cancel_active_jobs` permission (`403` otherwise; operator and admin always have it, see [docs/auth.md](auth.md)'s User groups section). When permitted, calls the printer's driver `cancelJob` (logged, never blocks the response on a driver failure), holds the printer (`is_held = 1`) for a physical check before the next job dispatches, logs a `job_cancelled` printer event, and marks the job `cancelled` immediately rather than waiting for the next poll to notice the printer stopped. `404` if not found, `409` for any other status (`finished`/`failed`/`cancelled`: already a finished fact).
 
+Query `?reason=` (optional): `failed` (default) means the print failed and the part goes back in the queue (the scheduler sends it out again); `bad_gcode` also clears `gcodes.approved` on the job's G-code so it is never dispatched again until someone with `can_approve` approves it. Any other value is `400`. Response: `{ "success": true, "reason": "failed" }`. Cancelling someone else's job additionally needs `can_manage_others_work` (`403`).
+
 ---
 
 ## Slicer upload (OctoPrint and Moonraker compatible)
@@ -958,6 +960,8 @@ Returns all operator settings as a flat object, e.g. `{ "dispatch_batch_size": "
 
 ### `PUT /api/settings/:key`
 
+Requires the `can_manage_settings` permission (`403` otherwise; operator and admin have it, uploaders do not unless their group grants it). `GET /api/settings` stays open to every signed-in user. The same permission gates every write under `/api/filaments` (`POST /types`, `DELETE /types/:id`, `POST /colors`, `PUT /colors/:id`, `DELETE /colors/:id`); the filament GET routes stay open.
+
 Body: `{ "value": "..." }`. Allowed keys:
 
 | Key | Validation | Used by |
@@ -983,7 +987,7 @@ How many printers one project's own work may occupy at once is not a Settings ke
 
 ### `GET /api/dashboard`
 
-Single endpoint that returns all data required by the TV dashboard in one call. Polled every 15 seconds by the Dashboard page.
+Single endpoint that returns all data required by the TV dashboard in one call. Polled every 15 seconds by the Dashboard page. `active_projects` and each project's `parts` are listed in dispatch order: priority-overridden work first, then (when the admin `queue_order` setting is `fifo`) by earliest matching G-code upload time, otherwise by project priority and part order.
 
 ```json
 {

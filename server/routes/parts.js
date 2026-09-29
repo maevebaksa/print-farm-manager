@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAnyRole, resolvePermissions, printerAllowed } = require('../auth');
+const { requireAnyRole, resolvePermissions, printerAllowed, canModifyWork, OTHERS_WORK_MESSAGE } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -344,6 +344,14 @@ module.exports = (db, scheduler = null) => {
   router.delete('/:id', (req, res) => {
     const part = db.prepare('SELECT * FROM parts WHERE id = ?').get(req.params.id);
     if (!part) return res.status(404).json({ error: 'Part not found' });
+
+    // Deleting a part also deletes its G-code, so someone else's upload on it
+    // counts as someone else's work too.
+    const owners = [part.created_by_user_id,
+      ...db.prepare('SELECT uploaded_by_user_id FROM gcodes WHERE part_id = ?').all(part.id).map(g => g.uploaded_by_user_id)];
+    if (owners.some(o => !canModifyWork(req.user, o))) {
+      return res.status(403).json({ error: OTHERS_WORK_MESSAGE });
+    }
 
     // Block if any job for this part is actively uploading or printing
     const activeJob = db.prepare(

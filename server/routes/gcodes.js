@@ -6,7 +6,7 @@ const router = express.Router();
 const { extractThumbnail } = require('../gcode-thumbnail');
 const { readPrintStats } = require('../gcode-metadata');
 const { safeFilename, displayFilename } = require('../safe-filename');
-const { requirePermission } = require('../auth');
+const { requirePermission, canModifyWork, OTHERS_WORK_MESSAGE } = require('../auth');
 
 const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 
@@ -284,6 +284,9 @@ module.exports = (db, scheduler = null) => {
   router.delete('/:id', (req, res) => {
     const gcode = db.prepare('SELECT * FROM gcodes WHERE id = ?').get(req.params.id);
     if (!gcode) return res.status(404).json({ error: 'G-code not found' });
+    if (!canModifyWork(req.user, gcode.uploaded_by_user_id)) {
+      return res.status(403).json({ error: OTHERS_WORK_MESSAGE });
+    }
 
     const activeJob = db.prepare(
       "SELECT id FROM jobs WHERE gcode_id = ? AND status IN ('queued', 'uploading', 'printing') LIMIT 1"

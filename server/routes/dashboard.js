@@ -47,9 +47,21 @@ module.exports = (db) => {
     // ── Active projects with their parts ──────────────────────────────────────
     // Same order as GET /api/projects and the scheduler's dispatch query (see CLAUDE.md
     // sync pairs) so the dashboard's project order matches what actually dispatches next.
+    // The scheduler's queue_order setting decides what "next" means (scheduler.js's
+    // _queuePolicy): overridden work first, then either project priority + part
+    // order, or, under 'fifo', the upload time of the earliest matching G-code.
+    // Mirror both here so the dashboard lists work in the order it will dispatch.
+    let fifo = false;
+    try { fifo = db.prepare("SELECT value FROM settings WHERE key = 'queue_order'").get()?.value === 'fifo'; } catch (_) {}
     const activeProjects = db.prepare(`
       SELECT * FROM projects WHERE status = 'active' ORDER BY priority ASC, created_at ASC
     `).all();
+    const earliestGcode = new Map(); // part_id -> earliest gcodes.created_at
+    if (fifo) {
+      db.prepare('SELECT part_id, MIN(created_at) AS t FROM gcodes GROUP BY part_id').all()
+        .forEach(r => earliestGcode.set(r.part_id, r.t));
+    }
+    const fifoKey = (part) => earliestGcode.get(part.id) ?? Infinity;
 
     const elapsedFinishedStmt = db.prepare(`
       SELECT COALESCE(SUM(j.finished_at - j.started_at), 0) AS ms
@@ -101,6 +113,9 @@ module.exports = (db) => {
           ), 0) AS active_qty
         FROM parts WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC
       `).all(proj.id);
+      // Stable sorts: ties keep the sort_order order from the query above.
+      if (fifo) parts.sort((a, b) => fifoKey(a) - fifoKey(b));
+      parts.sort((a, b) => (b.priority_override === 1) - (a.priority_override === 1));
 
       const finishedMs  = elapsedFinishedStmt.get(proj.id).ms;
       const printingMs  = elapsedPrintingStmt.get(now, proj.id).ms;
@@ -115,6 +130,16 @@ module.exports = (db) => {
         estimated_completion_at: eta.completion_at,
         estimated_remaining_incomplete: eta.incomplete,
       };
+    });
+
+    // Project order: overridden projects (or projects holding an overridden
+    // part) first; under fifo, then by the earliest part G-code; otherwise the
+    // priority order from the query stays as is (Array.sort is stable).
+    const projectRank = (proj) => Math.min(...proj.parts.map(fifoKey), Infinity);
+    if (fifo) projectsWithParts.sort((a, b) => projectRank(a) - projectRank(b));
+    projectsWithParts.sort((a, b) => {
+      const ov = (proj) => (proj.priority_override === 1 || proj.parts.some(p => p.priority_override === 1)) ? 1 : 0;
+      return ov(b) - ov(a);
     });
 
     // ── Recent activity: last 12 finished/failed jobs ─────────────────────────

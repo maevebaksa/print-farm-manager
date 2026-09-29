@@ -189,3 +189,49 @@ describe('GET /api/dashboard: printer ordering', () => {
   });
 });
 
+
+describe('GET /api/dashboard: dispatch-order mirroring', () => {
+  function seedPart(projectId, name, sortOrder, gcodeCreatedAt, override = 0) {
+    const now = Date.now();
+    const id = db.prepare(
+      'INSERT INTO parts (project_id, name, target_qty, sort_order, created_at, updated_at, priority_override) VALUES (?, ?, 5, ?, ?, ?, ?)'
+    ).run(projectId, name, sortOrder, now, now, override).lastInsertRowid;
+    db.prepare(
+      "INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, created_at) VALUES (?, 'x', 'f.gcode', 'f', 1, ?)"
+    ).run(id, gcodeCreatedAt);
+    return id;
+  }
+
+  beforeEach(() => {
+    db.exec('DELETE FROM gcodes; DELETE FROM parts; DELETE FROM projects;');
+    db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL); DELETE FROM settings;');
+  });
+
+  test('a priority-overridden project is listed first, as the scheduler dispatches it first', async () => {
+    seedProject('Normal', { priority: 0 });
+    const rushed = seedProject('Rushed', { priority: 9 });
+    db.prepare('UPDATE projects SET priority_override = 1 WHERE id = ?').run(rushed);
+    const res = await request(app).get('/api/dashboard');
+    expect(res.body.active_projects.map(p => p.name)).toEqual(['Rushed', 'Normal']);
+  });
+
+  test('an overridden part is listed first within its project', async () => {
+    const pid = seedProject('P');
+    seedPart(pid, 'first', 0, 100);
+    seedPart(pid, 'rushed', 1, 200, 1);
+    const res = await request(app).get('/api/dashboard');
+    expect(res.body.active_projects[0].parts.map(p => p.name)).toEqual(['rushed', 'first']);
+  });
+
+  test('under fifo, projects and parts follow G-code upload time, not priority or sort order', async () => {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('queue_order', 'fifo')").run();
+    const a = seedProject('A', { priority: 0 });
+    const b = seedProject('B', { priority: 5 });
+    seedPart(a, 'a-late', 0, 900);
+    seedPart(b, 'b-late', 1, 800);
+    seedPart(b, 'b-early', 0, 100);
+    const res = await request(app).get('/api/dashboard');
+    expect(res.body.active_projects.map(p => p.name)).toEqual(['B', 'A']);
+    expect(res.body.active_projects[0].parts.map(p => p.name)).toEqual(['b-early', 'b-late']);
+  });
+});

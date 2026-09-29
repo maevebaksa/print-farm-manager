@@ -2,6 +2,60 @@
 
 ---
 
+## 2026-09-29: cancelling a job asks why: print failed (requeue) or bad G-code (permanent)
+
+Cancelling a job used to do one thing, and the part simply went back in line. Now the operator says why. **Print failed, requeue** is the old behavior (job cancelled, part stays open, scheduler sends it out again). **Bad G-code, cancel permanently** also clears `gcodes.approved` on the job's G-code, which the scheduler's candidate query and `GET /api/parts/:id/dispatch-status` already treat as "not dispatchable", so no schema change and no sync-pair drift; an operator with `can_approve` can approve it again to undo. `DELETE /api/jobs/:id` takes `?reason=failed|bad_gcode` (default `failed`, so existing callers are unchanged; anything else is 400). Neither path touches `completed_qty`, and the active-print path still holds the printer for a physical check. Caveat: a bad G-code shows up as "awaiting approval" in the UI, since that is the flag it reuses. Hardware validation: not applicable to the reason handling; the underlying `cancelJob` driver call is unchanged and still unvalidated against a live print. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load).
+
+### Changes
+- `server/routes/jobs.js`: `?reason=` handling, G-code disabled in the same transaction as the cancel, reason recorded in the printer event.
+- `client/src/pages/Jobs.jsx`: Cancel opens a two-choice dialog (Print failed, requeue / Bad G-code, cancel permanently).
+- `server/tests/others-work.test.js`: reason tests.
+- `docs/api.md`: documented.
+
+---
+
+## 2026-09-29: deleting other users' work needs can_manage_others_work
+
+Any signed-in user could cancel another user's queued job, or delete another user's G-code, part, or project (subject only to the existing project-delete permission). Deleting or cancelling work someone else created now needs a new per-group permission, `can_manage_others_work`; everyone can still remove their own. Ownership: a job belongs to its G-code's uploader, else its part's creator; a part or project delete cascades, so it also requires owning every part and G-code it removes. Rows with no recorded owner (legacy data) count as someone else's, so only permitted users can remove them. Operator and admin default to on (existing groups backfilled once), uploader off. Existing gates (`can_cancel_active_jobs`, `can_delete_projects`) still apply on top. No `completed_qty` or dispatch path touched. Hardware validation: not applicable. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load); `npm run build` passes.
+
+### Changes
+- `server/db.js`: additive `user_groups.can_manage_others_work` with one-time operator/admin backfill.
+- `server/auth.js`: permission in `ROLE_PERMISSIONS` and `resolvePermissions`; `canModifyWork` helper.
+- `server/routes/jobs.js`, `gcodes.js`, `parts.js`, `projects.js`: ownership check on the DELETE handlers (403).
+- `server/routes/user-groups.js`, `client/src/components/UserGroups.jsx`: flag on create/update and a checkbox.
+- `client/src/canModifyWork.js`, `pages/Jobs.jsx`, `pages/Projects.jsx`: Cancel, Delete part, Delete G-code, and Delete project controls hidden for other users' work.
+- `server/tests/others-work.test.js`, `user-groups.test.js`: new tests and schema update.
+- `docs/auth.md`, `docs/api.md`: documented.
+
+---
+
+## 2026-09-29: dashboard lists work in dispatch order
+
+The dashboard ordered projects by `priority, created_at` and parts by `sort_order` only, so it disagreed with what the scheduler actually dispatches next whenever a priority override was set or the admin queue order was FIFO. `GET /api/dashboard` now mirrors the scheduler's order (overridden work first, then FIFO by earliest matching G-code upload time when `queue_order` is `fifo`, otherwise project priority and part order). Display only: no dispatch or `completed_qty` path is touched. Hardware validation: not applicable. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load).
+
+### Changes
+- `server/routes/dashboard.js`: overridden-first and fifo ordering for `active_projects` and their `parts`.
+- `server/tests/dashboard.test.js`: override and fifo ordering tests.
+
+---
+
+## 2026-09-29: settings and filaments locked to a new can_manage_settings permission
+
+Regular (uploader) accounts could still open the Settings page and change settings or add and remove filament types and colors: only a few keys were admin-only, and the filament routes had no gate at all. Settings access is now a per-group permission, `can_manage_settings`, configured on the Users page like the other flags. Operator and admin default to on (no behavior change for them; existing operator/admin groups are backfilled once, on the boot that adds the column), uploader defaults to off. Reads stay open because every page needs the farm name and the filament list. Hardware validation: not applicable (no driver or dispatch change). Tests were added but could not be run on this machine (better-sqlite3 native binding fails to load); `npm run build` passes.
+
+### Changes
+- `server/db.js`: additive `user_groups.can_manage_settings` column with one-time operator/admin backfill.
+- `server/auth.js`: `can_manage_settings` in `ROLE_PERMISSIONS` and `resolvePermissions`; new `blockWithoutSettingsAccess`.
+- `server/routes/settings.js`: `PUT /:key` gated.
+- `server/routes/filaments.js`: all five write routes gated.
+- `server/routes/user-groups.js`: flag accepted on create and update.
+- `client/src/App.jsx`: Settings nav link and route shown only to someone with `can_manage_settings` or `can_manage_printers`; otherwise redirects to the Dashboard.
+- `client/src/pages/Settings.jsx`: Filament Library, Farm Name, Print Queue, Dispatch, Backup, and Polling sections hidden without `can_manage_settings` (printer sections already hid on `can_manage_printers`).
+- `client/src/components/UserGroups.jsx`: new checkbox and summary text.
+- `client/src/pages/Settings.jsx`: removed the About footer (author blurb plus Buy Me a Coffee and PayPal links) from the bottom of the page.
+- `server/tests/settings.test.js`, `filaments.test.js`, `user-groups.test.js`: regression tests and schema update.
+- `docs/api.md`, `docs/auth.md`, `docs/web-app.md`: documented.
+
 ## 2026-09-29: fix CI: test schemas missing the new user_groups columns, plus a bad test INSERT
 
 CI failed on main (e3f5ec4): the per-uploader plate cap commit added `can_delete_projects`, `can_cancel_active_jobs`, and `max_concurrent_plates` to `user_groups`, and `server/routes/user-groups.js`'s INSERT/UPDATE statements name them explicitly, but five test files' in-memory schemas were never updated to match: `user-groups.test.js` (real crash: `POST /api/user-groups` 500s against a table missing the columns it inserts into), and four scheduler test files whose minimal `user_groups` table lacked `max_concurrent_plates`, which `server/scheduler.js`'s `_queuePolicy` now always queries. Separately, one of the new per-uploader tests in `scheduler-queue-policy.test.js` had a bad raw INSERT (7 values for an 8-column list), a typo introduced when writing that test, unrelated to the schema gap.

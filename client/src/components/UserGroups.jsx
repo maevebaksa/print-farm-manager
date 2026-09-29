@@ -12,6 +12,8 @@ const FLAG_LABELS = [
   ['can_set_ready', 'Can Set Ready (confirm finished prints)'],
   ['can_approve', 'Can approve accounts and G-code'],
   ['can_manage_printers', 'Can add, edit, and remove printers'],
+  ['can_manage_settings', 'Can change Settings and manage filaments'],
+  ['can_manage_others_work', "Can delete or cancel other users' jobs, G-code, parts, and projects"],
   ['can_delete_projects', 'Can delete projects'],
   ['can_cancel_active_jobs', 'Can cancel a job that is already uploading or printing'],
   ['requires_approval', 'Uploads need operator approval first'],
@@ -20,7 +22,7 @@ const FLAG_LABELS = [
 const EMPTY = {
   name: '', role: 'uploader',
   can_quick_print: true, can_set_ready: false, can_approve: false, can_manage_printers: false,
-  can_delete_projects: false, can_cancel_active_jobs: false, requires_approval: false,
+  can_delete_projects: false, can_cancel_active_jobs: false, can_manage_settings: false, can_manage_others_work: false, requires_approval: false,
   max_concurrent_plates: '', restrict: false, allowed_printer_ids: [], allowed_printer_groups: [],
 };
 
@@ -30,6 +32,7 @@ function toForm(g) {
     can_quick_print: !!g.can_quick_print, can_set_ready: !!g.can_set_ready, can_approve: !!g.can_approve,
     can_manage_printers: !!g.can_manage_printers,
     can_delete_projects: !!g.can_delete_projects, can_cancel_active_jobs: !!g.can_cancel_active_jobs,
+    can_manage_settings: !!g.can_manage_settings, can_manage_others_work: !!g.can_manage_others_work,
     requires_approval: !!g.requires_approval,
     max_concurrent_plates: g.max_concurrent_plates ?? '',
     restrict: !!(g.allowed_printer_ids || g.allowed_printer_groups),
@@ -44,6 +47,8 @@ function summary(g) {
   if (g.can_set_ready) bits.push('Set Ready');
   if (g.can_approve) bits.push('approvals');
   if (g.can_manage_printers) bits.push('printer admin');
+  if (g.can_manage_settings) bits.push('can change settings');
+  if (g.can_manage_others_work) bits.push("can remove others' work");
   if (g.can_delete_projects) bits.push('can delete projects');
   if (g.can_cancel_active_jobs) bits.push('can cancel active jobs');
   if (!g.can_quick_print) bits.push('no Quick Print');
@@ -89,6 +94,7 @@ export default function UserGroups({ groups, onChanged }) {
         can_quick_print: form.can_quick_print, can_set_ready: form.can_set_ready, can_approve: form.can_approve,
         can_manage_printers: form.can_manage_printers,
         can_delete_projects: form.can_delete_projects, can_cancel_active_jobs: form.can_cancel_active_jobs,
+        can_manage_settings: form.can_manage_settings, can_manage_others_work: form.can_manage_others_work,
         requires_approval: form.requires_approval,
         max_concurrent_plates: form.max_concurrent_plates === '' ? null : Number(form.max_concurrent_plates),
         allowed_printer_ids: form.restrict ? form.allowed_printer_ids : null,

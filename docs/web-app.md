@@ -32,7 +32,7 @@ The React single-page application served by Vite. In development, Vite runs on p
 | `client/src/pages/Webcams.jsx` | Plain snapshot gallery, one still image per printer, no status highlighting |
 | `client/src/pages/PrinterDetail.jsx` | Per-printer event timeline, note form, camera card, catalog-print popup |
 | `client/src/pages/Decommissioned.jsx` | Decommissioned printer list with notes and recommission |
-| `client/src/pages/Settings.jsx` | CSV import, flagged-row resolution, printer models, farm name, admin-only single sign-on redirect toggle |
+| `client/src/pages/Settings.jsx` (page shown only to someone with `can_manage_settings` or `can_manage_printers`, otherwise `/settings` redirects to the Dashboard; inside it, printer sections need `can_manage_printers` and the rest (Filament Library, Farm Name, Print Queue, Dispatch, Backup, Polling) need `can_manage_settings`, hidden otherwise) | CSV import, flagged-row resolution, printer models, farm name, admin-only single sign-on redirect toggle |
 | `client/src/pages/Dashboard.jsx` | TV command center dashboard |
 | `client/src/pages/Projects.jsx` | Project/Part/G-code management |
 | `client/src/pages/Jobs.jsx` | Job queue table with filters |

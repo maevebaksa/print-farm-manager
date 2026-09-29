@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getDriver } = require('../drivers');
 const events = require('../events');
-const { hasPermission } = require('../auth');
+const { hasPermission, canModifyWork, OTHERS_WORK_MESSAGE } = require('../auth');
 
 module.exports = (db) => {
   // GET /api/jobs: list with optional filters, joined with part/project/printer names.
@@ -82,9 +82,41 @@ module.exports = (db) => {
     const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
+    // Owner: the G-code's uploader, else the part's creator (same fields GET /
+    // reports). Someone else's job needs can_manage_others_work.
+    const owner = db.prepare(`
+      SELECT COALESCE(g.uploaded_by_user_id, p.created_by_user_id) AS owner_id
+      FROM (SELECT ? AS gcode_id, ? AS part_id) j
+      LEFT JOIN gcodes g ON g.id = j.gcode_id
+      LEFT JOIN parts  p ON p.id = j.part_id
+    `).get(job.gcode_id, job.part_id).owner_id;
+    if (!canModifyWork(req.user, owner)) {
+      return res.status(403).json({ error: OTHERS_WORK_MESSAGE });
+    }
+
+    // ?reason=failed (default): the print failed or was stopped for a physical
+    // reason; the job is cancelled and its part stays open, so the scheduler
+    // sends it back through the queue. ?reason=bad_gcode: the G-code itself is
+    // bad, so it is also pulled out of dispatch permanently by clearing
+    // gcodes.approved (the same flag the scheduler and dispatch-status already
+    // honor, no schema change); an operator can approve it again to undo.
+    const reason = req.query.reason === undefined ? 'failed' : String(req.query.reason);
+    if (reason !== 'failed' && reason !== 'bad_gcode') {
+      return res.status(400).json({ error: 'reason must be "failed" or "bad_gcode"' });
+    }
+    const disableGcode = () => {
+      if (reason === 'bad_gcode' && job.gcode_id) {
+        db.prepare('UPDATE gcodes SET approved = 0 WHERE id = ?').run(job.gcode_id);
+        console.log(`[jobs] G-code ${job.gcode_id} taken out of dispatch (job ${job.id} cancelled as bad G-code)`);
+      }
+    };
+
     if (job.status === 'queued') {
-      db.prepare("UPDATE jobs SET status = 'cancelled' WHERE id = ?").run(job.id);
-      return res.json({ success: true });
+      db.transaction(() => {
+        db.prepare("UPDATE jobs SET status = 'cancelled' WHERE id = ?").run(job.id);
+        disableGcode();
+      })();
+      return res.json({ success: true, reason });
     }
 
     if (job.status === 'uploading' || job.status === 'printing') {
@@ -107,10 +139,15 @@ module.exports = (db) => {
         // Hold for operator sign-off, same as any other STOPPED printer:
         // the plate needs a physical look before the next job dispatches.
         db.prepare('UPDATE printers SET is_held = 1 WHERE id = ?').run(printer.id);
-        events.insert(printer.id, 'job_cancelled', `Job ${job.id} cancelled by ${req.user?.name ?? 'an operator'}`);
+        events.insert(printer.id, 'job_cancelled',
+          `Job ${job.id} cancelled by ${req.user?.name ?? 'an operator'}: ` +
+          (reason === 'bad_gcode' ? 'bad G-code, taken out of the queue' : 'print failed, part goes back in the queue'));
       }
-      db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE id = ?").run(Date.now(), job.id);
-      return res.json({ success: true });
+      db.transaction(() => {
+        db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE id = ?").run(Date.now(), job.id);
+        disableGcode();
+      })();
+      return res.json({ success: true, reason });
     }
 
     return res.status(409).json({

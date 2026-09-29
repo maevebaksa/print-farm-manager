@@ -50,6 +50,10 @@ export default function Settings() {
   // server enforces this (auth.blockUploaderPrinterAdmin); hiding the sections
   // here just keeps uploaders from seeing controls that would 403.
   const canManagePrinters = user?.permissions?.can_manage_printers ?? user?.role !== 'uploader';
+  // Farm-wide settings and the filament library: PUT /api/settings and the
+  // /api/filaments writes need can_manage_settings (auth.blockWithoutSettingsAccess).
+  // Sections a user cannot use are hidden, not shown read-only.
+  const canManageSettings = user?.permissions?.can_manage_settings ?? (user?.role === 'admin' || user?.role === 'operator');
   const [showToast, toastEl] = useToast();
   const [confirm, confirmModal] = useConfirm();
   const [importing, setImporting] = useState(false);
@@ -980,6 +984,7 @@ export default function Settings() {
       )}
 
       {/* Filament Library */}
+      {canManageSettings && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Filament Library</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 20 }}>
@@ -1202,6 +1207,7 @@ export default function Settings() {
         </form>
         {colorFormError && <div style={{ marginTop: 8, color: '#fca5a5', fontSize: 13 }}>{colorFormError}</div>}
       </section>
+      )}
 
       {/* Add Single Printer */}
       {canManagePrinters && (
@@ -1630,6 +1636,7 @@ export default function Settings() {
       )}
 
       {/* Farm Name */}
+      {canManageSettings && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Farm Name</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -1654,6 +1661,7 @@ export default function Settings() {
           <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{farmNameError}</div>
         )}
       </section>
+      )}
 
       {/* Single Sign-On: admin only; see docs/auth.md */}
       {user?.role === 'admin' && (
@@ -1795,6 +1803,7 @@ export default function Settings() {
       )}
 
       {/* Print Queue (admin-only settings; read-only for everyone else) */}
+      {canManageSettings && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Print Queue</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -1867,8 +1876,10 @@ export default function Settings() {
         </div>
         {queueError && <div style={{ marginTop: 10, color: '#fca5a5', fontSize: 13 }}>{queueError}</div>}
       </section>
+      )}
 
       {/* Dispatch Settings */}
+      {canManageSettings && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Dispatch Settings</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -1996,8 +2007,10 @@ export default function Settings() {
           )}
         </div>
       </section>
+      )}
 
       {/* Farm Backup / Restore */}
+      {canManageSettings && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, marginBottom: 24, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Farm Backup</h2>
         <p style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>
@@ -2086,8 +2099,10 @@ export default function Settings() {
           </div>
         )}
       </section>
+      )}
 
       {/* Polling interval info */}
+      {canManageSettings && (
       <section style={{ background: '#1e2433', borderRadius: 10, padding: 20, maxWidth: 640 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Polling</h2>
         <p style={{ color: '#64748b', fontSize: 13 }}>
@@ -2096,44 +2111,7 @@ export default function Settings() {
           Unreachable printers show as <span style={{ color: '#6b7280' }}>OFFLINE</span> and do not affect other printers.
         </p>
       </section>
-
-      {/* About */}
-      <section style={{ maxWidth: 640, borderTop: '1px solid #1e2433', paddingTop: 24 }}>
-        <p style={{ color: '#475569', fontSize: 13, lineHeight: 1.7, marginBottom: 16 }}>
-          Hi, I'm Joel — aka <strong style={{ color: '#64748b' }}>3D Printing Nerd</strong>. I built this tool
-          to manage my own print farm and decided to open-source it so the community could benefit too.
-          If it saves you time or headaches, I'd love a coffee — it helps me keep making free content and
-          tools like this one. Thanks for being part of the community. Happy printing!
-        </p>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <a
-            href="https://buymeacoffee.com/3dprintingnerd"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-              background: '#FFDD00', color: '#000',
-              padding: '7px 16px', borderRadius: 8,
-              fontSize: 13, fontWeight: 700, textDecoration: 'none',
-            }}
-          >
-            ☕ Buy Me a Coffee
-          </a>
-          <a
-            href="https://paypal.me/JoelTelling"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-              background: '#003087', color: '#fff',
-              padding: '7px 16px', borderRadius: 8,
-              fontSize: 13, fontWeight: 700, textDecoration: 'none',
-            }}
-          >
-            PayPal
-          </a>
-        </div>
-      </section>
+      )}
     </div>
   );
 }

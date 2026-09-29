@@ -131,9 +131,9 @@ function clearSessionCookie(req, res) {
 // these flags for a non-admin member; admin is always fully open so the farm
 // can never lock itself out of management.
 const ROLE_PERMISSIONS = {
-  admin:    { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  requires_approval: false },
-  operator: { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  requires_approval: false },
-  uploader: { can_approve: false, can_set_ready: false, can_manage_printers: false, can_quick_print: true, can_delete_projects: false, can_cancel_active_jobs: false, requires_approval: false },
+  admin:    { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  can_manage_settings: true,  can_manage_others_work: true,  requires_approval: false },
+  operator: { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  can_manage_settings: true,  can_manage_others_work: true,  requires_approval: false },
+  uploader: { can_approve: false, can_set_ready: false, can_manage_printers: false, can_quick_print: true, can_delete_projects: false, can_cancel_active_jobs: false, can_manage_settings: false, can_manage_others_work: false, requires_approval: false },
 };
 
 function parseJsonArray(text) {
@@ -157,6 +157,8 @@ function resolvePermissions(db, user) {
     can_quick_print: !!g.can_quick_print,
     can_delete_projects: !!g.can_delete_projects,
     can_cancel_active_jobs: !!g.can_cancel_active_jobs,
+    can_manage_settings: !!g.can_manage_settings,
+    can_manage_others_work: !!g.can_manage_others_work,
     requires_approval: !!g.requires_approval,
     max_concurrent_plates: g.max_concurrent_plates ?? null,
     allowed_printer_ids: parseJsonArray(g.allowed_printer_ids),
@@ -292,6 +294,26 @@ const blockUploaderPrinterAdmin = blockWithoutPermission(
   'Uploaders cannot add, remove, or change printers or printer settings'
 );
 
+// True when this user may delete or cancel work (a job, G-code, part, or
+// project) whose owner is ownerId: their own work always, anyone else's only
+// with can_manage_others_work. An unowned legacy row (ownerId null) counts as
+// someone else's. No req.user at all passes, like blockWithoutPermission
+// (the global auth gate guarantees one in production).
+function canModifyWork(user, ownerId) {
+  if (!user) return true;
+  if (hasPermission(user, 'can_manage_others_work')) return true;
+  return ownerId != null && Number(ownerId) === Number(user.id);
+}
+
+const OTHERS_WORK_MESSAGE = "Your user group cannot delete or cancel other users' work";
+
+// Settings writes and the filament registry (add/edit/remove types and colors).
+// Reads stay open: every page needs the farm name, tolerance, and filament list.
+const blockWithoutSettingsAccess = blockWithoutPermission(
+  'can_manage_settings',
+  'Your user group cannot change settings or filaments'
+);
+
 module.exports = {
   SESSION_COOKIE,
   ROLE_PERMISSIONS,
@@ -301,6 +323,9 @@ module.exports = {
   blockWithoutPermission,
   printerAllowed,
   blockUploaderPrinterAdmin,
+  blockWithoutSettingsAccess,
+  canModifyWork,
+  OTHERS_WORK_MESSAGE,
   hashPassword,
   verifyPassword,
   createSession,

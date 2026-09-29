@@ -8,6 +8,7 @@ import GcodeUploadWizard from '../components/GcodeUploadWizard';
 import GcodeThumbnail from '../components/GcodeThumbnail';
 import QuickPrint from '../components/QuickPrint';
 import { useAuth } from '../AuthContext';
+import { canModifyWork } from '../canModifyWork';
 
 // ── Estimate helpers ──────────────────────────────────────────────────────────
 
@@ -619,7 +620,7 @@ function GcodeEstimateRow({ gc, onDelete, onApprove, onSaved, filamentTypes, fil
             Approve
           </button>
         )}
-        <button
+        {onDelete && <button
           onClick={onDelete}
           title="Delete G-code"
           aria-label={`Delete G-code ${gc.filename}`}
@@ -627,7 +628,7 @@ function GcodeEstimateRow({ gc, onDelete, onApprove, onSaved, filamentTypes, fil
             background: 'none', border: 'none', color: '#ef4444',
             cursor: 'pointer', padding: '4px 6px', fontSize: 16, lineHeight: 1, flexShrink: 0,
           }}
-        >×</button>
+        >×</button>}
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ color: '#e2e8f0', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>{gc.parts_per_plate}x</span>
@@ -737,6 +738,7 @@ function GcodeEstimateRow({ gc, onDelete, onApprove, onSaved, filamentTypes, fil
 }
 
 function PartDetailsPanel({ part, gcodes, onRefresh, onSaved, onConfirm, filamentTypes, filamentColors, projectMaterial, projectColor, projectGroups, groups, canApprove }) {
+  const { user: panelUser } = useAuth();
   const [have, setHave] = useState(String(part.completed_qty));
   const [need, setNeed] = useState(String(part.target_qty));
   const [saving, setSaving] = useState(false);
@@ -929,7 +931,7 @@ function PartDetailsPanel({ part, gcodes, onRefresh, onSaved, onConfirm, filamen
             <GcodeEstimateRow
               key={gc.id}
               gc={gc}
-              onDelete={() => deleteGcode(gc.id)}
+              onDelete={canModifyWork(panelUser, gc.uploaded_by_user_id) ? () => deleteGcode(gc.id) : null}
               onApprove={canApprove ? () => approveGcode(gc.id) : null}
               onSaved={onSaved}
               filamentTypes={filamentTypes}
@@ -1845,7 +1847,7 @@ export default function Projects() {
             >✎</button>
           </>
         )}
-        <StatusDropdown project={detailProject} onTransition={handleStatusTransition} canDelete={canDeleteProjects} />
+        <StatusDropdown project={detailProject} onTransition={handleStatusTransition} canDelete={canDeleteProjects && canModifyWork(user, detailProject.created_by_user_id)} />
         <PriorityOverride
           on={detailProject.priority_override === 1}
           canToggle={canApprove}
@@ -2070,7 +2072,7 @@ export default function Projects() {
               </button>
 
               {/* Delete part */}
-              <button
+              {canModifyWork(user, part.created_by_user_id) && <button
                 onClick={() => deletePart(part.id, part.name)}
                 title="Delete part"
                 aria-label={`Delete part ${part.name}`}
@@ -2078,7 +2080,7 @@ export default function Projects() {
                   background: 'none', border: 'none', color: '#ef4444',
                   cursor: 'pointer', padding: '4px 6px', fontSize: 18, lineHeight: 1, flexShrink: 0,
                 }}
-              >×</button>
+              >×</button>}
             </div>
 
             {panelOpen && (

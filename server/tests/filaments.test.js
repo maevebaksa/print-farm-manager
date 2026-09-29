@@ -275,3 +275,32 @@ describe('DELETE /api/filaments/colors/:id', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ─── Permission gate ────────────────────────────────────────────────────────
+
+describe('filament writes need can_manage_settings', () => {
+  function appAs(user) {
+    const a = express();
+    a.use(express.json());
+    a.use((req, _res, next) => { req.user = user; next(); });
+    a.use('/api/filaments', require('../routes/filaments')(db));
+    return a;
+  }
+
+  test('an uploader cannot add or delete a type, and reads still work', async () => {
+    const uploader = appAs({ id: 3, role: 'uploader' });
+    const id = seedType('PLA');
+    expect((await request(uploader).post('/api/filaments/types').send({ name: 'PETG' })).status).toBe(403);
+    expect((await request(uploader).delete(`/api/filaments/types/${id}`)).status).toBe(403);
+    expect((await request(uploader).post('/api/filaments/colors').send({ name: 'Red', hex_color: '#ff0000' })).status).toBe(403);
+    expect((await request(uploader).put('/api/filaments/colors/1').send({ name: 'x' })).status).toBe(403);
+    expect((await request(uploader).delete('/api/filaments/colors/1')).status).toBe(403);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM filament_types').get().n).toBe(1);
+    expect((await request(uploader).get('/api/filaments/types')).status).toBe(200);
+  });
+
+  test('an operator can add a type', async () => {
+    const res = await request(appAs({ id: 2, role: 'operator' })).post('/api/filaments/types').send({ name: 'PETG' });
+    expect(res.status).toBe(201);
+  });
+});

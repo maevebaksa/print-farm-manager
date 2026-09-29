@@ -4,6 +4,7 @@ import { useConfirm } from '../useConfirm';
 import { useToast } from '../useToast';
 import EmptyState from '../components/EmptyState';
 import GcodeThumbnail from '../components/GcodeThumbnail';
+import { canModifyWork } from '../canModifyWork';
 import { useAuth } from '../AuthContext';
 
 // Colors match the Fleet page conventions: blue = printing, green = done.
@@ -128,16 +129,22 @@ export default function Jobs() {
 
   async function cancelJob(job) {
     const active = job.status === 'uploading' || job.status === 'printing';
-    const ok = await confirm({
+    const reason = await confirm({
       title: 'Cancel Job',
-      message: active
-        ? 'This will stop the print on the printer right now and hold it for you to check the plate. This cannot be undone.'
-        : 'Remove this job from the queue?',
-      confirmLabel: 'Cancel Job',
-      danger: true,
+      message: (active
+        ? 'This stops the print on the printer right now and holds it for you to check the plate. '
+        : '')
+        + 'Why is it being cancelled?\n\n'
+        + 'Print failed: the part goes back in the queue and will be sent to a printer again.\n'
+        + 'Bad G-code: this G-code is taken out of the queue for good (an operator can approve it again to undo).',
+      cancelLabel: 'Keep Job',
+      actions: [
+        { value: 'failed', label: 'Print failed, requeue', variant: 'primary' },
+        { value: 'bad_gcode', label: 'Bad G-code, cancel permanently', variant: 'danger' },
+      ],
     });
-    if (!ok) return;
-    const res = await fetch(`/api/jobs/${job.id}`, { method: 'DELETE' });
+    if (!reason) return;
+    const res = await fetch(`/api/jobs/${job.id}?reason=${reason}`, { method: 'DELETE' });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       showToast('Cancel failed: ' + (body.error || res.status), 'error');
@@ -225,7 +232,7 @@ export default function Jobs() {
                     {formatTime(job.started_at)}
                     {job.started_at && <> · {formatDuration(job.started_at, job.finished_at || null)}</>}
                   </span>
-                  {(job.status === 'queued' || ((job.status === 'uploading' || job.status === 'printing') && canCancelActive)) && (
+                  {canModifyWork(user, job.gcode_uploaded_by_user_id ?? job.part_owner_user_id) && (job.status === 'queued' || ((job.status === 'uploading' || job.status === 'printing') && canCancelActive)) && (
                     <button
                       onClick={() => cancelJob(job)}
                       style={{ background: '#7f1d1d', color: '#f87171', border: 'none', borderRadius: 4, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}

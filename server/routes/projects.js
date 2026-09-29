@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAnyRole, requirePermission } = require('../auth');
+const { requireAnyRole, requirePermission, canModifyWork, OTHERS_WORK_MESSAGE } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -132,6 +132,18 @@ module.exports = (db, scheduler = null) => {
   router.delete('/:id', requirePermission('can_delete_projects', 'Your user group cannot delete projects'), (req, res) => {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // The delete cascades to every part and G-code, so the project, each part,
+    // and each G-code must be the caller's own unless they hold
+    // can_manage_others_work.
+    const owners = [
+      project.created_by_user_id,
+      ...db.prepare('SELECT created_by_user_id AS o FROM parts WHERE project_id = ?').all(project.id).map(r => r.o),
+      ...db.prepare('SELECT g.uploaded_by_user_id AS o FROM gcodes g JOIN parts p ON p.id = g.part_id WHERE p.project_id = ?').all(project.id).map(r => r.o),
+    ];
+    if (owners.some(o => !canModifyWork(req.user, o))) {
+      return res.status(403).json({ error: OTHERS_WORK_MESSAGE });
+    }
 
     const activeJob = db.prepare(`
       SELECT jobs.id FROM jobs JOIN parts ON parts.id = jobs.part_id

@@ -15,7 +15,18 @@ import CommandPalette from './components/CommandPalette';
 import { useAuth } from './AuthContext';
 import { isMac } from './platform';
 
-function navItems(role) {
+// Settings holds farm-wide settings and filaments (can_manage_settings) plus
+// the printer registry sections (can_manage_printers): the page is only shown
+// to someone who can use at least one of them, and hides the rest itself.
+function canManageSettings(user) {
+  const p = user.permissions;
+  const settings = p?.can_manage_settings ?? (user.role === 'admin' || user.role === 'operator');
+  const printers = p?.can_manage_printers ?? user.role !== 'uploader';
+  return !!(settings || printers);
+}
+
+function navItems(user) {
+  const role = user.role;
   const items = [
     { to: '/',               label: 'Dashboard' },
     { to: '/fleet',          label: 'Fleet' },
@@ -23,8 +34,8 @@ function navItems(role) {
     { to: '/projects',       label: 'Projects' },
     { to: '/jobs',           label: 'Jobs' },
     { to: '/decommissioned', label: 'Decommissioned' },
-    { to: '/settings',       label: 'Settings' },
   ];
+  if (canManageSettings(user)) items.push({ to: '/settings', label: 'Settings' });
   // An operator can also reach /users to approve pending uploader accounts,
   // even though the page hides full user management from anyone but an admin
   // (see client/src/pages/Users.jsx).
@@ -72,7 +83,7 @@ export default function App() {
   // than a route match.
   if (user === null) return <Login forceLocal={window.location.pathname === '/backup-login'} />;
 
-  const NAV_ITEMS = navItems(user.role);
+  const NAV_ITEMS = navItems(user);
 
   return (
     <BrowserRouter>
@@ -180,7 +191,7 @@ export default function App() {
             <Route path="/projects"        element={<Projects />} />
             <Route path="/jobs"            element={<Jobs />} />
             <Route path="/decommissioned"  element={<Decommissioned />} />
-            <Route path="/settings"        element={<Settings />} />
+            <Route path="/settings"        element={canManageSettings(user) ? <Settings /> : <Navigate to="/" replace />} />
             {(user.role === 'admin' || user.role === 'operator') && <Route path="/users" element={<Users />} />}
             <Route path="/account"         element={<Account />} />
           </Routes>

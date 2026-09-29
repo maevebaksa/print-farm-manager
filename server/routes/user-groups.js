@@ -91,12 +91,12 @@ module.exports = (db) => {
     const flag = (k) => (k in body ? (body[k] ? 1 : 0) : (defaults[k] ? 1 : 0));
     const result = db.prepare(`
       INSERT INTO user_groups (name, role, can_approve, can_set_ready, can_manage_printers, can_quick_print,
-                               can_delete_projects, can_cancel_active_jobs,
+                               can_delete_projects, can_cancel_active_jobs, can_manage_settings, can_manage_others_work,
                                requires_approval, max_concurrent_plates, allowed_printer_ids, allowed_printer_groups,
                                is_system, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `).run(name, role, flag('can_approve'), flag('can_set_ready'), flag('can_manage_printers'), flag('can_quick_print'),
-           flag('can_delete_projects'), flag('can_cancel_active_jobs'),
+           flag('can_delete_projects'), flag('can_cancel_active_jobs'), flag('can_manage_settings'), flag('can_manage_others_work'),
            flag('requires_approval'), cap.value ?? null, lists.ids ?? null, lists.groups ?? null, Date.now());
     res.status(201).json(present(db.prepare(`${withMembers} WHERE g.id = ?`).get(result.lastInsertRowid)));
   });
@@ -135,12 +135,12 @@ module.exports = (db) => {
       db.prepare(`
         UPDATE user_groups
         SET name = ?, role = ?, can_approve = ?, can_set_ready = ?, can_manage_printers = ?,
-            can_quick_print = ?, can_delete_projects = ?, can_cancel_active_jobs = ?,
+            can_quick_print = ?, can_delete_projects = ?, can_cancel_active_jobs = ?, can_manage_settings = ?, can_manage_others_work = ?,
             requires_approval = ?, max_concurrent_plates = ?,
             allowed_printer_ids = ?, allowed_printer_groups = ?
         WHERE id = ?
       `).run(name, role, flag('can_approve'), flag('can_set_ready'), flag('can_manage_printers'),
-             flag('can_quick_print'), flag('can_delete_projects'), flag('can_cancel_active_jobs'),
+             flag('can_quick_print'), flag('can_delete_projects'), flag('can_cancel_active_jobs'), flag('can_manage_settings'), flag('can_manage_others_work'),
              flag('requires_approval'),
              cap.skip ? group.max_concurrent_plates : cap.value,
              'ids' in lists ? lists.ids : group.allowed_printer_ids,

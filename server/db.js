@@ -614,4 +614,21 @@ try {
   db.exec("UPDATE user_groups SET can_cancel_active_jobs = 1 WHERE role IN ('admin', 'operator')");
 } catch (_) {}
 
+// can_manage_settings: the Settings page writes (PUT /api/settings/:key) and
+// the filament registry (POST/PUT/DELETE /api/filaments/*). Same backfill
+// convention as the two flags above: operator/admin groups keep what the role
+// always had, uploader groups default to 0.
+try {
+  db.exec('ALTER TABLE user_groups ADD COLUMN can_manage_settings INTEGER NOT NULL DEFAULT 0');
+  db.exec("UPDATE user_groups SET can_manage_settings = 1 WHERE role IN ('admin', 'operator')");
+} catch (_) {}
+
+// can_manage_others_work: delete or cancel a job, G-code, part, or project
+// that another user created. Everyone can always remove their own. Same
+// backfill convention as the flags above (operator/admin keep the ability).
+try {
+  db.exec('ALTER TABLE user_groups ADD COLUMN can_manage_others_work INTEGER NOT NULL DEFAULT 0');
+  db.exec("UPDATE user_groups SET can_manage_others_work = 1 WHERE role IN ('admin', 'operator')");
+} catch (_) {}
+
 module.exports = db;

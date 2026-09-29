@@ -17,7 +17,7 @@ beforeEach(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'uploader',
       can_approve INTEGER NOT NULL DEFAULT 0, can_set_ready INTEGER NOT NULL DEFAULT 0,
       can_manage_printers INTEGER NOT NULL DEFAULT 0, can_quick_print INTEGER NOT NULL DEFAULT 1,
-      can_delete_projects INTEGER NOT NULL DEFAULT 0, can_cancel_active_jobs INTEGER NOT NULL DEFAULT 0,
+      can_delete_projects INTEGER NOT NULL DEFAULT 0, can_cancel_active_jobs INTEGER NOT NULL DEFAULT 0, can_manage_settings INTEGER NOT NULL DEFAULT 0, can_manage_others_work INTEGER NOT NULL DEFAULT 0,
       requires_approval INTEGER NOT NULL DEFAULT 0, max_plates_per_upload INTEGER, max_concurrent_plates INTEGER,
       allowed_printer_ids TEXT, allowed_printer_groups TEXT, is_system INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
     );

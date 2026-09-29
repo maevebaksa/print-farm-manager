@@ -1,4 +1,5 @@
 const express = require('express');
+const { blockWithoutSettingsAccess } = require('../auth');
 const router = express.Router();
 
 const ALLOWED_KEYS = new Set(['dispatch_batch_size', 'farm_name', 'auto_sso_redirect', 'color_tolerance', 'upload_retry_window_min', 'require_uploader_approval', 'update_repo', 'queue_order', 'operator_hours_start', 'operator_hours_end', 'operator_days']);
@@ -27,7 +28,7 @@ module.exports = (db) => {
   });
 
   // PUT /api/settings/:key — update a single setting value
-  router.put('/:key', (req, res) => {
+  router.put('/:key', blockWithoutSettingsAccess, (req, res) => {
     const { key } = req.params;
     if (!ALLOWED_KEYS.has(key)) {
       return res.status(400).json({ error: `Unknown setting key: ${key}` });

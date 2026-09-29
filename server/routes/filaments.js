@@ -1,5 +1,6 @@
 const express = require('express');
 const { normalizeHex } = require('../color-distance');
+const { blockWithoutSettingsAccess } = require('../auth');
 
 module.exports = (db) => {
   const router = express.Router();
@@ -10,7 +11,7 @@ module.exports = (db) => {
     res.json(db.prepare('SELECT * FROM filament_types ORDER BY name').all());
   });
 
-  router.post('/types', (req, res) => {
+  router.post('/types', blockWithoutSettingsAccess, (req, res) => {
     const name = req.body?.name?.trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
     try {
@@ -23,7 +24,7 @@ module.exports = (db) => {
   });
 
   // Blocked if any colors belong to this type
-  router.delete('/types/:id', (req, res) => {
+  router.delete('/types/:id', blockWithoutSettingsAccess, (req, res) => {
     const colorCount = db.prepare('SELECT COUNT(*) as count FROM filament_color_types WHERE type_id = ?').get(req.params.id);
     if (colorCount.count > 0) {
       return res.status(409).json({ error: `Cannot delete: ${colorCount.count} color(s) belong to this type. Remove them from this type first.` });
@@ -75,7 +76,7 @@ module.exports = (db) => {
 
   // Creates a new color with its initial set of types. To add/remove types on an
   // existing color instead, use PUT /colors/:id.
-  router.post('/colors', (req, res) => {
+  router.post('/colors', blockWithoutSettingsAccess, (req, res) => {
     const name = req.body?.name?.trim();
     const type_ids = Array.isArray(req.body?.type_ids) ? req.body.type_ids.map(id => parseInt(id, 10)) : [];
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -113,7 +114,7 @@ module.exports = (db) => {
   // Partial update: name/hex_color (COALESCE, omitted fields unchanged), and if
   // type_ids is provided, replaces the color's full type list (the same
   // replace-the-whole-set convention gcodes.allowed_groups already uses).
-  router.put('/colors/:id', (req, res) => {
+  router.put('/colors/:id', blockWithoutSettingsAccess, (req, res) => {
     const color = db.prepare('SELECT * FROM filament_colors WHERE id = ?').get(req.params.id);
     if (!color) return res.status(404).json({ error: 'Not found' });
 
@@ -167,7 +168,7 @@ module.exports = (db) => {
     }
   });
 
-  router.delete('/colors/:id', (req, res) => {
+  router.delete('/colors/:id', blockWithoutSettingsAccess, (req, res) => {
     const deleteColor = db.transaction((id) => {
       db.prepare('DELETE FROM filament_color_types WHERE color_id = ?').run(id);
       return db.prepare('DELETE FROM filament_colors WHERE id = ?').run(id);

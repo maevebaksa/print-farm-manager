@@ -261,3 +261,26 @@ describe('operator hours settings (used by the time estimates)', () => {
     expect((await request(app).put('/api/settings/operator_hours_start').send({ value: '08:00' })).status).toBe(403);
   });
 });
+
+describe('settings writes need can_manage_settings', () => {
+  afterEach(() => { currentUser = { id: 1, role: 'admin' }; });
+
+  test('an uploader cannot change a non-admin-only setting, and nothing is written', async () => {
+    currentUser = { id: 3, role: 'uploader' };
+    const before = db.prepare("SELECT value FROM settings WHERE key = 'dispatch_batch_size'").get().value;
+    const res = await request(app).put('/api/settings/dispatch_batch_size').send({ value: 77 });
+    expect(res.status).toBe(403);
+    expect(db.prepare("SELECT value FROM settings WHERE key = 'dispatch_batch_size'").get().value).toBe(before);
+  });
+
+  test('an uploader can still read settings', async () => {
+    currentUser = { id: 3, role: 'uploader' };
+    expect((await request(app).get('/api/settings')).status).toBe(200);
+  });
+
+  test('a group permission overrides the role default', async () => {
+    currentUser = { id: 3, role: 'uploader', permissions: { can_manage_settings: true } };
+    const res = await request(app).put('/api/settings/dispatch_batch_size').send({ value: 6 });
+    expect(res.status).toBe(200);
+  });
+});
