@@ -5,6 +5,7 @@ const { getDriver } = require('./drivers');
 const notifications = require('./notifications');
 const events = require('./events');
 const { colorsClose } = require('./color-distance');
+const { resolvePermissions } = require('./auth');
 
 const GCODE_DIR = path.join(__dirname, 'gcode');
 
@@ -377,12 +378,13 @@ class JobScheduler extends EventEmitter {
     // only color.
     //
     // Queue policy (admin setting, see _queuePolicy): the order candidates are
-    // walked in. Each project may also cap how many printers its own work may
-    // occupy at once (projects.max_concurrent_plates, set by whoever manages
-    // the project, not an admin setting). Caps are work-conserving: both color
-    // passes first run honoring them, and only if that finds nothing do they
-    // run again ignoring them, so a capped project still gets a printer that
-    // would otherwise sit idle but never jumps ahead of other waiting work.
+    // walked in. A user group may also cap how many printers one of its
+    // members' own work may occupy at once (user_groups.max_concurrent_plates,
+    // admin-configured on the Users page; an admin uploader is never capped).
+    // Caps are work-conserving: both color passes first run honoring them, and
+    // only if that finds nothing do they run again ignoring them, so a capped
+    // uploader still gets a printer that would otherwise sit idle but never
+    // jumps ahead of other waiting work.
     const policy = this._queuePolicy();
     const toleranceSetting = this.db.prepare("SELECT value FROM settings WHERE key = 'color_tolerance'").get();
     const tolerance = toleranceSetting ? parseInt(toleranceSetting.value, 10) || 0 : 0;
@@ -419,33 +421,40 @@ class JobScheduler extends EventEmitter {
   // on the next dispatch with no restart.
   _queuePolicy() {
     const get = (key) => this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value;
-    // Whether any active project has set its own plate cap at all: when none
-    // has, skip the uncapped-retry pass entirely (see the capModes loop
-    // above), the same optimization the old settings-based cap had, now
-    // sourced from the projects table instead of a single global setting.
+    // Whether any user group has set a plate cap at all: when none has, skip
+    // the uncapped-retry pass entirely (see the capModes loop above), the
+    // same optimization the old settings-based cap had, now sourced from
+    // user_groups instead of a single global setting. Admin accounts are
+    // never capped regardless (resolvePermissions returns unrestricted for
+    // them), so their own group rows (if any) don't need checking here.
     const capsActive = !!this.db.prepare(
-      "SELECT 1 FROM projects WHERE status = 'active' AND max_concurrent_plates > 0 LIMIT 1"
+      'SELECT 1 FROM user_groups WHERE max_concurrent_plates > 0 LIMIT 1'
     ).get();
     return { fifo: get('queue_order') === 'fifo', capsActive };
   }
 
-  // True when this candidate's project already has as many printers
-  // uploading/printing as its own max_concurrent_plates allows. Set by whoever
-  // manages the project (PUT /api/projects/:id), not an admin setting: this is
-  // deliberately a per-project concurrency cap, not a per-part upload-size cap,
-  // so it stops one project from tying up every printer on a shared farm
-  // without penalizing a part that batches many copies onto one plate. Counted
-  // from job rows, which every dispatch path inserts synchronously as its
-  // lock, so a batch sweep sees the reservations it has already made earlier
-  // in the same wave.
+  // True when this candidate's G-code's uploader already has as many printers
+  // uploading/printing as their user group's max_concurrent_plates allows.
+  // Configured per user group (admin-only, Users page), not per project: caps
+  // how many printers one person's own work may occupy at once, so one
+  // student can't tie up the whole farm, without penalizing a part that
+  // batches many copies onto one plate. An admin uploader is never capped
+  // (resolvePermissions returns an unrestricted cap for them). Counted from
+  // job rows, which every dispatch path inserts synchronously as its lock, so
+  // a batch sweep sees the reservations it has already made earlier in the
+  // same wave.
   _atPrinterCap(candidate) {
-    if (!candidate.max_concurrent_plates) return null;
+    if (!candidate.uploaded_by_user_id) return null; // no uploader on record: nothing to cap against
+    const uploader = this.db.prepare('SELECT id, role, user_group_id FROM users WHERE id = ?').get(candidate.uploaded_by_user_id);
+    if (!uploader) return null;
+    const cap = resolvePermissions(this.db, uploader).max_concurrent_plates;
+    if (!cap) return null;
     const n = this.db.prepare(`
-      SELECT COUNT(*) AS n FROM jobs JOIN parts ON parts.id = jobs.part_id
-      WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing')
-    `).get(candidate.project_id).n;
-    if (n >= candidate.max_concurrent_plates) {
-      return `project ${candidate.project_id} already on ${n} printer(s), cap ${candidate.max_concurrent_plates}`;
+      SELECT COUNT(*) AS n FROM jobs JOIN gcodes ON gcodes.id = jobs.gcode_id
+      WHERE gcodes.uploaded_by_user_id = ? AND jobs.status IN ('uploading', 'printing')
+    `).get(candidate.uploaded_by_user_id).n;
+    if (n >= cap) {
+      return `uploader ${candidate.uploaded_by_user_id} already on ${n} printer(s), cap ${cap}`;
     }
     return null;
   }
@@ -513,7 +522,7 @@ class JobScheduler extends EventEmitter {
           gcodes.filepath,
           gcodes.parts_per_plate,
           gcodes.ams_slot,
-          projects.max_concurrent_plates,
+          gcodes.uploaded_by_user_id,
           -- Operator/admin priority override on the part or its project: always
           -- first in line, whatever queue_order says, and exempt from the caps.
           (parts.priority_override = 1 OR projects.priority_override = 1) AS overridden

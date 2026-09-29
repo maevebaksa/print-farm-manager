@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAnyRole } = require('../auth');
+const { requireAnyRole, requirePermission } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -114,41 +114,31 @@ module.exports = (db, scheduler = null) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const { name, description, status } = req.body;
 
-    // max_concurrent_plates: present-in-body semantics (like the two lists on
-    // PUT /api/user-groups/:id) because null/0 is a meaningful value ("no
-    // cap"), not "leave unchanged". Set by whoever manages the project, not an
-    // admin Settings value: see server/scheduler.js's _atPrinterCap.
-    let maxPlates = project.max_concurrent_plates;
-    if ('max_concurrent_plates' in req.body) {
-      const raw = req.body.max_concurrent_plates;
-      if (raw === null || raw === '' || raw === 0 || raw === '0') {
-        maxPlates = null;
-      } else {
-        const n = Number(raw);
-        if (!Number.isInteger(n) || n < 1 || n > 1000) {
-          return res.status(400).json({ error: 'max_concurrent_plates must be a positive integer (or null/0 for no cap)' });
-        }
-        maxPlates = n;
-      }
-    }
-
     db.prepare(`
       UPDATE projects
       SET name = COALESCE(?, name),
           description = COALESCE(?, description),
           status = COALESCE(?, status),
-          max_concurrent_plates = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(name, description, status, maxPlates, Date.now(), req.params.id);
+    `).run(name, description, status, Date.now(), req.params.id);
     res.json(db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id));
   });
 
-  router.delete('/:id', (req, res) => {
+  // DELETE /api/projects/:id: any status may be deleted (not just draft), as
+  // long as no part of it has an active (uploading/printing) job right now,
+  // the same safety line DELETE /api/parts/:id already draws. Cascades to
+  // every part, gcode, and job the project owns.
+  router.delete('/:id', requirePermission('can_delete_projects', 'Your user group cannot delete projects'), (req, res) => {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    if (project.status !== 'draft') {
-      return res.status(400).json({ error: 'Only draft projects can be deleted.' });
+
+    const activeJob = db.prepare(`
+      SELECT jobs.id FROM jobs JOIN parts ON parts.id = jobs.part_id
+      WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing') LIMIT 1
+    `).get(project.id);
+    if (activeJob) {
+      return res.status(409).json({ error: 'Cannot delete: this project has an active uploading or printing job. Wait for it to finish or cancel it first.' });
     }
 
     const parts = db.prepare('SELECT id FROM parts WHERE project_id = ?').all(project.id);

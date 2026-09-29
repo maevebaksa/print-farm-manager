@@ -27,9 +27,10 @@ beforeEach(() => {
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL, status TEXT DEFAULT 'active',
-      required_material TEXT, required_color TEXT, allowed_groups TEXT, priority_override INTEGER NOT NULL DEFAULT 0,
-      max_concurrent_plates INTEGER
+      required_material TEXT, required_color TEXT, allowed_groups TEXT, priority_override INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL DEFAULT 'uploader', user_group_id INTEGER);
+    CREATE TABLE user_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, max_concurrent_plates INTEGER, allowed_printer_ids TEXT, allowed_printer_groups TEXT);
     CREATE TABLE parts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL, name TEXT NOT NULL,
@@ -42,12 +43,12 @@ beforeEach(() => {
       part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
       filename TEXT NOT NULL, filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL,
       allowed_groups TEXT, required_material TEXT, required_color TEXT,
-      approved INTEGER NOT NULL DEFAULT 1,
+      approved INTEGER NOT NULL DEFAULT 1, uploaded_by_user_id INTEGER,
       created_at INTEGER NOT NULL
     );
     CREATE TABLE jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      part_id INTEGER NOT NULL, status TEXT DEFAULT 'queued', parts_per_plate INTEGER NOT NULL
+      part_id INTEGER NOT NULL, gcode_id INTEGER, status TEXT DEFAULT 'queued', parts_per_plate INTEGER NOT NULL
     );
     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE filament_colors (
@@ -70,17 +71,23 @@ const now = Date.now();
 
 function seedProject(overrides = {}) {
   const stmt = db.prepare(`
-    INSERT INTO projects (name, status, required_material, required_color, allowed_groups, max_concurrent_plates)
-    VALUES ('Proj', ?, ?, ?, ?, ?)
+    INSERT INTO projects (name, status, required_material, required_color, allowed_groups)
+    VALUES ('Proj', ?, ?, ?, ?)
   `);
   const r = stmt.run(
     overrides.status ?? 'active',
     overrides.required_material ?? null,
     overrides.required_color ?? null,
     overrides.allowed_groups ?? null,
-    overrides.max_concurrent_plates ?? null,
   );
   return r.lastInsertRowid;
+}
+
+// Returns a user id belonging to a fresh user_group with the given plate cap
+// (null/omitted = no cap).
+function seedUser(maxConcurrentPlates = null) {
+  const groupId = db.prepare('INSERT INTO user_groups (max_concurrent_plates) VALUES (?)').run(maxConcurrentPlates).lastInsertRowid;
+  return db.prepare("INSERT INTO users (role, user_group_id) VALUES ('uploader', ?)").run(groupId).lastInsertRowid;
 }
 
 function seedPart(projectId, overrides = {}) {
@@ -92,11 +99,13 @@ function seedPart(projectId, overrides = {}) {
 }
 
 function seedGcode(partId, overrides = {}) {
-  db.prepare(`
-    INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, allowed_groups, required_material, required_color, approved, created_at)
-    VALUES (?, ?, 'f.gcode', 'f.gcode', 1, ?, ?, ?, ?, ?)
+  const r = db.prepare(`
+    INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, allowed_groups, required_material, required_color, approved, uploaded_by_user_id, created_at)
+    VALUES (?, ?, 'f.gcode', 'f.gcode', 1, ?, ?, ?, ?, ?, ?)
   `).run(partId, overrides.printer_model ?? 'mk4s', overrides.allowed_groups ?? null,
-         overrides.required_material ?? null, overrides.required_color ?? null, overrides.approved ?? 1, now);
+         overrides.required_material ?? null, overrides.required_color ?? null, overrides.approved ?? 1,
+         overrides.uploaded_by_user_id ?? null, now);
+  return r.lastInsertRowid;
 }
 
 function seedPrinter(overrides = {}) {
@@ -355,14 +364,16 @@ describe('GET /api/parts/:id/dispatch-status: color tolerance', () => {
   });
 });
 
-describe('GET /api/parts/:id/dispatch-status: per-project plate cap (mirrors scheduler _atPrinterCap)', () => {
-  test('notes a project at its plate cap, even for a different part of it', async () => {
-    const projectId = seedProject({ max_concurrent_plates: 1 });
+describe('GET /api/parts/:id/dispatch-status: per-uploader plate cap (mirrors scheduler _atPrinterCap)', () => {
+  test('notes an uploader at their plate cap, even for a different part of theirs', async () => {
+    const uploaderId = seedUser(1); // capped at 1
+    const projectId = seedProject();
     const busy = seedPart(projectId, { target_qty: 100 });
+    const busyGcodeId = seedGcode(busy, { uploaded_by_user_id: uploaderId });
     const partId = seedPart(projectId, { target_qty: 100 });
-    seedGcode(partId);
+    seedGcode(partId, { uploaded_by_user_id: uploaderId });
     seedPrinter();
-    db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(busy);
+    db.prepare("INSERT INTO jobs (part_id, gcode_id, status, parts_per_plate) VALUES (?, ?, 'printing', 1)").run(busy, busyGcodeId);
 
     const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
     expect(res.status).toBe(200);
@@ -370,12 +381,22 @@ describe('GET /api/parts/:id/dispatch-status: per-project plate cap (mirrors sch
     expect(res.body.dispatchable).toBe(true); // a cap is a note, never a blocker
   });
 
-  test('no cap note when the project has no cap set', async () => {
+  test('no cap note for an uploader with no group cap set', async () => {
+    const uploaderId = seedUser(); // no cap
     const partId = seedPart(seedProject(), { target_qty: 100 });
-    seedGcode(partId);
+    const gcodeId = seedGcode(partId, { uploaded_by_user_id: uploaderId });
     seedPrinter();
-    db.prepare("INSERT INTO jobs (part_id, status, parts_per_plate) VALUES (?, 'printing', 1)").run(partId);
+    db.prepare("INSERT INTO jobs (part_id, gcode_id, status, parts_per_plate) VALUES (?, ?, 'printing', 1)").run(partId, gcodeId);
     const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.body.notes.join(' ')).not.toMatch(/plate cap/);
+  });
+
+  test('no cap note when the gcode has no recorded uploader', async () => {
+    const partId = seedPart(seedProject(), { target_qty: 100 });
+    seedGcode(partId); // uploaded_by_user_id left null
+    seedPrinter();
+    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.status).toBe(200);
     expect(res.body.notes.join(' ')).not.toMatch(/plate cap/);
   });
 });

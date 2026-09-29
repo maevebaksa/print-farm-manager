@@ -15,7 +15,7 @@
 //              queue_order ('priority' or 'fifo' by G-code upload time), same
 //              model / group / material / color eligibility (exact match; the
 //              optional color tolerance is not modeled), same work-conserving
-//              per-project plate cap (projects.max_concurrent_plates).
+//              per-uploader plate cap (user_groups.max_concurrent_plates).
 //   Plates     a printer runs one whole plate of the part's G-code for its own
 //              model: parts_per_plate parts in est_print_secs (read from the
 //              file header on upload). Remaining plates per part come from
@@ -32,6 +32,8 @@
 // part has no printer that can take it, or the simulation hits its safety
 // limit. `remaining_seconds` is null when there is work left but nothing about
 // it can be estimated.
+
+const { resolvePermissions } = require('./auth');
 
 const SIM_MAX_PLATES = 20000; // safety cap on simulated dispatches per call
 const WORK_STATUSES_NOW = new Set(['IDLE', 'READY', 'FINISHED', 'STOPPED']);
@@ -108,10 +110,22 @@ function simulateFarm(db, now = Date.now()) {
            ${col('projects', 'priority_override', '0')} AS priority_override,
            ${col('projects', 'allowed_groups', 'NULL')} AS allowed_groups,
            ${col('projects', 'required_material', 'NULL')} AS required_material,
-           ${col('projects', 'required_color', 'NULL')} AS required_color,
-           ${col('projects', 'max_concurrent_plates', 'NULL')} AS max_concurrent_plates
+           ${col('projects', 'required_color', 'NULL')} AS required_color
     FROM projects WHERE status = 'active'
   `).all();
+
+  // Per-uploader plate cap (user_groups.max_concurrent_plates), memoized per
+  // simulation call since the same uploader recurs across many gcodes. An
+  // admin uploader (or one with no cap set) resolves to null: unlimited.
+  const capCache = new Map();
+  const capForUploader = (userId) => {
+    if (!userId) return null;
+    if (!capCache.has(userId)) {
+      const user = db.prepare('SELECT id, role, user_group_id FROM users WHERE id = ?').get(userId);
+      capCache.set(userId, user ? (resolvePermissions(db, user).max_concurrent_plates || null) : null);
+    }
+    return capCache.get(userId);
+  };
   const projectById = new Map(projects.map(p => [p.id, p]));
   const result = new Map(projects.map(p => [p.id, { completion_at: null, incomplete: false, has_work: false }]));
   const touch = (projectId, end) => {
@@ -123,7 +137,8 @@ function simulateFarm(db, now = Date.now()) {
   // the caps while they run.
   const running = []; // { partId, projectId, end }
   const inFlight = db.prepare(`
-    SELECT j.part_id, pt.project_id, j.status, p.job_time_remaining, g.est_print_secs
+    SELECT j.part_id, pt.project_id, j.status, p.job_time_remaining, g.est_print_secs,
+           ${hasColumn(db, 'gcodes', 'uploaded_by_user_id') ? 'g.uploaded_by_user_id' : 'NULL'} AS uploaded_by_user_id
     FROM jobs j JOIN parts pt ON pt.id = j.part_id JOIN printers p ON p.id = j.printer_id
     LEFT JOIN gcodes g ON g.id = j.gcode_id
     WHERE j.status IN ('uploading', 'printing')
@@ -134,7 +149,7 @@ function simulateFarm(db, now = Date.now()) {
     const secs = j.status === 'printing' ? j.job_time_remaining : j.est_print_secs;
     if (secs == null) { result.get(j.project_id).incomplete = true; continue; }
     const end = now + secs * 1000;
-    running.push({ partId: j.part_id, projectId: j.project_id, end });
+    running.push({ partId: j.part_id, projectId: j.project_id, uploaderId: j.uploaded_by_user_id, end });
     touch(j.project_id, end);
   }
 
@@ -148,7 +163,7 @@ function simulateFarm(db, now = Date.now()) {
     FROM parts JOIN projects ON projects.id = parts.project_id
     WHERE parts.status = 'open' AND projects.status = 'active'
   `).all();
-  const gcodeCols = ['est_print_secs', 'allowed_groups', 'required_material', 'required_color', 'approved']
+  const gcodeCols = ['est_print_secs', 'allowed_groups', 'required_material', 'required_color', 'approved', 'uploaded_by_user_id']
     .map(c => (hasColumn(db, 'gcodes', c) ? c : `NULL AS ${c}`)).join(', ');
   const gcodesStmt = db.prepare(`SELECT id, printer_model, parts_per_plate, created_at, ${gcodeCols} FROM gcodes WHERE part_id = ?`);
 
@@ -211,9 +226,10 @@ function simulateFarm(db, now = Date.now()) {
     : [item.overridden ? 0 : 1, item.project.priority, item.project.created_at, item.part.sort_order, item.part.created_at];
   const cmp = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; return 0; };
   const busyAt = (t, pred) => running.filter(r => r.end > t && pred(r)).length;
-  const atCap = (item, t) =>
-    item.project.max_concurrent_plates > 0 &&
-    busyAt(t, r => r.projectId === item.part.project_id) >= item.project.max_concurrent_plates;
+  const atCap = (g, t) => {
+    const cap = capForUploader(g.uploaded_by_user_id);
+    return cap > 0 && busyAt(t, r => r.uploaderId === g.uploaded_by_user_id) >= cap;
+  };
 
   let dispatched = 0;
   while (printers.length > 0) {
@@ -230,7 +246,7 @@ function simulateFarm(db, now = Date.now()) {
       .map(item => ({ item, g: eligible(printer, item) }))
       .filter(o => o.g)
       .sort((a, b) => cmp(orderKey(a.item, a.g), orderKey(b.item, b.g)));
-    const pick = options.find(o => o.item.overridden || !atCap(o.item, t)) || options[0];
+    const pick = options.find(o => o.item.overridden || !atCap(o.g, t)) || options[0];
     if (!pick) { printers.splice(pi, 1); continue; } // nothing it can ever print
 
     if (++dispatched > SIM_MAX_PLATES) {
@@ -239,7 +255,7 @@ function simulateFarm(db, now = Date.now()) {
     }
     const end = t + pick.g.est_print_secs * 1000;
     pick.item.remaining -= pick.g.parts_per_plate;
-    running.push({ partId: pick.item.part.id, projectId: pick.item.part.project_id, end });
+    running.push({ partId: pick.item.part.id, projectId: pick.item.part.project_id, uploaderId: pick.g.uploaded_by_user_id, end });
     touch(pick.item.part.project_id, end);
     printer.free = printer.autoAdvance ? end : nextOperatorTime(end, hours);
   }

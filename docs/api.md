@@ -120,19 +120,20 @@ Any signed-in user. Built-in groups first, then custom groups.
 
 ```json
 [{ "id": 4, "name": "Students", "role": "uploader", "can_approve": 0, "can_set_ready": 0, "can_manage_printers": 0,
-   "can_quick_print": 1, "requires_approval": 1,
+   "can_quick_print": 1, "can_delete_projects": 0, "can_cancel_active_jobs": 0, "requires_approval": 1,
+   "max_concurrent_plates": 2,
    "allowed_printer_ids": [1, 2], "allowed_printer_groups": ["Rack A"], "is_system": 0, "member_count": 3, "created_at": 1774903214349 }]
 ```
 
-`allowed_printer_ids` and `allowed_printer_groups` are `null` when unrestricted.
+`allowed_printer_ids` and `allowed_printer_groups` are `null` when unrestricted. `max_concurrent_plates` is `null` for no cap.
 
 ### `POST /api/user-groups`
 
-Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the five boolean flags (defaults follow the role), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
+Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the seven boolean flags (`can_approve`, `can_set_ready`, `can_manage_printers`, `can_quick_print`, `can_delete_projects`, `can_cancel_active_jobs`, `requires_approval`; defaults follow the role), `max_concurrent_plates` (positive integer or `null`), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
 
 ### `PUT /api/user-groups/:id`
 
-Admin only. Partial update: omitted fields are unchanged, and `null` on either printer list clears it. Changing a custom group's `role` also updates its non-admin members. `404` if not found, `409` for the Admin group, or renaming or re-roling a built-in group.
+Admin only. Partial update: omitted fields are unchanged, `null` on either printer list or on `max_concurrent_plates` clears it. Changing a custom group's `role` also updates its non-admin members. `404` if not found, `409` for the Admin group, or renaming or re-roling a built-in group.
 
 ### `DELETE /api/user-groups/:id`
 
@@ -600,11 +601,11 @@ Operator/admin only (`403` for an uploader). Body `{ "enabled": true }` or `{ "e
 
 ### `PUT /api/projects/:id`
 
-Partial update. Accepts: `name`, `description`, `status` (`draft` | `active` | `paused` | `completed`), `max_concurrent_plates`.
+Partial update. Accepts: `name`, `description`, `status` (`draft` | `active` | `paused` | `completed`).
 
 When setting `status` to `active`, the UI also calls `POST /api/scheduler/dispatch` to trigger an immediate sweep of idle printers.
 
-`max_concurrent_plates`: how many printers this project's own work may occupy at once while other eligible work is waiting (work-conserving: never leaves a printer idle just because of a cap). Present-in-body semantics: a positive integer (1-1000) sets it, `null` or `0` clears it back to unlimited, omitting the field entirely leaves it unchanged. `400` for anything else (a negative number, a non-integer). Set by whoever manages the project, not an admin Settings value: see [docs/database.md](database.md)'s `projects` table for why this replaced the earlier `max_printers_per_part`/`max_printers_per_project` settings, and the Scheduler section below for how it's enforced.
+How many printers one member's own work may occupy at once is not a project field: it's `max_concurrent_plates` on the uploader's user group (Users page, admin-only). See [docs/database.md](database.md)'s `user_groups` table and the Scheduler section below for how it's enforced.
 
 ### `PUT /api/projects/:id/filament`
 
@@ -619,6 +620,8 @@ Sets a project-wide default `allowed_groups`, applied to every G-code in the pro
 **Body:** `{ "allowed_groups": ["Rack A", "Rack B"] }`. An empty array (or omitted) clears the project default back to unrestricted.
 
 ### `DELETE /api/projects/:id`
+
+Gated by the `can_delete_projects` permission (`403` if the signed-in user's group doesn't grant it; operator and admin always have it, see [docs/auth.md](auth.md)'s User groups section). Any status may be deleted, not just `draft`: `409` only if one of the project's parts has an active (`uploading`/`printing`) job right now, wait for it to finish or cancel it first (see `DELETE /api/jobs/:id` below). Cascades to every part, G-code file, and job the project owns. `404` if not found.
 
 ---
 
@@ -856,7 +859,7 @@ Single job with same joins, including `printer_is_held` and `printer_status`. `4
 
 ### `DELETE /api/jobs/:id`
 
-Cancels a job. Returns `409` if status is not `queued` (only queued jobs can be cancelled).
+Cancels a job. A `queued` job is a plain status flip, open to anyone who can reach it: it never reached a printer. An `uploading`/`printing` job is a live print: gated by the `can_cancel_active_jobs` permission (`403` otherwise; operator and admin always have it, see [docs/auth.md](auth.md)'s User groups section). When permitted, calls the printer's driver `cancelJob` (logged, never blocks the response on a driver failure), holds the printer (`is_held = 1`) for a physical check before the next job dispatches, logs a `job_cancelled` printer event, and marks the job `cancelled` immediately rather than waiting for the next poll to notice the printer stopped. `404` if not found, `409` for any other status (`finished`/`failed`/`cancelled`: already a finished fact).
 
 ---
 

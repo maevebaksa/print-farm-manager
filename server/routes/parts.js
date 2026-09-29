@@ -41,8 +41,7 @@ module.exports = (db, scheduler = null) => {
              projects.required_material AS project_material,
              projects.required_color    AS project_color,
              projects.allowed_groups    AS project_allowed_groups,
-             projects.priority_override AS project_priority_override,
-             projects.max_concurrent_plates AS project_max_concurrent_plates
+             projects.priority_override AS project_priority_override
       FROM parts JOIN projects ON projects.id = parts.project_id
       WHERE parts.id = ?
     `).get(req.params.id);
@@ -67,25 +66,12 @@ module.exports = (db, scheduler = null) => {
       blockers.push(`Jobs already printing cover the remaining ${remaining} part(s) — waiting for them to finish`);
     }
 
-    // Per-project plate cap (projects.max_concurrent_plates, set on the project
-    // itself, not an admin setting), mirroring scheduler.js's _atPrinterCap. Not
-    // a blocker: the cap is work-conserving, so a capped project still
-    // dispatches when nothing else is waiting. Keep in sync with the scheduler
-    // (see CLAUDE.md's sync-pairs table).
     // Priority override (part or project) puts this ahead of the normal queue
-    // and exempts it from the cap, mirroring the scheduler's "overridden".
+    // and exempts it from the per-uploader plate cap below, mirroring the
+    // scheduler's "overridden".
     const overridden = part.priority_override === 1 || part.project_priority_override === 1;
     if (overridden) {
       notes.push('Priority override: dispatched ahead of the normal queue and not limited by the plate cap');
-    }
-    if (!overridden && part.project_max_concurrent_plates > 0) {
-      const n = db.prepare(`
-        SELECT COUNT(*) AS n FROM jobs JOIN parts ON parts.id = jobs.part_id
-        WHERE parts.project_id = ? AND jobs.status IN ('uploading', 'printing')
-      `).get(part.project_id).n;
-      if (n >= part.project_max_concurrent_plates) {
-        notes.push(`Project is at its plate cap (${n} of ${part.project_max_concurrent_plates} printers): other waiting work goes first, this project only gets another printer when nothing else is queued for it`);
-      }
     }
 
     const gcodes = db.prepare('SELECT * FROM gcodes WHERE part_id = ?').all(part.id);
@@ -160,6 +146,22 @@ module.exports = (db, scheduler = null) => {
       }
       groupOk.length = 0;
       groupOk.push(...restrictedOk);
+
+      // Per-uploader plate cap (user_groups.max_concurrent_plates, admin-set
+      // on the Users page), mirroring scheduler.js's _atPrinterCap. Not a
+      // blocker: work-conserving, so a capped uploader still dispatches when
+      // nothing else is waiting. An admin uploader's restrictions (above) has
+      // no cap, so this never fires for one. Keep in sync with the scheduler
+      // (see CLAUDE.md's sync-pairs table).
+      if (!overridden && restrictions && restrictions.max_concurrent_plates > 0) {
+        const n = db.prepare(`
+          SELECT COUNT(*) AS n FROM jobs JOIN gcodes ON gcodes.id = jobs.gcode_id
+          WHERE gcodes.uploaded_by_user_id = ? AND jobs.status IN ('uploading', 'printing')
+        `).get(gc.uploaded_by_user_id).n;
+        if (n >= restrictions.max_concurrent_plates) {
+          notes.push(`${gc.filename}: uploader is at their plate cap (${n} of ${restrictions.max_concurrent_plates} printers): other waiting work goes first`);
+        }
+      }
 
       // Mirrors the scheduler's candidate query (server/scheduler.js): a printer
       // qualifies if its own loaded_material/loaded_color satisfies the requirement,

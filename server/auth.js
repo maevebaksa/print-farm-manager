@@ -131,9 +131,9 @@ function clearSessionCookie(req, res) {
 // these flags for a non-admin member; admin is always fully open so the farm
 // can never lock itself out of management.
 const ROLE_PERMISSIONS = {
-  admin:    { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, requires_approval: false },
-  operator: { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, requires_approval: false },
-  uploader: { can_approve: false, can_set_ready: false, can_manage_printers: false, can_quick_print: true, requires_approval: false },
+  admin:    { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  requires_approval: false },
+  operator: { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  requires_approval: false },
+  uploader: { can_approve: false, can_set_ready: false, can_manage_printers: false, can_quick_print: true, can_delete_projects: false, can_cancel_active_jobs: false, requires_approval: false },
 };
 
 function parseJsonArray(text) {
@@ -146,7 +146,7 @@ function parseJsonArray(text) {
 // allowed_printer_groups are both null when unrestricted.
 function resolvePermissions(db, user) {
   const base = ROLE_PERMISSIONS[user.role] || ROLE_PERMISSIONS.uploader;
-  const open = { ...base, allowed_printer_ids: null, allowed_printer_groups: null, group: null };
+  const open = { ...base, max_concurrent_plates: null, allowed_printer_ids: null, allowed_printer_groups: null, group: null };
   if (user.role === 'admin' || !user.user_group_id) return open;
   const g = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(user.user_group_id);
   if (!g) return open;
@@ -155,7 +155,10 @@ function resolvePermissions(db, user) {
     can_set_ready: !!g.can_set_ready,
     can_manage_printers: !!g.can_manage_printers,
     can_quick_print: !!g.can_quick_print,
+    can_delete_projects: !!g.can_delete_projects,
+    can_cancel_active_jobs: !!g.can_cancel_active_jobs,
     requires_approval: !!g.requires_approval,
+    max_concurrent_plates: g.max_concurrent_plates ?? null,
     allowed_printer_ids: parseJsonArray(g.allowed_printer_ids),
     allowed_printer_groups: parseJsonArray(g.allowed_printer_groups),
     group: { id: g.id, name: g.name },

@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const { getDriver } = require('../drivers');
+const events = require('../events');
+const { hasPermission } = require('../auth');
 
 module.exports = (db) => {
   // GET /api/jobs: list with optional filters, joined with part/project/printer names.
@@ -67,19 +70,52 @@ module.exports = (db) => {
     res.json(job);
   });
 
-  // DELETE /api/jobs/:id — cancel a queued job only
-  router.delete('/:id', (req, res) => {
+  // DELETE /api/jobs/:id: cancel a job. A queued job is a plain DB row
+  // flip: it never reached a printer. An uploading/printing job is a live
+  // print: gated behind can_cancel_active_jobs (operator/admin always have
+  // it; an uploader only if their group grants it, see auth.js's
+  // ROLE_PERMISSIONS and resolvePermissions), since pulling back a job
+  // already running on shared hardware is a bigger deal than dropping one
+  // that hadn't started. Any other status (finished/failed/cancelled) is a
+  // finished fact, not cancellable.
+  router.delete('/:id', async (req, res) => {
     const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job not found' });
 
-    if (job.status !== 'queued') {
-      return res.status(409).json({
-        error: `Cannot cancel a job with status "${job.status}". Only queued jobs can be cancelled.`,
-      });
+    if (job.status === 'queued') {
+      db.prepare("UPDATE jobs SET status = 'cancelled' WHERE id = ?").run(job.id);
+      return res.json({ success: true });
     }
 
-    db.prepare(`UPDATE jobs SET status = 'cancelled' WHERE id = ?`).run(req.params.id);
-    res.json({ success: true });
+    if (job.status === 'uploading' || job.status === 'printing') {
+      if (!hasPermission(req.user, 'can_cancel_active_jobs')) {
+        return res.status(403).json({ error: 'Your user group cannot cancel a job that is already uploading or printing.' });
+      }
+      const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(job.printer_id);
+      if (printer) {
+        try {
+          const driver = getDriver(printer.type);
+          await driver.cancelJob(printer);
+        } catch (err) {
+          // cancelJob's own contract is "log a warning, never throw", but a
+          // completely unknown printer.type (getDriver itself) still can:
+          // the job is cancelled in our own records either way; the operator
+          // may need to stop the physical print by hand if the driver
+          // couldn't reach it.
+          console.warn(`[jobs] cancelJob failed for printer ${printer.id} (${printer.name}): ${err.message}`);
+        }
+        // Hold for operator sign-off, same as any other STOPPED printer:
+        // the plate needs a physical look before the next job dispatches.
+        db.prepare('UPDATE printers SET is_held = 1 WHERE id = ?').run(printer.id);
+        events.insert(printer.id, 'job_cancelled', `Job ${job.id} cancelled by ${req.user?.name ?? 'an operator'}`);
+      }
+      db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE id = ?").run(Date.now(), job.id);
+      return res.json({ success: true });
+    }
+
+    return res.status(409).json({
+      error: `Cannot cancel a job with status "${job.status}".`,
+    });
   });
 
   return router;

@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-09-28: plate cap moves to per-user; new can_delete_projects and can_cancel_active_jobs permissions
+
+Follow-up correction on the plate cap shipped earlier today: "user defined" was meant per-user (each member's own work, capped in their user group), not per-project. A project field let one student's cap apply only to that one project, not their other work, which didn't stop the underlying problem. Separately requested: deleting a project shouldn't be limited to `draft` status, and both project deletion and cancelling an already-uploading/printing job should be admin-configurable per user group, not hardcoded to a role.
+
+**Plate cap: `user_groups.max_concurrent_plates`, not `projects.max_concurrent_plates`.** Counts against the G-code's uploader (`gcodes.uploaded_by_user_id`), across every project/part they own, resolved through `auth.js`'s `resolvePermissions` so an admin is never capped even if their group somehow has a value set. `projects.max_concurrent_plates` is now unused (additive-only schema: the column stays, nothing reads or writes it). `PUT /api/projects/:id` no longer accepts the field; the Projects page's per-project input is gone. Enforced in `server/scheduler.js`'s `_atPrinterCap`, mirrored in `GET /api/parts/:id/dispatch-status` and `server/project-eta.js`'s simulation, same sync-pairs discipline as before, just re-pointed at the uploader instead of the project.
+
+**`can_delete_projects`:** `DELETE /api/projects/:id` now works on any project status (not just `draft`), refused only while a part has an active `uploading`/`printing` job, same safety line part deletion already draws. Gated by this new per-group permission (defaults: on for operator/admin, off for uploader). The Projects page's status dropdown now offers "Delete project" regardless of status, hidden entirely when the signed-in user's group lacks the permission.
+
+**`can_cancel_active_jobs`:** `DELETE /api/jobs/:id` now also accepts an `uploading`/`printing` job (previously `queued` only), gated by this new permission (same role defaults). When cancelled, calls the printer's driver `cancelJob`, holds the printer for a physical check, logs a `job_cancelled` event, and marks the job cancelled immediately rather than waiting for the poller to notice the printer stopped. The Jobs page's Cancel button now appears on active rows too, for whoever has the permission, with a confirm dialog that says what it actually does (stops the print now).
+
+Hardware validation: `cancelJob` itself was already implemented and tested per-driver in an earlier session; this is its first real caller anywhere in the app, so the wiring (permission check, printer lookup, hold, event log) is new and unvalidated against a live print, though the contract (`cancelJob` never throws, logs a warning instead) makes the failure mode a warning in the server log plus a printer the operator needs to stop by hand, not a crash. Could not run the test suite locally, this machine's `better-sqlite3` native binding still fails to load (disclosed all session); `node --check` on every changed file and `npm run build` both pass.
+
+### Changes
+- `server/db.js`: `user_groups` gains `max_concurrent_plates`, `can_delete_projects`, `can_cancel_active_jobs` (the last two backfilled to 1 for existing operator/admin groups on the boot that adds them, never again after).
+- `server/auth.js`: `ROLE_PERMISSIONS` and `resolvePermissions` gain the three new fields.
+- `server/scheduler.js`: `_atPrinterCap` and `_queuePolicy`'s `capsActive` re-pointed from `projects.max_concurrent_plates` to the uploader's resolved permission.
+- `server/routes/parts.js`: `GET /:id/dispatch-status`'s cap mirror moved into the per-gcode loop (the cap is now per-gcode's uploader, not per-part's project), reusing the same `resolvePermissions` call already made for the allowed-printer check.
+- `server/project-eta.js`: the completion-estimate simulation's cap check re-pointed the same way, with a per-uploader cap cache.
+- `server/routes/projects.js`: `PUT /:id` no longer accepts `max_concurrent_plates`; `DELETE /:id` relaxed to any status (blocked only by an active job) and gated by `can_delete_projects`.
+- `server/routes/jobs.js`: `DELETE /:id` accepts `uploading`/`printing`, gated by `can_cancel_active_jobs`, calling the driver and holding the printer.
+- `server/routes/user-groups.js`: `max_concurrent_plates`, `can_delete_projects`, `can_cancel_active_jobs` added to create/update.
+- `client/src/components/UserGroups.jsx`: the plate-cap input and two new flag checkboxes.
+- `server/tests/`: `scheduler-queue-policy.test.js`, `dispatch-status.test.js`, `project-eta.test.js` rewritten for the per-uploader cap; `rename.test.js`, `scheduler-file.test.js`, `scheduler-sweep.test.js`, `scheduler-targeting.test.js` had the now-unused `projects.max_concurrent_plates` test column removed; `projects-max-plates.test.js` deleted (tested a field that no longer exists on the route).
+- `docs/database.md`, `docs/api.md`, `docs/auth.md`, `docs/web-app.md`: documented the moved cap and the two new permissions.
+
+---
+
 ## 2026-09-28: fix CI: missing-file dispatch notified twice, not once
 
 CI still failed after the previous fix (50d3777): `scheduler-file.test.js`'s GCODE_MISSING tests expected `notifications.add` exactly once but got two calls. Cause: switching the per-project plate cap to always run both the capped and uncapped dispatch passes (`for (const respectCaps of [true, false])`, unconditionally, in the earlier commit) meant a printer with no capped work anywhere still walked the same missing-file candidate twice, once per pass, notifying twice. The old settings-based cap had a `capsActive` guard that skipped the second pass entirely when no cap was configured; that guard was dropped when the cap moved off a single global setting, since "is any cap configured" was no longer a single value to check.

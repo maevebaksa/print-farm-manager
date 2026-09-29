@@ -15,7 +15,6 @@ beforeEach(() => {
   db.exec(`
     CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL, status TEXT DEFAULT 'active',
       priority INTEGER DEFAULT 0, allowed_groups TEXT, required_material TEXT, required_color TEXT,
-      max_concurrent_plates INTEGER,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE parts (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL,
       target_qty INTEGER NOT NULL, completed_qty INTEGER DEFAULT 0, status TEXT DEFAULT 'open', sort_order INTEGER DEFAULT 0,
@@ -23,7 +22,9 @@ beforeEach(() => {
     CREATE TABLE gcodes (id INTEGER PRIMARY KEY, part_id INTEGER NOT NULL, printer_model TEXT NOT NULL,
       filename TEXT NOT NULL, filepath TEXT NOT NULL, parts_per_plate INTEGER NOT NULL, est_print_secs INTEGER,
       allowed_groups TEXT, required_material TEXT, required_color TEXT, approved INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL);
+      uploaded_by_user_id INTEGER, created_at INTEGER NOT NULL);
+    CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT NOT NULL DEFAULT 'uploader', user_group_id INTEGER);
+    CREATE TABLE user_groups (id INTEGER PRIMARY KEY, max_concurrent_plates INTEGER, allowed_printer_ids TEXT, allowed_printer_groups TEXT);
     CREATE TABLE printers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, model TEXT NOT NULL, status TEXT DEFAULT 'IDLE',
       is_held INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, job_time_remaining INTEGER, group_name TEXT,
       loaded_material TEXT, loaded_color TEXT, auto_advance INTEGER DEFAULT 0);
@@ -36,17 +37,22 @@ beforeEach(() => {
 
 const set = (k, v) => db.prepare('INSERT OR REPLACE INTO settings VALUES (?, ?)').run(k, String(v));
 
-function project({ priority = 0, created = 1, override = 0, maxConcurrentPlates = null } = {}) {
-  return db.prepare('INSERT INTO projects (name, priority, created_at, updated_at, priority_override, max_concurrent_plates) VALUES (?, ?, ?, ?, ?, ?)')
-    .run('P', priority, created, created, override, maxConcurrentPlates).lastInsertRowid;
+function project({ priority = 0, created = 1, override = 0 } = {}) {
+  return db.prepare('INSERT INTO projects (name, priority, created_at, updated_at, priority_override) VALUES (?, ?, ?, ?, ?)')
+    .run('P', priority, created, created, override).lastInsertRowid;
 }
 function part(projectId, { target, completed = 0, status = 'open' }) {
   return db.prepare('INSERT INTO parts (project_id, name, target_qty, completed_qty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1)')
     .run(projectId, 'Part', target, completed, status).lastInsertRowid;
 }
-function gcode(partId, { model = 'mk4s', ppp = 1, secs = 3600, uploaded = 1 } = {}) {
-  return db.prepare('INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(partId, model, 'f.gcode', 'f.gcode', ppp, secs, uploaded).lastInsertRowid;
+function gcode(partId, { model = 'mk4s', ppp = 1, secs = 3600, uploaded = 1, uploaderId = null } = {}) {
+  return db.prepare('INSERT INTO gcodes (part_id, printer_model, filename, filepath, parts_per_plate, est_print_secs, uploaded_by_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(partId, model, 'f.gcode', 'f.gcode', ppp, secs, uploaderId, uploaded).lastInsertRowid;
+}
+// A user in a fresh user_group with the given plate cap (null = no cap).
+function user(maxConcurrentPlates = null) {
+  const groupId = db.prepare('INSERT INTO user_groups (max_concurrent_plates) VALUES (?)').run(maxConcurrentPlates).lastInsertRowid;
+  return db.prepare("INSERT INTO users (role, user_group_id) VALUES ('uploader', ?)").run(groupId).lastInsertRowid;
 }
 function printer({ model = 'mk4s', status = 'IDLE', held = 0, remaining = null, active = 1, autoAdvance = 0 } = {}) {
   return db.prepare('INSERT INTO printers (name, model, status, is_held, is_active, job_time_remaining, auto_advance) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -146,8 +152,9 @@ describe('queue ahead of the project', () => {
     expect(eta(b).remaining_seconds).toBe(3600);
   });
 
-  test('a project plate cap spreads printers across projects', () => {
-    const a = project({ priority: 0, maxConcurrentPlates: 1 }); gcode(part(a, { target: 2 }));
+  test("an uploader's plate cap spreads printers across their projects", () => {
+    const capped = user(1);
+    const a = project({ priority: 0 }); gcode(part(a, { target: 2 }), { uploaderId: capped });
     const b = project({ priority: 1 }); gcode(part(b, { target: 2 }));
     printer(); printer();
     expect(eta(a).remaining_seconds).toBe(2 * 3600);

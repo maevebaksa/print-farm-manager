@@ -575,14 +575,43 @@ try {
 // scheduler's candidate query and mirrored in GET /api/parts/:id/dispatch-status.
 try { db.exec('ALTER TABLE gcodes ADD COLUMN target_printer_id INTEGER'); } catch (_) {}
 
-// How many printers this project's own work may occupy at once. NULL/0 =
-// unlimited (the default). Set by whoever manages the project itself (PUT
-// /api/projects/:id), not an admin-wide Settings value: replaces the earlier
-// admin-only max_printers_per_part/max_printers_per_project settings, which
-// caused one large upload to tie up every printer on a shared academic farm
-// and, being a flat size limit rather than a concurrency limit, discouraged
-// students from batching multiple parts onto one plate. Enforced in the
-// scheduler's candidate walk (server/scheduler.js's _atPrinterCap).
+// Superseded by user_groups.max_concurrent_plates below: an early version of
+// this feature capped one project's own concurrency, but a shared academic
+// farm needed the cap to follow the person uploading, not whichever project
+// they happened to file it under. Column kept (additive-only schema), never
+// read or written.
 try { db.exec('ALTER TABLE projects ADD COLUMN max_concurrent_plates INTEGER'); } catch (_) {}
+
+// How many printers one member's own work may occupy at once, across every
+// project/part they own. NULL/0 = unlimited (the default, and always the
+// case for an admin regardless of this column: see auth.js's
+// resolvePermissions). Admin-only to set (Users page, same as every other
+// user_groups flag). Enforced in the scheduler's candidate walk
+// (server/scheduler.js's _atPrinterCap) so one student can't tie up the
+// whole farm, without capping how many parts fit on one plate.
+try { db.exec('ALTER TABLE user_groups ADD COLUMN max_concurrent_plates INTEGER'); } catch (_) {}
+
+// Two more per-group permission flags, same convention as can_approve etc.
+// above: 0/1, admin-only to set, role defaults in auth.js's ROLE_PERMISSIONS
+// (operator and admin both start true, uploader false).
+// can_delete_projects: DELETE /api/projects/:id.
+// can_cancel_active_jobs: DELETE /api/jobs/:id for a job already
+// uploading/printing (queued jobs can always be cancelled by anyone with
+// project access; this only gates pulling back a live print).
+// Existing operator/admin system groups (and any pre-existing operator-based
+// custom group) should not retroactively lose an ability the role always had
+// before these flags existed, so the one-time backfill to 1 runs in the same
+// try block as the ALTER TABLE: only on the boot that actually adds the
+// column, never again afterward (so it can't undo an admin later turning a
+// flag off for a specific operator group). Uploader groups keep the new
+// column default (0), matching ROLE_PERMISSIONS.uploader.
+try {
+  db.exec('ALTER TABLE user_groups ADD COLUMN can_delete_projects INTEGER NOT NULL DEFAULT 0');
+  db.exec("UPDATE user_groups SET can_delete_projects = 1 WHERE role IN ('admin', 'operator')");
+} catch (_) {}
+try {
+  db.exec('ALTER TABLE user_groups ADD COLUMN can_cancel_active_jobs INTEGER NOT NULL DEFAULT 0');
+  db.exec("UPDATE user_groups SET can_cancel_active_jobs = 1 WHERE role IN ('admin', 'operator')");
+} catch (_) {}
 
 module.exports = db;

@@ -25,6 +25,18 @@ function present(row) {
   };
 }
 
+// max_concurrent_plates: how many printers one member's own work may occupy
+// at once (server/scheduler.js's _atPrinterCap). undefined = leave alone;
+// null/0/'' = unlimited. Returns { error } on a bad value.
+function parsePlateCap(body) {
+  if (!('max_concurrent_plates' in body)) return { skip: true };
+  const v = body.max_concurrent_plates;
+  if (v === null || v === '' || v === 0) return { value: null };
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) return { error: 'max_concurrent_plates must be a positive integer or null' };
+  return { value: n };
+}
+
 // Normalizes the two allowed lists from a request body. undefined = leave
 // alone; null or an empty array = unrestricted. Returns { error } on bad input.
 function normalizeLists(db, body) {
@@ -69,6 +81,8 @@ module.exports = (db) => {
     }
     const lists = normalizeLists(db, body);
     if (lists.error) return res.status(400).json({ error: lists.error });
+    const cap = parsePlateCap(body);
+    if (cap.error) return res.status(400).json({ error: cap.error });
     if (db.prepare('SELECT 1 FROM user_groups WHERE name = ? COLLATE NOCASE').get(name)) {
       return res.status(409).json({ error: `A user group named "${name}" already exists` });
     }
@@ -77,11 +91,13 @@ module.exports = (db) => {
     const flag = (k) => (k in body ? (body[k] ? 1 : 0) : (defaults[k] ? 1 : 0));
     const result = db.prepare(`
       INSERT INTO user_groups (name, role, can_approve, can_set_ready, can_manage_printers, can_quick_print,
-                               requires_approval, allowed_printer_ids, allowed_printer_groups,
+                               can_delete_projects, can_cancel_active_jobs,
+                               requires_approval, max_concurrent_plates, allowed_printer_ids, allowed_printer_groups,
                                is_system, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     `).run(name, role, flag('can_approve'), flag('can_set_ready'), flag('can_manage_printers'), flag('can_quick_print'),
-           flag('requires_approval'), lists.ids ?? null, lists.groups ?? null, Date.now());
+           flag('can_delete_projects'), flag('can_cancel_active_jobs'),
+           flag('requires_approval'), cap.value ?? null, lists.ids ?? null, lists.groups ?? null, Date.now());
     res.status(201).json(present(db.prepare(`${withMembers} WHERE g.id = ?`).get(result.lastInsertRowid)));
   });
 
@@ -111,17 +127,22 @@ module.exports = (db) => {
     }
     const lists = normalizeLists(db, body);
     if (lists.error) return res.status(400).json({ error: lists.error });
+    const cap = parsePlateCap(body);
+    if (cap.error) return res.status(400).json({ error: cap.error });
 
     const flag = (k) => (k in body ? (body[k] ? 1 : 0) : group[k]);
     db.transaction(() => {
       db.prepare(`
         UPDATE user_groups
         SET name = ?, role = ?, can_approve = ?, can_set_ready = ?, can_manage_printers = ?,
-            can_quick_print = ?, requires_approval = ?,
+            can_quick_print = ?, can_delete_projects = ?, can_cancel_active_jobs = ?,
+            requires_approval = ?, max_concurrent_plates = ?,
             allowed_printer_ids = ?, allowed_printer_groups = ?
         WHERE id = ?
       `).run(name, role, flag('can_approve'), flag('can_set_ready'), flag('can_manage_printers'),
-             flag('can_quick_print'), flag('requires_approval'),
+             flag('can_quick_print'), flag('can_delete_projects'), flag('can_cancel_active_jobs'),
+             flag('requires_approval'),
+             cap.skip ? group.max_concurrent_plates : cap.value,
              'ids' in lists ? lists.ids : group.allowed_printer_ids,
              'groups' in lists ? lists.groups : group.allowed_printer_groups,
              group.id);
