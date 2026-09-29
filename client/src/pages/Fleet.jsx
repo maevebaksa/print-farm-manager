@@ -9,7 +9,6 @@ import { buildColorHexMap } from '../filamentColorHex';
 import ColorSwatch from '../components/ColorSwatch';
 import usePinnedPrinters from '../usePinnedPrinters';
 import { useAuth } from '../AuthContext';
-import QuickPrint from '../components/QuickPrint';
 
 // Widest a single model's chip is allowed to grow before wrapping its own
 // printers onto another row within the same chip, rather than stretching the
@@ -892,7 +891,6 @@ export default function Fleet() {
           <PollTimer lastPolled={lastPolled} intervalMs={15000} />
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <QuickPrint />
           {canManagePrinters && <button
             onClick={toggleBulkEditMode}
             title="Select printers to set their loaded material, color, or group all at once"

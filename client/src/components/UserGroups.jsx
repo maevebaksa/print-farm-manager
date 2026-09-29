@@ -12,20 +12,26 @@ const FLAG_LABELS = [
   ['can_set_ready', 'Can Set Ready (confirm finished prints)'],
   ['can_approve', 'Can approve accounts and G-code'],
   ['can_manage_printers', 'Can add, edit, and remove printers'],
+  ['can_delete_projects', 'Can delete projects'],
+  ['can_cancel_active_jobs', 'Can cancel a job that is already uploading or printing'],
   ['requires_approval', 'Uploads need operator approval first'],
 ];
 
 const EMPTY = {
   name: '', role: 'uploader',
-  can_quick_print: true, can_set_ready: false, can_approve: false, can_manage_printers: false, requires_approval: false,
-  restrict: false, allowed_printer_ids: [], allowed_printer_groups: [],
+  can_quick_print: true, can_set_ready: false, can_approve: false, can_manage_printers: false,
+  can_delete_projects: false, can_cancel_active_jobs: false, requires_approval: false,
+  max_concurrent_plates: '', restrict: false, allowed_printer_ids: [], allowed_printer_groups: [],
 };
 
 function toForm(g) {
   return {
     name: g.name, role: g.role,
     can_quick_print: !!g.can_quick_print, can_set_ready: !!g.can_set_ready, can_approve: !!g.can_approve,
-    can_manage_printers: !!g.can_manage_printers, requires_approval: !!g.requires_approval,
+    can_manage_printers: !!g.can_manage_printers,
+    can_delete_projects: !!g.can_delete_projects, can_cancel_active_jobs: !!g.can_cancel_active_jobs,
+    requires_approval: !!g.requires_approval,
+    max_concurrent_plates: g.max_concurrent_plates ?? '',
     restrict: !!(g.allowed_printer_ids || g.allowed_printer_groups),
     allowed_printer_ids: g.allowed_printer_ids || [],
     allowed_printer_groups: g.allowed_printer_groups || [],
@@ -38,8 +44,11 @@ function summary(g) {
   if (g.can_set_ready) bits.push('Set Ready');
   if (g.can_approve) bits.push('approvals');
   if (g.can_manage_printers) bits.push('printer admin');
+  if (g.can_delete_projects) bits.push('can delete projects');
+  if (g.can_cancel_active_jobs) bits.push('can cancel active jobs');
   if (!g.can_quick_print) bits.push('no Quick Print');
   if (g.requires_approval) bits.push('uploads need approval');
+  if (g.max_concurrent_plates) bits.push(`max ${g.max_concurrent_plates} printers/member at once`);
   const n = (g.allowed_printer_ids || []).length + (g.allowed_printer_groups || []).length;
   bits.push(n ? 'limited printers' : 'all printers');
   return bits.join(', ');
@@ -78,7 +87,10 @@ export default function UserGroups({ groups, onChanged }) {
     try {
       const payload = {
         can_quick_print: form.can_quick_print, can_set_ready: form.can_set_ready, can_approve: form.can_approve,
-        can_manage_printers: form.can_manage_printers, requires_approval: form.requires_approval,
+        can_manage_printers: form.can_manage_printers,
+        can_delete_projects: form.can_delete_projects, can_cancel_active_jobs: form.can_cancel_active_jobs,
+        requires_approval: form.requires_approval,
+        max_concurrent_plates: form.max_concurrent_plates === '' ? null : Number(form.max_concurrent_plates),
         allowed_printer_ids: form.restrict ? form.allowed_printer_ids : null,
         allowed_printer_groups: form.restrict ? form.allowed_printer_groups : null,
       };
@@ -173,7 +185,16 @@ export default function UserGroups({ groups, onChanged }) {
                 {label}
               </label>
             ))}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#cbd5e1' }}>
+              Max printers per member at once
+              <input type="number" min={1} placeholder="no limit" value={form.max_concurrent_plates}
+                onChange={e => setForm(f => ({ ...f, max_concurrent_plates: e.target.value }))} style={{ ...inputStyle, width: 100 }} />
+            </label>
           </div>
+          <p style={{ fontSize: 11, color: '#64748b', margin: '-6px 0 12px' }}>
+            Caps how many printers one member's own work may occupy at once across all their projects, so one
+            person can't tie up the whole farm. Never applies to an admin. Blank means no cap.
+          </p>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, color: '#e2e8f0', fontWeight: 600, cursor: 'pointer', marginBottom: 8 }}>
             <input type="checkbox" checked={form.restrict} onChange={e => setForm(f => ({ ...f, restrict: e.target.checked }))} style={{ accentColor: '#3b82f6' }} />

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useConfirm } from '../useConfirm';
+import { useToast } from '../useToast';
 import EmptyState from '../components/EmptyState';
 import GcodeThumbnail from '../components/GcodeThumbnail';
-import QuickPrint from '../components/QuickPrint';
+import { useAuth } from '../AuthContext';
 
 // Colors match the Fleet page conventions: blue = printing, green = done.
 // Cancelled gets a line-through as a non-color cue against Queued.
@@ -71,7 +72,12 @@ const selectSx = {
 };
 
 export default function Jobs() {
+  const { user } = useAuth();
+  // Same admin/operator bar as PUT .../priority-override: pulling back a job
+  // already running on shared hardware, not one that hadn't started yet.
+  const canCancelActive = user?.permissions?.can_cancel_active_jobs ?? (user?.role === 'admin' || user?.role === 'operator');
   const [confirm, confirmModal]   = useConfirm();
+  const [showToast, toastEl]      = useToast();
   const [jobs, setJobs]           = useState([]);
   const [loading, setLoading]     = useState(true);
   const [projects, setProjects]   = useState([]);
@@ -120,25 +126,30 @@ export default function Jobs() {
     return () => clearInterval(interval);
   }, [fetchJobs]);
 
-  async function cancelJob(jobId) {
+  async function cancelJob(job) {
+    const active = job.status === 'uploading' || job.status === 'printing';
     const ok = await confirm({
       title: 'Cancel Job',
-      message: 'Remove this job from the queue?',
+      message: active
+        ? 'This will stop the print on the printer right now and hold it for you to check the plate. This cannot be undone.'
+        : 'Remove this job from the queue?',
       confirmLabel: 'Cancel Job',
       danger: true,
     });
     if (!ok) return;
-    await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    const res = await fetch(`/api/jobs/${job.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showToast('Cancel failed: ' + (body.error || res.status), 'error');
+    }
     fetchJobs();
   }
 
   return (
     <div>
       {confirmModal}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Job Queue</h1>
-        <QuickPrint onQueued={fetchJobs} />
-      </div>
+      {toastEl}
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 16 }}>Job Queue</h1>
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16, alignItems: 'center' }}>
@@ -214,9 +225,9 @@ export default function Jobs() {
                     {formatTime(job.started_at)}
                     {job.started_at && <> · {formatDuration(job.started_at, job.finished_at || null)}</>}
                   </span>
-                  {job.status === 'queued' && (
+                  {(job.status === 'queued' || ((job.status === 'uploading' || job.status === 'printing') && canCancelActive)) && (
                     <button
-                      onClick={() => cancelJob(job.id)}
+                      onClick={() => cancelJob(job)}
                       style={{ background: '#7f1d1d', color: '#f87171', border: 'none', borderRadius: 4, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
                     >
                       Cancel
@@ -289,9 +300,9 @@ export default function Jobs() {
                         : '—'}
                     </td>
                     <td style={{ padding: '8px 10px' }}>
-                      {job.status === 'queued' && (
+                      {(job.status === 'queued' || ((job.status === 'uploading' || job.status === 'printing') && canCancelActive)) && (
                         <button
-                          onClick={() => cancelJob(job.id)}
+                          onClick={() => cancelJob(job)}
                           style={{
                             background: '#7f1d1d', color: '#f87171', border: 'none',
                             borderRadius: 4, padding: '3px 10px', fontSize: 12,

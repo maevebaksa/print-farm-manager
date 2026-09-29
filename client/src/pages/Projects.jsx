@@ -6,6 +6,7 @@ import EmptyState from '../components/EmptyState';
 import { useConfirm } from '../useConfirm';
 import GcodeUploadWizard from '../components/GcodeUploadWizard';
 import GcodeThumbnail from '../components/GcodeThumbnail';
+import QuickPrint from '../components/QuickPrint';
 import { useAuth } from '../AuthContext';
 
 // ── Estimate helpers ──────────────────────────────────────────────────────────
@@ -68,14 +69,17 @@ const SHOW_COMPLETED_KEY = 'projects.showCompleted';
 // Dropdown options per project status.
 // 'action' is either a status string ('active', 'paused') or a special verb ('complete', 'reactivate').
 const STATUS_MENU = {
-  draft:     [{ label: 'Activate',        action: 'active' },
-              { label: 'Delete project',  action: 'delete', danger: true }],
+  draft:     [{ label: 'Activate',        action: 'active' }],
   active:    [{ label: 'Pause project',   action: 'paused' },
               { label: 'Mark complete',   action: 'complete', danger: true }],
   paused:    [{ label: 'Resume project',  action: 'active' },
               { label: 'Mark complete',   action: 'complete', danger: true }],
   completed: [{ label: 'Re-activate',     action: 'reactivate' }],
 };
+// Delete is appended to every status's menu (not just draft: server/routes/projects.js
+// allows deleting any status, refusing only an active uploading/printing job), gated
+// by canDelete (can_delete_projects, see auth.js's ROLE_PERMISSIONS), not by status.
+const DELETE_OPTION = { label: 'Delete project', action: 'delete', danger: true };
 
 // Row-reorder drag helpers, shared by the project list and part list rows.
 // Firefox refuses to start an HTML5 drag unless dragstart puts some data on
@@ -115,7 +119,7 @@ function PriorityOverride({ on, canToggle, onToggle }) {
   );
 }
 
-function StatusDropdown({ project, onTransition }) {
+function StatusDropdown({ project, onTransition, canDelete }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -128,7 +132,7 @@ function StatusDropdown({ project, onTransition }) {
   }, []);
 
   const meta    = PROJECT_STATUS[project.status] || PROJECT_STATUS.draft;
-  const options = STATUS_MENU[project.status] || [];
+  const options = canDelete ? [...(STATUS_MENU[project.status] || []), DELETE_OPTION] : (STATUS_MENU[project.status] || []);
 
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
@@ -999,6 +1003,7 @@ export default function Projects() {
   // Same admin-or-operator bar as POST /api/gcodes/:id/approve itself: day-to-day
   // review work, not a permissions change.
   const canApprove                        = user.permissions?.can_approve ?? (user.role === 'admin' || user.role === 'operator');
+  const canDeleteProjects                 = user.permissions?.can_delete_projects ?? (user.role === 'admin' || user.role === 'operator');
   const [showToast, toastEl]              = useToast();
   const [confirm, confirmModal]           = useConfirm();
   const [projects, setProjects]           = useState([]);
@@ -1449,28 +1454,6 @@ export default function Projects() {
     await fetchDetail(detailProject.id);
   }
 
-  // Per-project cap on how many printers this project's own work may occupy at
-  // once (server/scheduler.js's _atPrinterCap). Set by whoever manages the
-  // project, not an admin Settings value.
-  async function saveProjectMaxPlates(raw) {
-    const trimmed = String(raw).trim();
-    if (trimmed !== '' && (!/^\d+$/.test(trimmed) || Number(trimmed) < 1)) {
-      showToast('Max concurrent plates must be a positive whole number', 'error');
-      return;
-    }
-    const res = await fetch(`/api/projects/${detailProject.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ max_concurrent_plates: trimmed === '' ? null : Number(trimmed) }),
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      showToast('Save failed: ' + (body.error || res.status), 'error');
-      return;
-    }
-    await fetchDetail(detailProject.id);
-  }
-
   async function saveProjectGroups(groups) {
     await fetch(`/api/projects/${detailProject.id}/groups`, {
       method: 'PUT',
@@ -1611,6 +1594,7 @@ export default function Projects() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h1 style={{ fontSize: 22, fontWeight: 700 }}>Projects</h1>
           <div style={{ display: 'flex', gap: 8 }}>
+            <QuickPrint onQueued={fetchProjects} />
             <button
               onClick={() => setWizardOpen(true)}
               title="Or just drag a G-code file anywhere on this page"
@@ -1861,7 +1845,7 @@ export default function Projects() {
             >✎</button>
           </>
         )}
-        <StatusDropdown project={detailProject} onTransition={handleStatusTransition} />
+        <StatusDropdown project={detailProject} onTransition={handleStatusTransition} canDelete={canDeleteProjects} />
         <PriorityOverride
           on={detailProject.priority_override === 1}
           canToggle={canApprove}
@@ -1945,26 +1929,6 @@ export default function Projects() {
         </div>
       )}
 
-      {/* Per-project plate concurrency cap: how many printers this project's own
-          work may occupy at once, so one project can't tie up the whole farm
-          while other work waits. Unlike an upload-size limit, this never
-          penalizes batching many parts onto one plate. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: '#64748b', flexShrink: 0 }}>Max concurrent plates:</span>
-        <input
-          key={detailProject.id}
-          type="number"
-          min={1}
-          placeholder="no limit"
-          defaultValue={detailProject.max_concurrent_plates ?? ''}
-          onBlur={e => saveProjectMaxPlates(e.target.value)}
-          style={{ ...inputSx, fontSize: 12, width: 90 }}
-        />
-        <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>
-          how many printers this project may use at once; leave blank for no cap
-        </span>
-      </div>
-
       {/* Parts */}
       <h2 style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>
         Parts
@@ -2014,13 +1978,15 @@ export default function Projects() {
                   style={{ color: '#334155', fontSize: 16, cursor: 'grab', flexShrink: 0, userSelect: 'none', lineHeight: 1 }}
                 >⠿</span>
                 <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontWeight: 600, fontSize: 14 }}>{part.name}</span>
-                    <PriorityOverride
-                      on={part.priority_override === 1}
-                      canToggle={canApprove}
-                      onToggle={(v) => setPriorityOverride('parts', part.id, v)}
-                    />
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span title={part.name} style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{part.name}</span>
+                    <span style={{ flexShrink: 0 }}>
+                      <PriorityOverride
+                        on={part.priority_override === 1}
+                        canToggle={canApprove}
+                        onToggle={(v) => setPriorityOverride('parts', part.id, v)}
+                      />
+                    </span>
                   </span>
                   {/* Who added this part (parts.created_by_name, a snapshot taken at
                       creation). Absent on parts that predate user tracking. */}

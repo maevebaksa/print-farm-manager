@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-09-28: client for the new permissions; Quick Print moves to Projects; Parts row overflow fix
+
+Three client-side changes landing together: the admin UI for the two permission flags and the plate cap from the previous entry (that entry's own change list named `UserGroups.jsx` one commit early; it actually lands here), Quick Print's home page, and an unrelated layout bug.
+
+**User Groups editor:** a "Max printers per member at once" number input and two new checkboxes ("Can delete projects", "Can cancel a job that is already uploading or printing"), matching `server/routes/user-groups.js`'s fields from the previous entry.
+
+**Quick Print moves to the Projects page only.** It was on Fleet, then also added to Jobs earlier today; on reflection it belongs with the rest of project/part management, not scattered across pages that don't otherwise manage uploads. Fleet and Jobs both lose the button; Projects gains it in its header, next to "+ Upload G-code".
+
+**Delete project and Cancel (active job) buttons.** The Projects page's status dropdown now offers "Delete project" for any status (not just draft), and the Jobs page's Cancel button now also appears on `uploading`/`printing` rows; both hidden entirely when the signed-in user's group lacks the matching permission (`can_delete_projects`, `can_cancel_active_jobs`), and both server-enforced regardless of what the client shows.
+
+**Parts row overflow, reported with a screenshot:** a part name derived from a long G-code filename overlapped the printing/priority badges next to it, since the name span had no truncation, unlike the equivalent project-name row which already handled this correctly. Same fix: `overflow: hidden`, `textOverflow: ellipsis`, `minWidth: 0` on the containing flex row, plus a `title` tooltip for the full name.
+
+Client-only change: `npm run build` succeeds. Could not verify any of this in a live browser, this session's dev server needs `better-sqlite3` to start and that native binding still fails to load on this machine (same limitation disclosed all session).
+
+### Changes
+- `client/src/components/UserGroups.jsx`: plate-cap input, two new permission checkboxes.
+- `client/src/pages/Fleet.jsx`, `client/src/pages/Jobs.jsx`: Quick Print button removed.
+- `client/src/pages/Projects.jsx`: Quick Print button added to the header; "Delete project" added to the status dropdown for every status, gated by `can_delete_projects`; the old per-project plate-cap input removed; the Parts row's name span given proper truncation.
+- `client/src/pages/Jobs.jsx`: Cancel button also shown on active rows for a user with `can_cancel_active_jobs`, with a confirm message describing what it actually does; a toast (new `useToast` instance, rendered) surfaces a cancel failure.
+
+---
+
 ## 2026-09-28: plate cap moves to per-user; new can_delete_projects and can_cancel_active_jobs permissions
 
 Follow-up correction on the plate cap shipped earlier today: "user defined" was meant per-user (each member's own work, capped in their user group), not per-project. A project field let one student's cap apply only to that one project, not their other work, which didn't stop the underlying problem. Separately requested: deleting a project shouldn't be limited to `draft` status, and both project deletion and cancelling an already-uploading/printing job should be admin-configurable per user group, not hardcoded to a role.
