@@ -127,8 +127,8 @@ export default function Login({ forceLocal = false }) {
           </label>
         )}
         <label style={labelStyle}>
-          Email
-          <input type="email" autoFocus={!status.needsBootstrap} value={email} onChange={e => setEmail(e.target.value)} disabled={submitting} style={inputStyle} required />
+          Username or email
+          <input type="text" autoComplete="username" autoCapitalize="none" spellCheck={false} autoFocus={!status.needsBootstrap} value={email} onChange={e => setEmail(e.target.value)} disabled={submitting} style={inputStyle} required />
         </label>
         <label style={labelStyle}>
           Password

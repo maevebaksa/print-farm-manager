@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-09-29: sign in with a username or an email
+
+The login and create-user forms insisted on an email (`type="email"` rejected anything without an `@`). The server never validated the format, so only the two forms changed: the field is now "Username or email" and accepts any text. The `users.email` column keeps its name (additive-only schema); it simply holds whichever identifier the account was created with, trimmed and lowercased as before. SSO is unaffected: OIDC sign-in never uses this field, and its existing-account linking still matches the IdP's email claim against `users.email`, so a username without an `@` can never be linked to by an IdP login. Admin-created usernames that do contain an `@` still could, same as an email account today. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load).
+
+### Changes
+- `client/src/pages/Login.jsx`, `client/src/pages/Users.jsx`: text input labeled "Username or email".
+- `server/routes/auth.js`: error messages say "username/email".
+- `server/tests/auth-routes.test.js`: login with a non-email username.
+
+---
+
 ## 2026-09-29: cancelling a job asks why: print failed (requeue) or bad G-code (permanent)
 
 Cancelling a job used to do one thing, and the part simply went back in line. Now the operator says why. **Print failed, requeue** is the old behavior (job cancelled, part stays open, scheduler sends it out again). **Bad G-code, cancel permanently** also clears `gcodes.approved` on the job's G-code, which the scheduler's candidate query and `GET /api/parts/:id/dispatch-status` already treat as "not dispatchable", so no schema change and no sync-pair drift; an operator with `can_approve` can approve it again to undo. `DELETE /api/jobs/:id` takes `?reason=failed|bad_gcode` (default `failed`, so existing callers are unchanged; anything else is 400). Neither path touches `completed_qty`, and the active-print path still holds the printer for a physical check. Caveat: a bad G-code shows up as "awaiting approval" in the UI, since that is the flag it reuses. Hardware validation: not applicable to the reason handling; the underlying `cancelJob` driver call is unchanged and still unvalidated against a live print. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load).

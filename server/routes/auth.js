@@ -74,12 +74,12 @@ module.exports = (db) => {
   router.post('/login', (req, res) => {
     const { email, password } = req.body || {};
     if (!email || !password) {
-      return res.status(400).json({ error: 'email and password are required' });
+      return res.status(400).json({ error: 'username/email and password are required' });
     }
     auth.pruneExpiredSessions(db);
     const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim().toLowerCase());
     if (!user || !auth.verifyPassword(password, user.password_hash)) {
-      return res.status(401).json({ error: 'Invalid email or password' });
+      return res.status(401).json({ error: 'Invalid username/email or password' });
     }
     if (!user.approved) {
       return res.status(403).json({ error: 'This account is pending approval from an operator or admin.' });

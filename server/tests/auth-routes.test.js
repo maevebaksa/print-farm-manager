@@ -136,6 +136,17 @@ describe('POST /api/auth/login', () => {
     expect(res.status).toBe(200);
   });
 
+  test('a username with no @ can bootstrap-style sign in, case-insensitively', async () => {
+    db.prepare(`
+      INSERT INTO users (email, name, password_hash, role, approved, created_at)
+      VALUES ('bob.smith', 'Bob', ?, 'uploader', 1, ?)
+    `).run(auth.hashPassword('password123'), Date.now());
+
+    const res = await request(app).post('/api/auth/login').send({ email: '  Bob.Smith ', password: 'password123' });
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBe('bob.smith');
+  });
+
   test('rejects a correct password for an unapproved account, and sets no cookie', async () => {
     db.prepare(`
       INSERT INTO users (email, name, password_hash, role, approved, created_at)

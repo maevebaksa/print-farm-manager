@@ -222,7 +222,7 @@ export default function Users() {
         <form onSubmit={submitAdd} style={{ background: '#131720', border: '1px solid #1e2433', borderRadius: 8, padding: '16px 18px', marginBottom: 20 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 14px', marginBottom: 10 }}>
             <input placeholder="Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} disabled={saving} style={inputStyle} required />
-            <input type="email" placeholder="Email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} disabled={saving} style={inputStyle} required />
+            <input type="text" placeholder="Username or email" autoCapitalize="none" spellCheck={false} value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} disabled={saving} style={inputStyle} required />
             <input type="password" placeholder="Password (optional: SSO-only if blank)" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} disabled={saving} style={inputStyle} minLength={8} />
             <select value={form.user_group_id} onChange={e => setForm(f => ({ ...f, user_group_id: e.target.value }))} disabled={saving} style={{ ...inputStyle, cursor: 'pointer' }}>
               <option value="">Group: Uploader (default)</option>
