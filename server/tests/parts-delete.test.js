@@ -33,7 +33,8 @@ beforeAll(() => {
       status TEXT DEFAULT 'open',
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0
+      updated_at INTEGER NOT NULL, priority_override INTEGER NOT NULL DEFAULT 0,
+      created_by_user_id INTEGER
     );
     CREATE TABLE gcodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +44,8 @@ beforeAll(() => {
       filepath TEXT NOT NULL,
       parts_per_plate INTEGER NOT NULL,
       est_print_secs INTEGER,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      uploaded_by_user_id INTEGER
     );
     CREATE TABLE printers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

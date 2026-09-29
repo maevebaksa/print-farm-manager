@@ -34,16 +34,19 @@ beforeEach(() => {
   db.prepare("INSERT INTO jobs (id, part_id, gcode_id, parts_per_plate, status, created_at) VALUES (1, 1, 1, 1, 'queued', ?)").run(now);
 });
 
-function appAs(user, factory, mount) {
+// Some route modules (jobs.js) keep their express.Router at module level, so a
+// second factory call would leave the first test's DB bound to the handlers.
+// Load a fresh copy of the module for every app so each test sees its own DB.
+function appAs(user, modulePath, mount, ...extra) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { req.user = user; next(); });
-  app.use(mount, factory(db));
+  jest.isolateModules(() => { app.use(mount, require(modulePath)(db, ...extra)); });
   return app;
 }
-const jobsApp   = (u) => appAs(u, require('../routes/jobs'), '/api/jobs');
-const gcodesApp = (u) => appAs(u, (d) => require('../routes/gcodes')(d, { on() {}, emit() {} }), '/api/gcodes');
-const partsApp  = (u) => appAs(u, (d) => require('../routes/parts')(d, {}), '/api/parts');
+const jobsApp   = (u) => appAs(u, '../routes/jobs', '/api/jobs');
+const gcodesApp = (u) => appAs(u, '../routes/gcodes', '/api/gcodes', { on() {}, emit() {} });
+const partsApp  = (u) => appAs(u, '../routes/parts', '/api/parts', {});
 
 const OWNER    = { id: 5, role: 'uploader' };
 const OTHER    = { id: 9, role: 'uploader' };

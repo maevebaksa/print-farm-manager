@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-09-29: fix CI: parts-delete schema and others-work test isolation
+
+CI failed on main after the others'-work permission landed: `DELETE /api/parts/:id` now reads `parts.created_by_user_id` and `gcodes.uploaded_by_user_id` for its ownership check, and `parts-delete.test.js`'s minimal in-memory schema lacked both (500s, 8 tests). Separately, the new `others-work.test.js` built a fresh in-memory DB per test, but `routes/jobs.js`, `gcodes.js`, and `parts.js` keep their `express.Router()` at module level, so after the first test every request hit handlers still bound to the first test's DB (409 on an already-cancelled job, 404 on a part that only existed in the new DB).
+
+### Changes
+- `server/tests/parts-delete.test.js`: schema gains `parts.created_by_user_id` and `gcodes.uploaded_by_user_id`.
+- `server/tests/others-work.test.js`: each app loads a fresh copy of its route module via `jest.isolateModules`.
+
+---
+
 ## 2026-09-29: sign in with a username or an email
 
 The login and create-user forms insisted on an email (`type="email"` rejected anything without an `@`). The server never validated the format, so only the two forms changed: the field is now "Username or email" and accepts any text. The `users.email` column keeps its name (additive-only schema); it simply holds whichever identifier the account was created with, trimmed and lowercased as before. SSO is unaffected: OIDC sign-in never uses this field, and its existing-account linking still matches the IdP's email claim against `users.email`, so a username without an `@` can never be linked to by an IdP login. Admin-created usernames that do contain an `@` still could, same as an email account today. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load).
