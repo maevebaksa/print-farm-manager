@@ -1,5 +1,5 @@
 const express = require('express');
-const { requireAnyRole, requirePermission, canModifyWork, OTHERS_WORK_MESSAGE } = require('../auth');
+const { requireAnyRole, requirePermission, hasPermission, canModifyWork, OTHERS_WORK_MESSAGE } = require('../auth');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -129,9 +129,17 @@ module.exports = (db, scheduler = null) => {
   // long as no part of it has an active (uploading/printing) job right now,
   // the same safety line DELETE /api/parts/:id already draws. Cascades to
   // every part, gcode, and job the project owns.
-  router.delete('/:id', requirePermission('can_delete_projects', 'Your user group cannot delete projects'), (req, res) => {
+  router.delete('/:id', (req, res) => {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // can_delete_projects covers any project; can_delete_own_projects only one
+    // the caller created. The ownership check below still applies to both.
+    const isOwn = project.created_by_user_id != null && req.user && Number(project.created_by_user_id) === Number(req.user.id);
+    if (!hasPermission(req.user, 'can_delete_projects') &&
+        !(isOwn && hasPermission(req.user, 'can_delete_own_projects'))) {
+      return res.status(403).json({ error: 'Your user group cannot delete projects' });
+    }
 
     // The delete cascades to every part and G-code, so the project, each part,
     // and each G-code must be the caller's own unless they hold

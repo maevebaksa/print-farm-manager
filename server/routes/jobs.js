@@ -120,7 +120,11 @@ module.exports = (db) => {
     }
 
     if (job.status === 'uploading' || job.status === 'printing') {
-      if (!hasPermission(req.user, 'can_cancel_active_jobs')) {
+      // can_cancel_active_jobs covers anyone's live job; can_cancel_own_active_jobs
+      // covers only the caller's own (a failing print), owner as computed above.
+      const isOwn = owner != null && req.user && Number(owner) === Number(req.user.id);
+      if (!hasPermission(req.user, 'can_cancel_active_jobs') &&
+          !(isOwn && hasPermission(req.user, 'can_cancel_own_active_jobs'))) {
         return res.status(403).json({ error: 'Your user group cannot cancel a job that is already uploading or printing.' });
       }
       const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(job.printer_id);

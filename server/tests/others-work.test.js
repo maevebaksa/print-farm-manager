@@ -120,3 +120,53 @@ describe('DELETE /api/jobs/:id?reason=', () => {
     expect(db.prepare('SELECT status FROM jobs WHERE id = 1').get().status).toBe('queued');
   });
 });
+
+describe('cancelling an active job: can_cancel_own_active_jobs', () => {
+  // printer_id stays NULL so the route skips the driver call and printer hold
+  beforeEach(() => { db.prepare("UPDATE jobs SET status = 'printing' WHERE id = 1").run(); });
+  const OWN_CANCELLER   = { id: 5, role: 'uploader', permissions: { can_cancel_own_active_jobs: true } };
+  const OTHER_CANCELLER = { id: 9, role: 'uploader', permissions: { can_cancel_own_active_jobs: true } };
+
+  test('an uploader without either flag cannot cancel their own live print', async () => {
+    expect((await request(jobsApp(OWNER)).delete('/api/jobs/1')).status).toBe(403);
+    expect(db.prepare('SELECT status FROM jobs WHERE id = 1').get().status).toBe('printing');
+  });
+
+  test('with the flag, they can cancel their own live print', async () => {
+    const res = await request(jobsApp(OWN_CANCELLER)).delete('/api/jobs/1');
+    expect(res.status).toBe(200);
+    expect(db.prepare('SELECT status FROM jobs WHERE id = 1').get().status).toBe('cancelled');
+  });
+
+  test("the flag does not let them cancel someone else's live print", async () => {
+    expect((await request(jobsApp(OTHER_CANCELLER)).delete('/api/jobs/1')).status).toBe(403);
+    expect(db.prepare('SELECT status FROM jobs WHERE id = 1').get().status).toBe('printing');
+  });
+});
+
+describe('DELETE /api/projects/:id: can_delete_own_projects', () => {
+  const projectsApp = (u) => appAs(u, '../routes/projects', '/api/projects', {});
+  const OWN_DELETER   = { id: 5, role: 'uploader', permissions: { can_delete_own_projects: true } };
+  const OTHER_DELETER = { id: 9, role: 'uploader', permissions: { can_delete_own_projects: true } };
+  beforeEach(() => { db.prepare('DELETE FROM jobs').run(); });
+
+  test('an uploader with neither flag cannot delete even their own project', async () => {
+    expect((await request(projectsApp(OWNER)).delete('/api/projects/1')).status).toBe(403);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM projects').get().n).toBe(1);
+  });
+
+  test('with the flag, they can delete a project they created', async () => {
+    expect((await request(projectsApp(OWN_DELETER)).delete('/api/projects/1')).status).toBe(200);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM projects').get().n).toBe(0);
+  });
+
+  test("the flag does not cover someone else's project", async () => {
+    expect((await request(projectsApp(OTHER_DELETER)).delete('/api/projects/1')).status).toBe(403);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM projects').get().n).toBe(1);
+  });
+
+  test("the owner cannot delete a project holding someone else's part", async () => {
+    db.prepare('UPDATE parts SET created_by_user_id = 9').run();
+    expect((await request(projectsApp(OWN_DELETER)).delete('/api/projects/1')).status).toBe(403);
+  });
+});

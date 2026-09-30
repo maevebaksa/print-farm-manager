@@ -129,7 +129,7 @@ Any signed-in user. Built-in groups first, then custom groups.
 
 ### `POST /api/user-groups`
 
-Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the nine boolean flags (`can_approve`, `can_set_ready`, `can_manage_printers`, `can_quick_print`, `can_delete_projects`, `can_cancel_active_jobs`, `can_manage_settings`, `can_manage_others_work`, `requires_approval`; defaults follow the role), `max_concurrent_plates` (positive integer or `null`), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
+Admin only. **Body:** `name` (required, unique, case-insensitive), `role` (`uploader` default, or `operator`), any of the eleven boolean flags (`can_approve`, `can_set_ready`, `can_manage_printers`, `can_quick_print`, `can_delete_projects`, `can_cancel_active_jobs`, `can_manage_settings`, `can_manage_others_work`, `can_cancel_own_active_jobs`, `can_delete_own_projects`, `requires_approval`; defaults follow the role), `max_concurrent_plates` (positive integer or `null`), `allowed_printer_ids` (integers), `allowed_printer_groups` (names). An empty array or `null` means unrestricted. Returns `201`, `400` on a missing name, bad role, or bad list, `409` on a duplicate name.
 
 ### `PUT /api/user-groups/:id`
 
@@ -621,7 +621,7 @@ Sets a project-wide default `allowed_groups`, applied to every G-code in the pro
 
 ### `DELETE /api/projects/:id`
 
-Gated by the `can_delete_projects` permission (`403` if the signed-in user's group doesn't grant it; operator and admin always have it, see [docs/auth.md](auth.md)'s User groups section). Any status may be deleted, not just `draft`: `409` only if one of the project's parts has an active (`uploading`/`printing`) job right now, wait for it to finish or cancel it first (see `DELETE /api/jobs/:id` below). Cascades to every part, G-code file, and job the project owns. `404` if not found.
+Gated by the `can_delete_projects` permission, or `can_delete_own_projects` for a project the caller created (`403` if the signed-in user's group grants neither, or the project or anything in it belongs to someone else without `can_manage_others_work`; operator and admin always have it, see [docs/auth.md](auth.md)'s User groups section). Any status may be deleted, not just `draft`: `409` only if one of the project's parts has an active (`uploading`/`printing`) job right now, wait for it to finish or cancel it first (see `DELETE /api/jobs/:id` below). Cascades to every part, G-code file, and job the project owns. `404` if not found.
 
 ---
 
@@ -859,7 +859,7 @@ Single job with same joins, including `printer_is_held` and `printer_status`. `4
 
 ### `DELETE /api/jobs/:id`
 
-Cancels a job. A `queued` job is a plain status flip, open to anyone who can reach it: it never reached a printer. An `uploading`/`printing` job is a live print: gated by the `can_cancel_active_jobs` permission (`403` otherwise; operator and admin always have it, see [docs/auth.md](auth.md)'s User groups section). When permitted, calls the printer's driver `cancelJob` (logged, never blocks the response on a driver failure), holds the printer (`is_held = 1`) for a physical check before the next job dispatches, logs a `job_cancelled` printer event, and marks the job `cancelled` immediately rather than waiting for the next poll to notice the printer stopped. `404` if not found, `409` for any other status (`finished`/`failed`/`cancelled`: already a finished fact).
+Cancels a job. A `queued` job is a plain status flip, open to anyone who can reach it: it never reached a printer. An `uploading`/`printing` job is a live print: gated by the `can_cancel_active_jobs` permission (`403` otherwise; operator and admin always have it, see [docs/auth.md](auth.md)'s User groups section). When permitted (`can_cancel_active_jobs` for any job, or `can_cancel_own_active_jobs` for the caller's own job only), calls the printer's driver `cancelJob` (logged, never blocks the response on a driver failure), holds the printer (`is_held = 1`) for a physical check before the next job dispatches, logs a `job_cancelled` printer event, and marks the job `cancelled` immediately rather than waiting for the next poll to notice the printer stopped. `404` if not found, `409` for any other status (`finished`/`failed`/`cancelled`: already a finished fact).
 
 Query `?reason=` (optional): `failed` (default) means the print failed and the part goes back in the queue (the scheduler sends it out again); `bad_gcode` also clears `gcodes.approved` on the job's G-code so it is never dispatched again until someone with `can_approve` approves it. Any other value is `400`. Response: `{ "success": true, "reason": "failed" }`. Cancelling someone else's job additionally needs `can_manage_others_work` (`403`).
 

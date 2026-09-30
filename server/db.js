@@ -631,4 +631,21 @@ try {
   db.exec("UPDATE user_groups SET can_manage_others_work = 1 WHERE role IN ('admin', 'operator')");
 } catch (_) {}
 
+// can_cancel_own_active_jobs: cancel a job that is already uploading/printing
+// when it is the caller's own (e.g. their print is failing), without the
+// broader can_cancel_active_jobs that covers anyone's job. Same backfill
+// convention as the flags above.
+try {
+  db.exec('ALTER TABLE user_groups ADD COLUMN can_cancel_own_active_jobs INTEGER NOT NULL DEFAULT 0');
+  db.exec("UPDATE user_groups SET can_cancel_own_active_jobs = 1 WHERE role IN ('admin', 'operator')");
+} catch (_) {}
+
+// can_delete_own_projects: delete a project the caller created, without the
+// broader can_delete_projects that covers anyone's. (Deleting one's own part
+// needs no flag: it has always been allowed for the part's creator.)
+try {
+  db.exec('ALTER TABLE user_groups ADD COLUMN can_delete_own_projects INTEGER NOT NULL DEFAULT 0');
+  db.exec("UPDATE user_groups SET can_delete_own_projects = 1 WHERE role IN ('admin', 'operator')");
+} catch (_) {}
+
 module.exports = db;

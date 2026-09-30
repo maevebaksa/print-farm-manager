@@ -131,9 +131,9 @@ function clearSessionCookie(req, res) {
 // these flags for a non-admin member; admin is always fully open so the farm
 // can never lock itself out of management.
 const ROLE_PERMISSIONS = {
-  admin:    { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  can_manage_settings: true,  can_manage_others_work: true,  requires_approval: false },
-  operator: { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  can_manage_settings: true,  can_manage_others_work: true,  requires_approval: false },
-  uploader: { can_approve: false, can_set_ready: false, can_manage_printers: false, can_quick_print: true, can_delete_projects: false, can_cancel_active_jobs: false, can_manage_settings: false, can_manage_others_work: false, requires_approval: false },
+  admin:    { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  can_manage_settings: true,  can_manage_others_work: true,  can_cancel_own_active_jobs: true,  can_delete_own_projects: true,  requires_approval: false },
+  operator: { can_approve: true,  can_set_ready: true,  can_manage_printers: true,  can_quick_print: true, can_delete_projects: true,  can_cancel_active_jobs: true,  can_manage_settings: true,  can_manage_others_work: true,  can_cancel_own_active_jobs: true,  can_delete_own_projects: true,  requires_approval: false },
+  uploader: { can_approve: false, can_set_ready: false, can_manage_printers: false, can_quick_print: true, can_delete_projects: false, can_cancel_active_jobs: false, can_manage_settings: false, can_manage_others_work: false, can_cancel_own_active_jobs: false, can_delete_own_projects: false, requires_approval: false },
 };
 
 function parseJsonArray(text) {
@@ -159,6 +159,8 @@ function resolvePermissions(db, user) {
     can_cancel_active_jobs: !!g.can_cancel_active_jobs,
     can_manage_settings: !!g.can_manage_settings,
     can_manage_others_work: !!g.can_manage_others_work,
+    can_cancel_own_active_jobs: !!g.can_cancel_own_active_jobs,
+    can_delete_own_projects: !!g.can_delete_own_projects,
     requires_approval: !!g.requires_approval,
     max_concurrent_plates: g.max_concurrent_plates ?? null,
     allowed_printer_ids: parseJsonArray(g.allowed_printer_ids),

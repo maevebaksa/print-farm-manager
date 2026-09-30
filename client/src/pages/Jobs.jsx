@@ -77,6 +77,7 @@ export default function Jobs() {
   // Same admin/operator bar as PUT .../priority-override: pulling back a job
   // already running on shared hardware, not one that hadn't started yet.
   const canCancelActive = user?.permissions?.can_cancel_active_jobs ?? (user?.role === 'admin' || user?.role === 'operator');
+  const canCancelOwnActive = user?.permissions?.can_cancel_own_active_jobs ?? (user?.role === 'admin' || user?.role === 'operator');
   const [confirm, confirmModal]   = useConfirm();
   const [showToast, toastEl]      = useToast();
   const [jobs, setJobs]           = useState([]);
@@ -232,7 +233,7 @@ export default function Jobs() {
                     {formatTime(job.started_at)}
                     {job.started_at && <> · {formatDuration(job.started_at, job.finished_at || null)}</>}
                   </span>
-                  {canModifyWork(user, job.gcode_uploaded_by_user_id ?? job.part_owner_user_id) && (job.status === 'queued' || ((job.status === 'uploading' || job.status === 'printing') && canCancelActive)) && (
+                  {canModifyWork(user, job.gcode_uploaded_by_user_id ?? job.part_owner_user_id) && (job.status === 'queued' || ((job.status === 'uploading' || job.status === 'printing') && (canCancelActive || (canCancelOwnActive && user && Number(job.gcode_uploaded_by_user_id ?? job.part_owner_user_id) === Number(user.id))))) && (
                     <button
                       onClick={() => cancelJob(job)}
                       style={{ background: '#7f1d1d', color: '#f87171', border: 'none', borderRadius: 4, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}

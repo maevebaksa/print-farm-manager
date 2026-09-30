@@ -1006,6 +1006,7 @@ export default function Projects() {
   // review work, not a permissions change.
   const canApprove                        = user.permissions?.can_approve ?? (user.role === 'admin' || user.role === 'operator');
   const canDeleteProjects                 = user.permissions?.can_delete_projects ?? (user.role === 'admin' || user.role === 'operator');
+  const canDeleteOwnProjects              = user.permissions?.can_delete_own_projects ?? (user.role === 'admin' || user.role === 'operator');
   const [showToast, toastEl]              = useToast();
   const [confirm, confirmModal]           = useConfirm();
   const [projects, setProjects]           = useState([]);
@@ -1847,7 +1848,7 @@ export default function Projects() {
             >✎</button>
           </>
         )}
-        <StatusDropdown project={detailProject} onTransition={handleStatusTransition} canDelete={canDeleteProjects && canModifyWork(user, detailProject.created_by_user_id)} />
+        <StatusDropdown project={detailProject} onTransition={handleStatusTransition} canDelete={(canDeleteProjects || (canDeleteOwnProjects && detailProject.created_by_user_id != null && Number(detailProject.created_by_user_id) === Number(user.id))) && canModifyWork(user, detailProject.created_by_user_id)} />
         <PriorityOverride
           on={detailProject.priority_override === 1}
           canToggle={canApprove}

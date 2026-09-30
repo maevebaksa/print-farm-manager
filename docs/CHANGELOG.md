@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-09-29: can_cancel_own_active_jobs and can_delete_own_projects
+
+Cancelling a live (uploading/printing) job needed `can_cancel_active_jobs`, which covers anyone's job, so a student whose own print was failing had to find an operator. New group permission `can_cancel_own_active_jobs` lets a member cancel only a live job they own (owner as for `can_manage_others_work`: the G-code uploader, else the part's creator). It does not let them touch anyone else's, and the same cancel dialog (print failed, requeue, or bad G-code) and printer hold apply. Operator and admin default on (existing groups backfilled once), uploader off. Same idea for projects: `can_delete_own_projects` lets a member delete a project they created without the broader `can_delete_projects` (the cascade-ownership check still applies). Deleting one's own part already needed no flag (`DELETE /api/parts/:id` only blocks other people's), so there is no new part flag. No `completed_qty` path touched. Hardware validation: not applicable; the underlying `cancelJob` driver call is unchanged and still unvalidated against a live print. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load).
+
+### Changes
+- `server/db.js`: additive `user_groups.can_cancel_own_active_jobs` with backfill.
+- `server/auth.js`, `server/routes/user-groups.js`: flag in role defaults, permissions, and group create/update.
+- `server/routes/projects.js`, `client/src/pages/Projects.jsx`: project delete allowed for `can_delete_projects`, or an owner with `can_delete_own_projects`.
+- `server/routes/jobs.js`: live-job cancel allowed for `can_cancel_active_jobs`, or an owner with the new flag.
+- `client/src/components/UserGroups.jsx`, `client/src/pages/Jobs.jsx`: checkbox; Cancel button shown for own live jobs.
+- `server/tests/others-work.test.js`, `user-groups.test.js`: tests and schema.
+- `docs/api.md`, `docs/auth.md`: documented.
+
+---
+
 ## 2026-09-29: fix CI: parts-delete schema and others-work test isolation
 
 CI failed on main after the others'-work permission landed: `DELETE /api/parts/:id` now reads `parts.created_by_user_id` and `gcodes.uploaded_by_user_id` for its ownership check, and `parts-delete.test.js`'s minimal in-memory schema lacked both (500s, 8 tests). Separately, the new `others-work.test.js` built a fresh in-memory DB per test, but `routes/jobs.js`, `gcodes.js`, and `parts.js` keep their `express.Router()` at module level, so after the first test every request hit handlers still bound to the first test's DB (409 on an already-cancelled job, 404 on a part that only existed in the new DB).
