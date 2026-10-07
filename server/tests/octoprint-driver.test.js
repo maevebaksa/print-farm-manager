@@ -127,6 +127,37 @@ describe('getStatus', () => {
     expect(result.progress).toBeNull();
   });
 
+  describe('offline diagnostics', () => {
+    let logSpy;
+    const printer = { ...fakePrinter, id: 901, name: 'OctoPi_diag' };
+    beforeEach(() => { logSpy = jest.spyOn(console, 'log').mockImplementation(() => {}); });
+    afterEach(() => { logSpy.mockRestore(); });
+    const logged = () => logSpy.mock.calls.map(c => c[0]).filter(l => String(l).includes('OctoPi_diag'));
+
+    test('409 from /api/printer is OFFLINE and logs that the serial link is closed', async () => {
+      axios.get.mockRejectedValue({ response: { status: 409 } });
+      const result = await octoprint.getStatus({ ...printer, id: 902 });
+      expect(result.status).toBe('OFFLINE');
+      expect(logged().join('\n')).toMatch(/not operational/);
+    });
+
+    test('logs once while the cause is unchanged, again when it changes, and on recovery', async () => {
+      axios.get.mockRejectedValue({ code: 'ECONNREFUSED' });
+      await octoprint.getStatus(printer);
+      await octoprint.getStatus(printer);
+      expect(logged()).toHaveLength(1);
+
+      axios.get.mockRejectedValue({ response: { status: 409 } });
+      await octoprint.getStatus(printer);
+      expect(logged()).toHaveLength(2);
+
+      mockPair({}, {});
+      await octoprint.getStatus(printer);
+      expect(logged()).toHaveLength(3);
+      expect(logged()[2]).toMatch(/reachable again/);
+    });
+  });
+
   test('queries /api/printer and /api/job with X-Api-Key header', async () => {
     mockPair({}, {});
     await octoprint.getStatus(fakePrinter);

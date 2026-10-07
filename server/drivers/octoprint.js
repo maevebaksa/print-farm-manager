@@ -19,6 +19,39 @@ function headers(printer) {
   return { 'X-Api-Key': printer.api_key };
 }
 
+// ─── Offline diagnostics ────────────────────────────────────────────────────
+
+// getStatus never throws, so every failure collapses to OFFLINE. These very
+// different causes look identical to the operator, so the reason is logged.
+// Per OctoPrint's API docs, GET /api/printer answers 409 "if the printer is not
+// operational": OctoPrint itself is up but its serial link to the printer is closed.
+// Ref: https://github.com/OctoPrint/OctoPrint/blob/master/docs/api/printer.rst
+function describeOfflineReason(err) {
+  const status = err?.response?.status;
+  if (status === 409) return 'OctoPrint is reachable but reports the printer is not operational (serial connection closed)';
+  if (status === 401 || status === 403) return `OctoPrint rejected the API key (HTTP ${status})`;
+  if (status) return `OctoPrint answered HTTP ${status}`;
+  if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') return 'OctoPrint did not answer in time (host asleep or network dropped)';
+  return `OctoPrint is unreachable (${err?.code || err?.message || 'unknown error'})`;
+}
+
+// printer.id -> last logged offline reason, so a printer that stays offline logs once
+// instead of every 15 s poll, and logs again if the cause changes or it recovers.
+const lastOfflineReason = new Map();
+
+function noteOffline(printer, err) {
+  const reason = describeOfflineReason(err);
+  if (lastOfflineReason.get(printer.id) === reason) return;
+  lastOfflineReason.set(printer.id, reason);
+  console.log(`[octoprint] ${printer.name} OFFLINE: ${reason}`);
+}
+
+function noteOnline(printer) {
+  if (lastOfflineReason.delete(printer.id)) {
+    console.log(`[octoprint] ${printer.name} reachable again`);
+  }
+}
+
 // ─── Status ─────────────────────────────────────────────────────────────────
 
 // Returns { status, progress, timeRemaining, currentFile }
@@ -62,8 +95,10 @@ async function getStatus(printer) {
     const timeRemaining = (status === 'PRINTING') ? (job.progress?.printTimeLeft ?? null) : null;
     const currentFile = (status === 'PRINTING' && hasJobFile) ? job.job.file.name : null;
 
+    noteOnline(printer);
     return { status, progress, timeRemaining, currentFile };
-  } catch (_) {
+  } catch (err) {
+    noteOffline(printer, err);
     return { status: 'OFFLINE', progress: null, timeRemaining: null, currentFile: null };
   }
 }

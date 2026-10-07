@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-10-07: OctoPrint driver logs why a printer is OFFLINE
+
+Report: OctoPrint printers on plain IPs went OFFLINE after the farm sat idle for a while. `getStatus` collapsed every failure into `OFFLINE`, so "OctoPrint host unreachable" (asleep Pi, Wi-Fi power save) and "OctoPrint is up but its serial link to the printer is closed" looked identical, and nothing was logged. Per OctoPrint's API docs, `GET /api/printer` answers 409 when the printer is not operational, which is the second case. The returned status is unchanged (`OFFLINE`), so holds, dispatch, and part counts behave exactly as before; this only makes the cause visible in the server log, once per change (not every 15 s poll), plus a line when the printer becomes reachable again. This is diagnostics, not a confirmed root-cause fix: the actual cause on the reporter's farm is not yet known. No `completed_qty` path touched. Hardware validation: not validated on hardware; behavior is covered by mocked tests only.
+
+### Changes
+- `server/drivers/octoprint.js`: `describeOfflineReason`, `noteOffline`, `noteOnline`; `getStatus` logs the offline reason on change.
+- `server/tests/octoprint-driver.test.js`: tests for the 409 reason, log-once-per-cause, and the recovery line.
+
+---
+
 ## 2026-09-29: can_cancel_own_active_jobs and can_delete_own_projects
 
 Cancelling a live (uploading/printing) job needed `can_cancel_active_jobs`, which covers anyone's job, so a student whose own print was failing had to find an operator. New group permission `can_cancel_own_active_jobs` lets a member cancel only a live job they own (owner as for `can_manage_others_work`: the G-code uploader, else the part's creator). It does not let them touch anyone else's, and the same cancel dialog (print failed, requeue, or bad G-code) and printer hold apply. Operator and admin default on (existing groups backfilled once), uploader off. Same idea for projects: `can_delete_own_projects` lets a member delete a project they created without the broader `can_delete_projects` (the cascade-ownership check still applies). Deleting one's own part already needed no flag (`DELETE /api/parts/:id` only blocks other people's), so there is no new part flag. No `completed_qty` path touched. Hardware validation: not applicable; the underlying `cancelJob` driver call is unchanged and still unvalidated against a live print. Tests added but could not be run on this machine (better-sqlite3 native binding fails to load).
