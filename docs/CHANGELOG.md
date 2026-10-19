@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-10-23: OctoPrint driver logs upload size and duration
+
+Real-world trigger: one printer (`mini1`) kept failing a 34.9 MB `.bgcode` upload with `timeout of 300000ms exceeded`, and because a sweep waits for every upload in its wave, that one slow upload deferred dispatch to every other idle printer. "Slow" and "stalled" both end in the same timeout message, so the operator could not tell which they had. The OctoPrint driver now logs `[octoprint] <name>: upload finished, X MB in Ns (Y MB/s)` on success and `upload failed after X MB in Ns (Y MB/s)` on failure. The reported size is the size actually sent: for a `.bgcode` or `.3mf` that is the converted plain G-code, which is larger than the stored file. No behavior change, no timeouts changed, no `completed_qty` path touched. Hardware validation: not validated on hardware; mocked tests only.
+
+### Changes
+- `server/drivers/octoprint.js`: `uploadAndPrint` times the request and logs size and throughput.
+- `server/tests/octoprint-driver.test.js`: test for the success and failure log lines.
+
+---
+
 ## 2026-10-22: one missed poll no longer marks a printer OFFLINE
 
 Real-world trigger: on a farm of Prusa Minis running OctoPrint, Fleet and the dashboard randomly showed several printers as OFFLINE for one cycle and then corrected themselves on the next refresh, and one printer was shown held with "Went offline with a job in progress. If it comes back printing, this clears automatically" with Job OK / Job Failed buttons although nothing was wrong with it. The server log showed groups of printers logging "did not answer in time" together and "reachable again" on the next poll. A single poll that exceeded the 8 second timeout was enough: `poller.js` wrote `OFFLINE`, and for a printer with an `uploading`/`printing` job `_handlePrinterOffline` held it and logged an `offline_with_job` event, which only clears automatically if the printer next reports PRINTING. The poller now reports `OFFLINE` only after 3 consecutive failed polls (`OFFLINE_CONFIRM_POLLS`, about 30 s) for a printer that has been seen online during the current process; a suppressed poll returns early, so it writes no status, no progress, and fires no events. After a restart the first `OFFLINE` is still reported immediately, so the cold-start behavior (including a Bambu printer's first poll being OFFLINE while MQTT connects) is unchanged. This hides the symptom, not the cause: why those printers miss polls is still unconfirmed, and the per-printer `[octoprint] ... OFFLINE:` log line still records every miss. A printer that truly drops is now shown with its last status for up to about 30 s longer. No `completed_qty` path touched; only when OFFLINE is reported changes. Hardware validation: not validated on hardware; mocked tests only.

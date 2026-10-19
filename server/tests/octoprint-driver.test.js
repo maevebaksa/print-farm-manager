@@ -308,6 +308,24 @@ describe('uploadAndPrint', () => {
     readSpy.mockRestore();
   });
 
+  test('logs the upload size and duration on success and on failure', async () => {
+    const filename = `octoprint_stats_${Date.now()}.gcode`;
+    const fullPath = createTestFile(filename);
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    axios.post.mockResolvedValueOnce({ data: { effectivePrint: true } });
+    await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/OctoPi_01: upload finished, \d+\.\d MB in \d+s \(\d+\.\d\d MB\/s\)/));
+
+    axios.post.mockRejectedValueOnce(Object.assign(new Error('timeout of 300000ms exceeded'), { code: 'ECONNABORTED' }));
+    await expect(octoprint.uploadAndPrint(fakePrinter, fullPath, filename)).rejects.toThrow(/timeout/);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/OctoPi_01: upload failed after \d+\.\d MB in \d+s/));
+
+    log.mockRestore();
+    warn.mockRestore();
+  });
+
   test('extracts the plate G-code from a sliced .3mf and uploads it', async () => {
     const filename = `octoprint_3mf_${Date.now()}.gcode.3mf`;
     const fullPath = path.join(GCODE_DIR, filename);

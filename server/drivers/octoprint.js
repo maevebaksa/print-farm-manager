@@ -212,6 +212,17 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
   form.append('select', 'true');
   form.append('print', 'true');
 
+  // Upload size and duration are logged on both success and failure: a slow printer or
+  // link (a Pi Zero on weak Wi-Fi can manage well under 1 MB/s) and a stalled one look
+  // identical from "timeout of 300000ms exceeded" alone, and the scheduler retries the
+  // whole upload, so the numbers are what tell an operator which one they have.
+  const uploadBytes = Buffer.isBuffer(upload.body) ? upload.body.length : fs.statSync(gcodeFullPath).size;
+  const uploadStart = Date.now();
+  const uploadStats = () => {
+    const secs = Math.max(1, Math.round((Date.now() - uploadStart) / 1000));
+    return `${(uploadBytes / 1048576).toFixed(1)} MB in ${secs}s (${(uploadBytes / 1048576 / secs).toFixed(2)} MB/s)`;
+  };
+
   let res;
   try {
     res = await axios.post(
@@ -225,6 +236,7 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
       }
     );
   } catch (err) {
+    console.warn(`[octoprint] ${printer.name}: upload failed after ${uploadStats()}`);
     const status = err.response?.status;
     if (status === 409) {
       throw Object.assign(
@@ -240,6 +252,8 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
       : '';
     throw new Error(`OctoPrint rejected the upload to ${printer.name} (HTTP ${status}${detail})${hint}`, { cause: err });
   }
+
+  console.log(`[octoprint] ${printer.name}: upload finished, ${uploadStats()}`);
 
   if (res?.data?.effectivePrint === false) {
     throw new Error(
