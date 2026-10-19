@@ -3,6 +3,10 @@
 
 jest.mock('axios');
 const axios = require('axios');
+// The offline TCP probe opens a real socket; mocked so no test touches the network.
+jest.mock('net');
+const net = require('net');
+const { EventEmitter } = require('events');
 
 const path = require('path');
 const fs = require('fs');
@@ -156,6 +160,93 @@ describe('getStatus', () => {
       await octoprint.getStatus(printer);
       expect(logged()).toHaveLength(3);
       expect(logged()[2]).toMatch(/reachable again/);
+    });
+  });
+
+  describe('offline TCP probe and slow-answer log', () => {
+    let fakeSocket;
+    beforeEach(() => {
+      jest.spyOn(console, 'log').mockImplementation(() => {});
+      fakeSocket = Object.assign(new EventEmitter(), { destroy: jest.fn() });
+      net.connect.mockReset().mockReturnValue(fakeSocket);
+    });
+    afterEach(() => { console.log.mockRestore(); });
+    const probeLogs = () => console.log.mock.calls.map(c => c[0]).filter(l => /TCP probe/.test(String(l)));
+    const tick = () => new Promise(r => setImmediate(r));
+
+    test('a timeout probes the printer web port and reports a hanging OctoPrint when the connect succeeds', async () => {
+      axios.get.mockRejectedValue({ code: 'ECONNABORTED' });
+      await octoprint.getStatus({ ...fakePrinter, id: 930, name: 'probe_up', ip: '192.168.1.77:5000' });
+      await tick();
+      expect(net.connect).toHaveBeenCalledWith(expect.objectContaining({ host: '192.168.1.77', port: 5000 }));
+
+      fakeSocket.emit('connect');
+      expect(probeLogs().join('\n')).toMatch(/probe_up TCP probe: connected to 192\.168\.1\.77:5000 .*not answering HTTP/);
+      expect(fakeSocket.destroy).toHaveBeenCalled();
+    });
+
+    test('reports the host as unreachable when the connect times out', async () => {
+      axios.get.mockRejectedValue({ code: 'ECONNABORTED' });
+      await octoprint.getStatus({ ...fakePrinter, id: 931, name: 'probe_down', ip: '192.168.1.78' });
+      await tick();
+      expect(net.connect).toHaveBeenCalledWith(expect.objectContaining({ host: '192.168.1.78', port: 80 }));
+
+      fakeSocket.emit('timeout');
+      expect(probeLogs().join('\n')).toMatch(/probe_down TCP probe: no connection .* not reachable from this server/);
+    });
+
+    test('probes once per new timeout, and never for other failures', async () => {
+      const printer = { ...fakePrinter, id: 932, name: 'probe_once' };
+      axios.get.mockRejectedValue({ code: 'ECONNABORTED' });
+      await octoprint.getStatus(printer);
+      await octoprint.getStatus(printer); // same reason again: no second probe
+      await tick();
+      expect(net.connect).toHaveBeenCalledTimes(1);
+
+      net.connect.mockClear();
+      for (const [id, err] of [[933, { code: 'ECONNREFUSED' }], [934, { response: { status: 403 } }], [935, { response: { status: 409 } }]]) {
+        axios.get.mockRejectedValue(err);
+        axios.post.mockResolvedValue({});
+        await octoprint.getStatus({ ...fakePrinter, id });
+      }
+      await tick();
+      expect(net.connect).not.toHaveBeenCalled();
+    });
+
+    test('a probe that cannot start never breaks the poll', async () => {
+      net.connect.mockImplementation(() => { throw new Error('boom'); });
+      axios.get.mockRejectedValue({ code: 'ECONNABORTED' });
+      const result = await octoprint.getStatus({ ...fakePrinter, id: 936, name: 'probe_throw' });
+      expect(result.status).toBe('OFFLINE');
+    });
+
+    test('logs a successful but slow answer once per minute per printer', async () => {
+      let now = 1_000_000;
+      const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => now);
+      const printer = { ...fakePrinter, id: 937, name: 'slowpoke' };
+      axios.get.mockImplementation(async (url) => {
+        // OctoPrint takes 6 s to answer; getStatus sends two requests per poll in
+        // parallel, so the clock only advances on one of them.
+        if (url.includes('/api/printer')) { now += 6000; return printerResponse({}); }
+        return jobResponse({});
+      });
+
+      await octoprint.getStatus(printer);
+      await octoprint.getStatus(printer); // within a minute: not logged again
+      const slow = () => console.log.mock.calls.map(c => c[0]).filter(l => /slowpoke slow answer/.test(String(l)));
+      expect(slow()).toHaveLength(1);
+      expect(slow()[0]).toMatch(/6\.0s \(timeout is 8s\)/);
+
+      now += 61000;
+      await octoprint.getStatus(printer);
+      expect(slow()).toHaveLength(2);
+      nowSpy.mockRestore();
+    });
+
+    test('a fast answer is not logged as slow', async () => {
+      mockPair({}, {});
+      await octoprint.getStatus({ ...fakePrinter, id: 938, name: 'speedy' });
+      expect(console.log.mock.calls.map(c => c[0]).filter(l => /speedy slow answer/.test(String(l)))).toHaveLength(0);
     });
   });
 

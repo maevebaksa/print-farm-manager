@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-10-27: staggered poll starts and OctoPrint offline diagnostics
+
+Real-world trigger: on a farm of Prusa Minis running OctoPrint, the server log kept showing `mini3` to `mini8` timing out together ("did not answer in time") for 30 to 60 seconds and then recovering together, while `mini1`, `mini2`, and `mini10` were never affected and the operator could reach the "offline" printers fine. After the OFFLINE debounce the dropouts were still real from the server's side (three failed polls in a row). The new `[poller] server was blocked for ~5s` line also showed that converting a 34.9 MB `.bgcode` freezes the server for about 5 seconds on that host, which on its own is too short to cause 8-second timeouts. The cause is still unconfirmed. Two changes to find out, neither a confirmed fix:
+
+- The poller now spreads a tick's printer polls evenly over 5 seconds instead of starting all of them at the same instant, because a burst of new connections to one subnet (two per OctoPrint printer) can be dropped by a router, access point, or firewall that treats it as a scan, which would produce exactly a group of printers failing together and recovering together. If the group dropouts stop, that was the cause.
+- The OctoPrint driver now probes the printer with a plain TCP connect when a poll times out, and logs whether the host is reachable (OctoPrint's web server hanging) or not (network path, Wi-Fi, powered off), once per new timeout. It also logs a successful poll that took 3 seconds or more as `slow answer`, at most once a minute per printer, so a sluggish OctoPrint can be told apart from a dropped network. Diagnostics only: neither changes the status the driver returns.
+
+Cost: the last printer's status can be up to 5 seconds staler. 5 s plus the 8 s timeout stays under the 15 s interval. No `completed_qty` path touched. Hardware validation: not validated on hardware; mocked tests only.
+
+### Changes
+- `server/poller.js`: `POLL_STAGGER_WINDOW_MS`, `_pollAfter`; `_tick` staggers starts.
+- `server/drivers/octoprint.js`: `probeTcp`, `splitHostPort`, `noteSlowAnswer`.
+- `server/tests/poller-offline-debounce.test.js`, `octoprint-driver.test.js`: tests for the stagger, the probe outcomes, probe-only-on-timeout, and the slow-answer log; `net` mocked in the driver test.
+- `docs/poller.md`, `docs/multi-brand.md`: documented.
+
+---
+
 ## 2026-10-26: Upload Failed can keep the printer in service
 
 Real-world trigger: a printer (`mini1`) whose large upload had stalled was stuck on the Fleet card "Upload failed, but printer shows job complete. Did the print succeed?" with two buttons, neither right: "Set Ready" (with the printer IDLE this credits a plate as if the print succeeded, though the upload never completed) and "Upload Failed", which always decommissioned the printer. The previous change added a keep-in-service choice to Bad Print and Job Failed but deliberately left this button alone. "Upload Failed" now opens the same dialog: a reason plus "Keep printer in service" (job failed, nothing credited or deducted, hold released, a dispatch sweep requested) or "Decommission printer" (the old behavior). The server route (`mark-job-failure` with `decommission: false`) is unchanged. Known and not changed here: the "Set Ready" button on this card credits `parts_per_plate` when the printer is IDLE or FINISHED, and IDLE alone does not show that the print happened; that touches `completed_qty` and needs a decision. Hardware validation: not applicable (UI only).

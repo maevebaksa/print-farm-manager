@@ -9,6 +9,7 @@
 // runs behind its bundled server on :5000 rather than :80, so no port is assumed.
 
 const axios = require('axios');
+const net = require('net');
 const fs = require('fs');
 const FormData = require('form-data');
 const { resolveHost } = require('../mdns-resolve');
@@ -44,6 +45,61 @@ function noteOffline(printer, err) {
   if (lastOfflineReason.get(printer.id) === reason) return;
   lastOfflineReason.set(printer.id, reason);
   console.log(`[octoprint] ${printer.name} OFFLINE: ${reason}`);
+  // "Did not answer in time" covers two very different faults: the host is not
+  // reachable at all, or it is up but OctoPrint's web server is hanging. A plain TCP
+  // connect to the same port tells them apart, so it runs once per new timeout.
+  if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') probeTcp(printer);
+}
+
+// How long the diagnostic TCP connect waits. Short on purpose: it only has to tell
+// "reachable" from "not reachable" and runs outside the poll path.
+const TCP_PROBE_TIMEOUT_MS = 3000;
+
+// Splits printer.ip ("192.168.1.5", "192.168.1.5:5000", optionally with a protocol or
+// path) into host and port, defaulting to 80 like the driver's own http:// URLs.
+function splitHostPort(raw) {
+  const clean = String(raw).trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  const m = clean.match(/^(.*?)(?::(\d+))?$/);
+  return { host: m[1], port: m[2] ? parseInt(m[2], 10) : 80 };
+}
+
+// Diagnostic only: logs whether a TCP connection to the printer's web port succeeds.
+// Never throws and never affects the status the driver returns.
+async function probeTcp(printer) {
+  try {
+    const { host, port } = splitHostPort(await resolveHost(printer.ip));
+    const start = Date.now();
+    let settled = false;
+    const socket = net.connect({ host, port, timeout: TCP_PROBE_TIMEOUT_MS });
+    if (!socket) return;
+    const done = (msg) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      console.log(`[octoprint] ${printer.name} TCP probe: ${msg}`);
+    };
+    socket.once('connect', () => done(
+      `connected to ${host}:${port} in ${Date.now() - start}ms, so the host is up and OctoPrint's web server is not answering HTTP`));
+    socket.once('timeout', () => done(
+      `no connection to ${host}:${port} within ${TCP_PROBE_TIMEOUT_MS}ms, so the host is not reachable from this server (network path, Wi-Fi, or powered off)`));
+    socket.once('error', (e) => done(`could not connect to ${host}:${port} (${e.code || e.message})`));
+  } catch (_) {
+    // diagnostics must never break polling
+  }
+}
+
+// A poll that succeeds but takes this long is logged: it separates a sluggish OctoPrint
+// (answers late, close to the 8 s timeout) from a dropped network (no answer at all).
+const SLOW_POLL_MS = 3000;
+// printer.id -> time (ms) of the last slow-answer log, at most one per minute per printer
+const lastSlowLog = new Map();
+
+function noteSlowAnswer(printer, elapsedMs) {
+  if (elapsedMs < SLOW_POLL_MS) return;
+  const last = lastSlowLog.get(printer.id) || 0;
+  if (Date.now() - last < 60000) return;
+  lastSlowLog.set(printer.id, Date.now());
+  console.log(`[octoprint] ${printer.name} slow answer: ${(elapsedMs / 1000).toFixed(1)}s (timeout is 8s)`);
 }
 
 function noteOnline(printer) {
@@ -99,6 +155,7 @@ async function tryReconnect(printer, ip) {
 async function getStatus(printer) {
   try {
     const ip = await resolveHost(printer.ip);
+    const pollStart = Date.now();
     const [printerRes, jobRes] = await Promise.all([
       axios.get(`http://${ip}/api/printer`, { headers: headers(printer), timeout: 8000 }),
       axios.get(`http://${ip}/api/job`, { headers: headers(printer), timeout: 8000 }),
@@ -129,6 +186,7 @@ async function getStatus(printer) {
     const currentFile = (status === 'PRINTING' && hasJobFile) ? job.job.file.name : null;
 
     noteOnline(printer);
+    noteSlowAnswer(printer, Date.now() - pollStart);
     return { status, progress, timeRemaining, currentFile };
   } catch (err) {
     noteOffline(printer, err);

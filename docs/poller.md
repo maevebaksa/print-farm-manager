@@ -120,6 +120,10 @@ The scheduler's listener calls `scheduleForPrinter`, not a raw dispatch, so a pr
 
 The gate on "only when there is a tracked active job" prevents an already-resolved printer from being re-held by a later transition (e.g. a network blip causing `FINISHED` → `OFFLINE` → `FINISHED` after the operator already confirmed and cleared the hold).
 
+## Staggered poll starts
+
+A tick does not start every printer's poll at the same instant. The starts are spread evenly over `POLL_STAGGER_WINDOW_MS` (5 seconds): with 10 printers, one starts every 500 ms. Polling all printers at once opens a burst of new connections (two requests per OctoPrint printer), and some routers, access points, and firewalls treat a burst to one subnet as a scan and drop it, which looks like a group of printers all timing out together and recovering together. The window plus the 8-second driver timeout stays under the 15-second interval (13 s), so a tick always finishes before the next begins. The cost is that the last printer's status can be up to 5 seconds staler. Each printer's row is re-read when its turn comes, and a printer decommissioned while waiting is skipped. `pollComplete` still fires once, after the last poll settles.
+
 ## OFFLINE debounce
 
 A printer that was reachable is reported `OFFLINE` only after `OFFLINE_CONFIRM_POLLS` (3) consecutive `OFFLINE` results from its driver, about 30 seconds. One or two missed polls keep the stored status, emit no `statusChange`, and write nothing (so a printing job's progress is not wiped). Any non-`OFFLINE` result resets the count. Why: printers on shared Wi-Fi miss the occasional poll, and a single miss used to flip Fleet to `OFFLINE` for a cycle and, for a printer with a job in progress, hold it ("Went offline with a job in progress") until an operator confirmed.

@@ -125,3 +125,66 @@ describe('PrinterPoller: OFFLINE debounce', () => {
     expect(stored(db).status).toBe('OFFLINE');
   });
 });
+
+// Polling every printer at the same instant opens a burst of connections that some
+// routers and access points drop. Starts are spread over POLL_STAGGER_WINDOW_MS instead.
+describe('PrinterPoller: staggered poll starts', () => {
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => { jest.useRealTimers(); });
+
+  function makeFleet(count) {
+    const db = makeDb();
+    for (let i = 2; i <= count; i++) {
+      db.prepare("INSERT INTO printers (id, name, status) VALUES (?, ?, 'IDLE')").run(i, `mini${i}`);
+    }
+    return db;
+  }
+
+  test('printers are polled one after another across the window, not all at once', async () => {
+    const db = makeFleet(5);
+    const polled = [];
+    getDriver.mockReturnValue({ getStatus: jest.fn(async (printer) => { polled.push(printer.id); return IDLE; }) });
+    const poller = new PrinterPoller(db);
+
+    const tick = poller._tick();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(polled).toEqual([1]); // only the first starts immediately
+
+    await jest.advanceTimersByTimeAsync(1000); // spacing is 5000 / 5 = 1000 ms
+    expect(polled).toEqual([1, 2]);
+
+    await jest.advanceTimersByTimeAsync(3000);
+    await tick;
+    expect(polled).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test('every printer is still polled once per tick and pollComplete fires after the last', async () => {
+    const db = makeFleet(3);
+    getDriver.mockReturnValue({ getStatus: jest.fn().mockResolvedValue(IDLE) });
+    const poller = new PrinterPoller(db);
+    const complete = jest.fn();
+    poller.on('pollComplete', complete);
+
+    const tick = poller._tick();
+    await jest.advanceTimersByTimeAsync(5000);
+    await tick;
+
+    expect(getDriver.mock.results.length).toBe(3);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  test('a printer decommissioned while waiting for its slot is skipped, and a fresh row is polled', async () => {
+    const db = makeFleet(2);
+    const seen = [];
+    getDriver.mockReturnValue({ getStatus: jest.fn(async (printer) => { seen.push(printer.id); return IDLE; }) });
+    const poller = new PrinterPoller(db);
+
+    const tick = poller._tick();
+    await jest.advanceTimersByTimeAsync(0);
+    db.prepare('UPDATE printers SET is_active = 0 WHERE id = 2').run(); // before printer 2's slot
+    await jest.advanceTimersByTimeAsync(5000);
+    await tick;
+
+    expect(seen).toEqual([1]);
+  });
+});

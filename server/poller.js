@@ -3,6 +3,16 @@ const { getDriver } = require('./drivers');
 
 const POLL_INTERVAL_MS = 15000;
 
+// Window over which one tick's printer polls are started, evenly spaced, instead of all
+// at the same instant. Polling every printer at once opens a burst of new connections
+// (two requests per OctoPrint printer), and some routers, access points, and firewalls
+// treat a burst of connections to one subnet as a scan and drop it, which shows up as a
+// group of printers all timing out together and recovering together. Spreading the
+// starts costs at most this much staleness on the last printer's status. This window
+// plus the 8 s driver timeout must stay under POLL_INTERVAL_MS so one tick always
+// finishes before the next begins (5 s + 8 s = 13 s < 15 s).
+const POLL_STAGGER_WINDOW_MS = 5000;
+
 // Event-loop lag monitor. Everything in this server shares one thread, so any long
 // synchronous job (decoding a large .bgcode, a big backup restore) delays every poll
 // response and can push all printers past their ~8 s request timeouts at once, which
@@ -79,8 +89,9 @@ class PrinterPoller extends EventEmitter {
 
     if (printers.length === 0) return;
 
+    const spacingMs = Math.floor(POLL_STAGGER_WINDOW_MS / printers.length);
     const results = await Promise.allSettled(
-      printers.map((printer) => this._pollPrinter(printer))
+      printers.map((printer, i) => this._pollAfter(i * spacingMs, printer))
     );
 
     results.forEach((result, i) => {
@@ -90,6 +101,17 @@ class PrinterPoller extends EventEmitter {
     });
 
     this.emit('pollComplete');
+  }
+
+  // Starts one printer's poll after delayMs. The row is re-read at poll time because it
+  // may be a few seconds old by then (another path can have changed its status), and a
+  // printer decommissioned in the meantime is skipped.
+  async _pollAfter(delayMs, printer) {
+    if (delayMs <= 0) return this._pollPrinter(printer);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const fresh = this.db.prepare('SELECT * FROM printers WHERE id = ? AND is_active = 1').get(printer.id);
+    if (!fresh) return;
+    return this._pollPrinter(fresh);
   }
 
   async _pollPrinter(printer) {
