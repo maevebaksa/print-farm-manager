@@ -83,11 +83,8 @@ function makeApp(db, scheduler = { scheduleForPrinter: jest.fn(), startedAt: 0 }
         || db.prepare(`
             SELECT * FROM jobs WHERE printer_id = ? AND status = 'failed' AND finished_at > ?
             ORDER BY finished_at DESC LIMIT 1
-          `).get(printer.id, scheduler.startedAt)
-        || db.prepare(`
-            SELECT * FROM jobs WHERE printer_id = ? AND status = 'cancelled'
-            ORDER BY finished_at DESC LIMIT 1
-          `).get(printer.id);
+          `).get(printer.id, scheduler.startedAt);
+      // A 'cancelled' job is intentionally not looked up: a cancel is not a completed print.
 
       if (activeJob) {
         const creditQty = (confirmed_qty != null && !isNaN(parseInt(confirmed_qty, 10)))
@@ -717,18 +714,56 @@ describe('set-ready — stopped printer (cancelled job newer than old finished j
     expect(part.completed_qty).toBe(4);
   });
 
-  test('resolves the cancelled job and credits the confirmed qty', async () => {
+  // Regression: cancelling a print and then clicking Set Ready used to find the
+  // cancelled job and credit a plate to completed_qty. The Fleet UI pre-fills the full
+  // plate count after an in-app cancel, so the operator never typed that number.
+  test('cancel then Set Ready credits nothing and leaves the job cancelled', async () => {
     const db = makeDb();
     const { printerId, partId, cancelledJobId } = seedStoppedScenario(db);
 
     await request(makeApp(db))
       .post(`/api/printers/${printerId}/set-ready`)
-      .send({ confirmed_qty: 2 });
+      .send({}); // no confirmed_qty: the old default credited the full parts_per_plate
 
     const job  = db.prepare('SELECT status FROM jobs WHERE id = ?').get(cancelledJobId);
     const part = db.prepare('SELECT completed_qty FROM parts WHERE id = ?').get(partId);
-    expect(job.status).toBe('finished');
-    expect(part.completed_qty).toBe(6); // 4 from old job + 2 confirmed good
+    expect(job.status).toBe('cancelled');
+    expect(part.completed_qty).toBe(4); // unchanged: only the old finished job counts
+  });
+
+  test('cancel then Set Ready credits nothing even with a confirmed_qty sent', async () => {
+    const db = makeDb();
+    const { printerId, partId, cancelledJobId } = seedStoppedScenario(db);
+
+    await request(makeApp(db))
+      .post(`/api/printers/${printerId}/set-ready`)
+      .send({ confirmed_qty: 4 }); // what the pre-filled Fleet input sends after a cancel
+
+    const job  = db.prepare('SELECT status FROM jobs WHERE id = ?').get(cancelledJobId);
+    const part = db.prepare('SELECT completed_qty FROM parts WHERE id = ?').get(partId);
+    expect(job.status).toBe('cancelled');
+    expect(part.completed_qty).toBe(4);
+  });
+
+  test('a stale cancelled job with no other job on the printer is never credited', async () => {
+    const db        = makeDb();
+    const printerId = seedPrinter(db, { name: `P_stale_${Date.now()}` });
+    const projectId = seedProject(db);
+    const partId    = seedPart(db, projectId, { completedQty: 0 });
+    const gcodeId   = seedGcode(db, partId);
+    const jobId = seedJob(db, printerId, partId, gcodeId, 'cancelled', {
+      partsPerPlate: 4,
+      finishedAt: Date.now() - 5 * 86400_000, // cancelled days ago
+    });
+
+    // e.g. a held printer being released for an unrelated reason
+    await request(makeApp(db))
+      .post(`/api/printers/${printerId}/set-ready`)
+      .send({});
+
+    const part = db.prepare('SELECT completed_qty FROM parts WHERE id = ?').get(partId);
+    expect(part.completed_qty).toBe(0);
+    expect(db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId).status).toBe('cancelled');
   });
 
   test('releases the hold so the next job dispatches', async () => {

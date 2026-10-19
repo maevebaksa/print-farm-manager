@@ -239,10 +239,10 @@ const server = app.listen(PORT, () => {
     `).get(printer.id);
 
     // A cancelled job newer than the last finished one means the printer was stopped
-    // (STOPPED status) after its last normal finish. The stopped job is the one the
-    // operator is confirming — fall through to the missed-finish path below, which
-    // resolves it via the cancelled lookup. Without this, confirmed_qty would be
-    // misapplied as a delta against the older finished job's part.
+    // or cancelled after its last normal finish. Fall through to the missed-finish
+    // path below, which credits nothing for a cancelled job. Without this,
+    // confirmed_qty would be misapplied as a delta against the older finished job's
+    // part.
     if (finishedJob) {
       const newerCancelled = db.prepare(`
         SELECT 1 FROM jobs WHERE printer_id = ? AND status = 'cancelled' AND finished_at > ? LIMIT 1
@@ -288,18 +288,16 @@ const server = app.listen(PORT, () => {
       // failed in the current server process. A stale failed job from a previous
       // session must not be credited just because the operator clicked Set Ready.
       //
-      // Also check for a cancelled job (operator stopped on printer screen). No
-      // startedAt gate — a cancelled job that survived a server restart is still
-      // the right job to credit when the operator confirms it was good.
+      // A 'cancelled' job is deliberately NOT looked up here. A cancel (the Cancel
+      // button, or a stop on the printer screen) is not a completed print, and the
+      // Fleet UI pre-fills the full plate count after an in-app cancel, so crediting
+      // it let "cancel, then Set Ready" add a whole plate to completed_qty. Set Ready
+      // on a cancelled job only releases the hold; the job stays cancelled.
       const activeJob = printingJob
         || db.prepare(`
             SELECT * FROM jobs WHERE printer_id = ? AND status = 'failed' AND finished_at > ?
             ORDER BY finished_at DESC LIMIT 1
-          `).get(printer.id, scheduler.startedAt)
-        || db.prepare(`
-            SELECT * FROM jobs WHERE printer_id = ? AND status = 'cancelled'
-            ORDER BY finished_at DESC LIMIT 1
-          `).get(printer.id);
+          `).get(printer.id, scheduler.startedAt);
 
       if (activeJob) {
         // OFFLINE-with-job: operator is saying "job is still running, resume" — do not
@@ -320,7 +318,7 @@ const server = app.listen(PORT, () => {
         `).run(creditQty, now, activeJob.part_id);
 
         const part = db.prepare('SELECT * FROM parts WHERE id = ?').get(activeJob.part_id);
-        const label = printingJob ? 'missed-finish' : activeJob.status === 'cancelled' ? 'cancelled-confirmed-good' : 'MQTT-recovered finish';
+        const label = printingJob ? 'missed-finish' : 'MQTT-recovered finish';
         console.log(`[server] ${printer.name} ${label} confirmed good — Part "${part.name}" ${part.completed_qty}/${part.target_qty}`);
 
         if (part.completed_qty >= part.target_qty) {

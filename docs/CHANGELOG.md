@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-10-20: Set Ready no longer credits a cancelled job
+
+Real-world trigger: an operator cancelled a print (Cancel button, reason "print failed") and then clicked Set Ready on the printer, and a whole plate was added to the part's `completed_qty` even though nothing was printed. `POST /api/printers/:id/set-ready` looked up the printer's most recent `cancelled` job (no time limit, no check that it was cancelled in this session) and, when no finished or printing job existed, marked it `finished` and credited `confirmed_qty`, or the full `parts_per_plate` when none was sent. After an in-app cancel the printer returns to IDLE, so the Fleet confirm input is pre-filled with the full plate count (only a `STOPPED` printer defaults to 0), which made the credit look like operator intent. The same lookup would also credit a cancelled job from days ago whenever any held printer was released with no other job on it. Set Ready now only releases the hold for a cancelled job: nothing is credited and the job stays `cancelled`, whatever `confirmed_qty` is sent. A cancelled job newer than the last finished job still stops `confirmed_qty` being applied as a delta against the older finished job. Behavior removed on purpose: confirming a print stopped on the printer screen as actually good no longer adds parts via Set Ready. `completed_qty` paths for finished, printing, recently-failed and upload-stalled jobs are untouched, and set-ready-batch never credited anything. Hardware validation: not applicable (server logic, covered by tests).
+
+### Changes
+- `server/index.js`: `set-ready` no longer selects a `cancelled` job as the job to credit; comments updated.
+- `server/tests/set-ready.test.js`: handler replica mirrors the change; the old "credits the confirmed qty" test is replaced by regression tests for cancel then Set Ready (no `confirmed_qty`, and with a full-plate `confirmed_qty`) and for a stale cancelled job.
+- `docs/web-app.md`: Stopped printers paragraph describes the new behavior.
+
+---
+
 ## 2026-10-19: OctoPrint driver reconnects a closed serial link
 
 Follow-up to the 2026-10-07 diagnostics entry. Reported trigger: OctoPrint printers went OFFLINE after the farm sat idle. When `GET /api/printer` answers 409 (OctoPrint is up but its serial link to the printer is closed), the driver now sends `POST /api/connection` with `{ "command": "connect" }`. Only `command` is sent, so OctoPrint uses its own saved port and baudrate preference (or auto-detects) and its autoconnect and save settings are not changed. It is attempted only on a 409 (never for an unreachable host, a timeout, or a rejected API key), at most once per printer per 60 seconds, and a failure (for example a 403 when the API key's user lacks the CONNECTION permission) is logged and ignored. The poll that triggers it still returns `OFFLINE`; the next poll reports the real state. Holds, dispatch, and part counts are untouched, and no `completed_qty` path is involved. Protocol read from OctoPrint's `docs/api/connection.rst` (204 on success, 400 for an unavailable port, CONNECTION permission required). Hardware validation: not validated on hardware; mocked tests only. The root cause of the idle disconnects is still unconfirmed.
