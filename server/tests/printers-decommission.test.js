@@ -5,6 +5,11 @@ const request  = require('supertest');
 const express  = require('express');
 const Database = require('better-sqlite3');
 
+// events.js writes to the real server database (./db), not this file's in-memory one;
+// mocked so the route's event calls can be asserted without touching it.
+jest.mock('../events', () => ({ insert: jest.fn() }));
+const events = require('../events');
+
 // ── In-memory DB setup ────────────────────────────────────────────────────────
 
 let db;
@@ -414,5 +419,102 @@ describe('POST /api/printers/:id/complete-and-decommission', () => {
 
     const part = db.prepare('SELECT completed_qty FROM parts WHERE id = ?').get(partId);
     expect(part.completed_qty).toBe(4);
+  });
+});
+
+// ── mark-job-failure with decommission: false (Bad Print, keep the printer) ──────
+// A failed print used to always decommission the printer, even when the operator only
+// wanted the part recorded as bad and the machine kept running after clearing the bed.
+
+describe('POST /api/printers/:id/mark-job-failure with decommission: false', () => {
+  const keep = { decommission: false, note: 'spaghetti, bed cleared' };
+
+  test('keeps the printer active and releases its hold, job still failed', async () => {
+    const projectId = seedProject();
+    const partId    = seedPart(projectId, 10, 4);
+    const gcodeId   = seedGcode(partId);
+    const printerId = seedPrinter({ name: `Printer_keep_${Date.now()}`, is_held: 1 });
+    const jobId     = seedJob(printerId, partId, gcodeId, 'finished', 4);
+
+    const res = await request(app).post(`/api/printers/${printerId}/mark-job-failure`).send(keep);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, job_id: jobId, decommissioned: false });
+
+    const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(printerId);
+    expect(printer.is_active).toBe(1);
+    expect(printer.is_held).toBe(0);
+    expect(printer.decommissioned_at).toBeNull();
+    expect(db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId).status).toBe('failed');
+  });
+
+  test('still undoes the credited quantity and reopens a closed part', async () => {
+    const projectId = seedProject();
+    const partId    = seedPart(projectId, 4, 4);
+    db.prepare("UPDATE parts SET status = 'closed' WHERE id = ?").run(partId);
+    const gcodeId   = seedGcode(partId);
+    const printerId = seedPrinter({ name: `Printer_keepqty_${Date.now()}` });
+    seedJob(printerId, partId, gcodeId, 'finished', 4);
+
+    await request(app).post(`/api/printers/${printerId}/mark-job-failure`).send(keep);
+
+    const part = db.prepare('SELECT * FROM parts WHERE id = ?').get(partId);
+    expect(part.completed_qty).toBe(0);
+    expect(part.status).toBe('open');
+  });
+
+  test('a printing or uploading job is failed without touching completed_qty', async () => {
+    const projectId = seedProject();
+    const partId    = seedPart(projectId, 10, 3);
+    const gcodeId   = seedGcode(partId);
+    const printerId = seedPrinter({ name: `Printer_keepact_${Date.now()}`, status: 'UNKNOWN' });
+    const jobId     = seedJob(printerId, partId, gcodeId, 'printing', 4);
+
+    await request(app).post(`/api/printers/${printerId}/mark-job-failure`).send(keep);
+
+    expect(db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId).status).toBe('failed');
+    expect(db.prepare('SELECT completed_qty FROM parts WHERE id = ?').get(partId).completed_qty).toBe(3);
+    expect(db.prepare('SELECT is_active FROM printers WHERE id = ?').get(printerId).is_active).toBe(1);
+  });
+
+  test('with no tracked job the printer is kept and released instead of decommissioned', async () => {
+    const printerId = seedPrinter({ name: `Printer_keepnojob_${Date.now()}`, is_held: 1 });
+
+    const res = await request(app).post(`/api/printers/${printerId}/mark-job-failure`).send(keep);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, job_id: null, decommissioned: false });
+
+    const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(printerId);
+    expect(printer.is_active).toBe(1);
+    expect(printer.is_held).toBe(0);
+  });
+
+  test('records the reason and that the printer was kept, as a job_failed event', async () => {
+    const projectId = seedProject();
+    const partId    = seedPart(projectId, 10, 0);
+    const gcodeId   = seedGcode(partId);
+    const printerId = seedPrinter({ name: `Printer_keepevt_${Date.now()}` });
+    seedJob(printerId, partId, gcodeId, 'printing', 4);
+
+    await request(app).post(`/api/printers/${printerId}/mark-job-failure`).send(keep);
+
+    const call = events.insert.mock.calls.find(([id, type]) => id === printerId && type === 'job_failed');
+    expect(call).toBeDefined();
+    expect(call[2]).toContain('spaghetti, bed cleared');
+    expect(call[2]).toContain('printer kept in service');
+  });
+
+  // The default must not change for existing callers (Upload Failed, the Decommission
+  // dialog's "print failed" choice, any script): omitted or anything but false decommissions.
+  test.each([[undefined], [true], ['false'], [0]])('decommission=%p still decommissions the printer', async (value) => {
+    const projectId = seedProject();
+    const partId    = seedPart(projectId, 10, 0);
+    const gcodeId   = seedGcode(partId);
+    const printerId = seedPrinter({ name: `Printer_default_${Date.now()}_${String(value)}` });
+    seedJob(printerId, partId, gcodeId, 'printing', 4);
+
+    const res = await request(app).post(`/api/printers/${printerId}/mark-job-failure`)
+      .send(value === undefined ? {} : { decommission: value });
+    expect(res.body.decommissioned).toBe(true);
+    expect(db.prepare('SELECT is_active FROM printers WHERE id = ?').get(printerId).is_active).toBe(0);
   });
 });

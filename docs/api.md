@@ -409,7 +409,16 @@ The dispatched job is marked `printing` before the next poll has updated the pri
 
 ### `POST /api/printers/:id/mark-job-failure`
 
-Marks the printer's most relevant active or recently-completed job as `failed`, undoes the `completed_qty` increment if needed, reopens the Part and Project if needed, and decommissions the printer (`is_active = 0`).
+Marks the printer's most relevant active or recently-completed job as `failed`, undoes the `completed_qty` increment if needed, reopens the Part and Project if needed, and by default decommissions the printer (`is_active = 0`).
+
+**Body (all optional):**
+
+```json
+{ "note": "spaghetti, bed cleared", "decommission": false }
+```
+
+- `note`: free-text reason, stored as the `decommission_note` when decommissioning and in the `job_failed` printer event.
+- `decommission`: defaults to `true`. Only the JSON boolean `false` changes behavior (any other value, or omitting it, decommissions as before). With `false` the job is still marked `failed` and any credited quantity is still undone, but the printer stays active and its hold is released (`is_held = 0`) because the operator has taken responsibility for clearing the bed. This route has no scheduler handle, so it does not dispatch by itself: the Fleet UI follows it with `POST /api/scheduler/dispatch`, and the next sweep picks the printer up otherwise.
 
 **Job selection — two-query priority:**
 
@@ -421,9 +430,9 @@ Marks the printer's most relevant active or recently-completed job as `failed`, 
 - `printing` — no qty change (was never credited).
 - `uploading` — no qty change (print never started).
 
-If no tracked job matches any of the above, the printer is still decommissioned — operator intent is always to take the machine offline.
+If no tracked job matches any of the above, the printer is still decommissioned (or, with `decommission: false`, kept active with its hold released).
 
-Returns `{ "success": true, "job_id": N }` (or `job_id: null` when no job was found). Returns `404` only if the printer itself does not exist.
+Returns `{ "success": true, "job_id": N, "decommissioned": true }` (or `job_id: null` when no job was found; `decommissioned` is `false` when the printer was kept in service). Returns `404` only if the printer itself does not exist.
 
 ### `GET /api/printers/:id/linkable-jobs`
 

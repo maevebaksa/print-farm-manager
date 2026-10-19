@@ -719,25 +719,31 @@ export default function Fleet() {
   async function badPrint(printerId) {
     const printer = printers.find(p => p.id === printerId);
     const result = await confirm({
-      title: `Mark Bad Print — ${printer?.name}`,
-      message: 'This will undo the completed quantity, reopen the part if it was closed, and decommission the printer pending investigation.\n\nRecommission the printer manually once you have confirmed it is safe to run.',
-      confirmLabel: 'Mark as Failed',
+      title: `Mark Bad Print: ${printer?.name}`,
+      message: 'This marks the print as failed. Any quantity already credited is undone, the part is reopened if it was closed, and the job goes back in the queue.\n\nKeep in service releases the printer\'s hold so it takes the next job: clear the bed first. Decommission takes it out of service until you recommission it.',
       prompt: 'Reason for failure',
       promptRequired: true,
-      danger: true,
+      actions: [
+        { label: 'Keep printer in service', value: 'keep', variant: 'primary' },
+        { label: 'Decommission printer', value: 'decommission', variant: 'danger' },
+      ],
     });
     if (!result) return;
-    const { text: reason } = result;
+    const { value: choice, text: reason } = result;
+    const keepInService = choice === 'keep';
     const res = await fetch(`/api/printers/${printerId}/mark-job-failure`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note: reason }),
+      body: JSON.stringify({ note: reason, decommission: !keepInService }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       showToast(`Failed to mark bad print: ${body.error || res.status}`, 'error');
     } else {
       setSelectedForReady(prev => { const next = new Set(prev); next.delete(printerId); return next; });
+      // The server releases the hold but has no scheduler handle here, so ask for a
+      // sweep so the printer gets its next job now rather than on some later trigger.
+      if (keepInService) fetch('/api/scheduler/dispatch', { method: 'POST' }).catch(() => {});
     }
     fetchPrinters();
   }

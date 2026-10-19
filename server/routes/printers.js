@@ -460,9 +460,19 @@ module.exports = (db) => {
   // POST /api/printers/:id/recommission — handled in server/index.js (needs scheduler access)
 
   // POST /api/printers/:id/mark-job-failure — mark last finished job as failed, undo completed_qty
+  //
+  // Body { note, decommission }. decommission defaults to true (take the printer out of
+  // service pending investigation, the original behavior). Sent as the JSON boolean
+  // false, the job is still marked failed and any credited quantity is still undone,
+  // but the printer stays active and its hold is released: the operator has looked at
+  // it and is taking responsibility for clearing the bed, same as Set Ready does.
+  // Releasing the hold does not dispatch by itself (this router has no scheduler); the
+  // Fleet UI triggers a sweep, and the next sweep picks the printer up otherwise.
   router.post('/:id/mark-job-failure', (req, res) => {
     const printer = db.prepare('SELECT * FROM printers WHERE id = ?').get(req.params.id);
     if (!printer) return res.status(404).json({ error: 'Printer not found' });
+
+    const decommission = req.body?.decommission !== false;
 
     // Active jobs (printing/uploading) take priority over finished ones.
     //
@@ -506,10 +516,16 @@ module.exports = (db) => {
       // Operator intent is clear: take the machine offline regardless.
       const now = Date.now();
       const noJobNote = req.body?.note ?? null;
+      if (!decommission) {
+        db.prepare('UPDATE printers SET is_held = 0 WHERE id = ?').run(printer.id);
+        events.insert(printer.id, 'job_failed', noJobNote ?? 'No tracked job, bad print recorded, printer kept in service', req.user);
+        console.log(`[printers] ${printer.name} bad print recorded (no tracked job), kept in service`);
+        return res.json({ success: true, job_id: null, decommissioned: false });
+      }
       db.prepare('UPDATE printers SET is_active = 0, decommissioned_at = ?, decommission_note = ? WHERE id = ?').run(now, noJobNote, printer.id);
       events.insert(printer.id, 'job_failed', noJobNote ?? 'No tracked job, printer decommissioned for investigation', req.user);
       console.log(`[printers] ${printer.name} decommissioned (no tracked job to mark failed)`);
-      return res.json({ success: true, job_id: null });
+      return res.json({ success: true, job_id: null, decommissioned: true });
     }
 
     const now = Date.now();
@@ -538,19 +554,27 @@ module.exports = (db) => {
     // printing (missed-finish), uploading (upload stalled), and cancelled (stopped on printer
     // screen) cases: completed_qty was never incremented, so there is nothing to undo.
 
-    // Decommission the printer — a failed print requires investigation before it can run again.
-    // The operator must explicitly recommission it when the machine is confirmed safe.
+    // By default a failed print takes the printer out of service: it requires investigation
+    // before it can run again, and the operator must explicitly recommission it. With
+    // decommission: false the operator has already looked at it, so the printer stays
+    // active and only its hold is released.
     const failNote = req.body?.note ?? null;
-    db.prepare('UPDATE printers SET is_active = 0, decommissioned_at = ?, decommission_note = ? WHERE id = ?').run(now, failNote, printer.id);
+    if (decommission) {
+      db.prepare('UPDATE printers SET is_active = 0, decommissioned_at = ?, decommission_note = ? WHERE id = ?').run(now, failNote, printer.id);
+    } else {
+      db.prepare('UPDATE printers SET is_held = 0 WHERE id = ?').run(printer.id);
+    }
 
     const failedPart = db.prepare('SELECT name FROM parts WHERE id = ?').get(job.part_id);
     const eventNote = failNote
       ? `Job ${job.id} — part: ${failedPart?.name ?? 'unknown'} — ${failNote}`
       : `Job ${job.id} — part: ${failedPart?.name ?? 'unknown'}`;
-    events.insert(printer.id, 'job_failed', eventNote, req.user);
+    events.insert(printer.id, 'job_failed', decommission ? eventNote : `${eventNote} (printer kept in service)`, req.user);
 
-    console.log(`[printers] Job ${job.id} marked failed — ${printer.name} decommissioned pending investigation`);
-    res.json({ success: true, job_id: job.id });
+    console.log(decommission
+      ? `[printers] Job ${job.id} marked failed, ${printer.name} decommissioned pending investigation`
+      : `[printers] Job ${job.id} marked failed, ${printer.name} kept in service`);
+    res.json({ success: true, job_id: job.id, decommissioned: decommission });
   });
 
   // GET /api/printers/:id/camera: webcam feed info for a printer, if supported.

@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-10-25: Bad Print can keep the printer in service
+
+Real-world trigger: the Fleet "Bad Print" / "Job Failed" button always decommissioned the printer, so recording one failed plate (spaghetti on a Prusa Mini, bed cleared in a minute) meant recommissioning it by hand afterwards. `POST /api/printers/:id/mark-job-failure` now takes an optional `decommission` flag (default `true`, so every existing caller behaves as before). With the JSON boolean `false` the job is still marked `failed`, any credited quantity is still undone and the part reopened exactly as before, but the printer stays active and its hold is released, since the operator confirming the failure is the human sign-off the hold exists to wait for. The Fleet dialog now asks for the reason and offers "Keep printer in service" or "Decommission printer", and after keeping a printer it asks for a dispatch sweep because this router has no scheduler handle. Upload Failed and the Decommission dialog's "Print failed" choice are unchanged and still decommission. The decrement of `completed_qty` for a finished job is the existing path, unchanged; nothing new increments or decrements it. Hardware validation: not applicable (server route and UI only).
+
+### Changes
+- `server/routes/printers.js`: `mark-job-failure` honors `decommission: false` (job-found and no-job paths), returns `decommissioned`.
+- `client/src/pages/Fleet.jsx`: `badPrint` dialog offers keep or decommission and sweeps after keep.
+- `server/tests/printers-decommission.test.js`: tests for keep (job failed, qty undone, part reopened, hold released, no-job path, event note) and for the unchanged default; `events` mocked in this file.
+- `docs/api.md`, `docs/web-app.md`: documented.
+
+---
+
 ## 2026-10-24: one slow upload no longer blocks dispatch to every other printer
 
 Real-world trigger: a project would not dispatch and Sweep for Jobs did nothing. The log showed every idle printer logging "became dispatchable during a sweep, deferred to end of sweep" and none dispatching, while one printer (`mini1`) kept failing a 34.9 MB `.bgcode` upload with `timeout of 300000ms exceeded`; everything then dispatched at once when its retry window finally ran out. The Jobs page showed its job stuck as UPLOADING. Two causes, both fixed:
