@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-10-19: OctoPrint driver reconnects a closed serial link
+
+Follow-up to the 2026-10-07 diagnostics entry. Reported trigger: OctoPrint printers went OFFLINE after the farm sat idle. When `GET /api/printer` answers 409 (OctoPrint is up but its serial link to the printer is closed), the driver now sends `POST /api/connection` with `{ "command": "connect" }`. Only `command` is sent, so OctoPrint uses its own saved port and baudrate preference (or auto-detects) and its autoconnect and save settings are not changed. It is attempted only on a 409 (never for an unreachable host, a timeout, or a rejected API key), at most once per printer per 60 seconds, and a failure (for example a 403 when the API key's user lacks the CONNECTION permission) is logged and ignored. The poll that triggers it still returns `OFFLINE`; the next poll reports the real state. Holds, dispatch, and part counts are untouched, and no `completed_qty` path is involved. Protocol read from OctoPrint's `docs/api/connection.rst` (204 on success, 400 for an unavailable port, CONNECTION permission required). Hardware validation: not validated on hardware; mocked tests only. The root cause of the idle disconnects is still unconfirmed.
+
+### Changes
+- `server/drivers/octoprint.js`: `tryReconnect` and `CONNECT_RETRY_MS`; `getStatus` calls it on a 409.
+- `server/tests/octoprint-driver.test.js`: tests for the connect payload, 409-only trigger, cooldown, and swallowed connect failure.
+
+---
+
 ## 2026-10-07: OctoPrint driver logs why a printer is OFFLINE
 
 Report: OctoPrint printers on plain IPs went OFFLINE after the farm sat idle for a while. `getStatus` collapsed every failure into `OFFLINE`, so "OctoPrint host unreachable" (asleep Pi, Wi-Fi power save) and "OctoPrint is up but its serial link to the printer is closed" looked identical, and nothing was logged. Per OctoPrint's API docs, `GET /api/printer` answers 409 when the printer is not operational, which is the second case. The returned status is unchanged (`OFFLINE`), so holds, dispatch, and part counts behave exactly as before; this only makes the cause visible in the server log, once per change (not every 15 s poll), plus a line when the printer becomes reachable again. This is diagnostics, not a confirmed root-cause fix: the actual cause on the reporter's farm is not yet known. No `completed_qty` path touched. Hardware validation: not validated on hardware; behavior is covered by mocked tests only.

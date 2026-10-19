@@ -132,7 +132,8 @@ describe('getStatus', () => {
     const printer = { ...fakePrinter, id: 901, name: 'OctoPi_diag' };
     beforeEach(() => { logSpy = jest.spyOn(console, 'log').mockImplementation(() => {}); });
     afterEach(() => { logSpy.mockRestore(); });
-    const logged = () => logSpy.mock.calls.map(c => c[0]).filter(l => String(l).includes('OctoPi_diag'));
+    const logged = () => logSpy.mock.calls.map(c => c[0])
+      .filter(l => /OctoPi_diag (OFFLINE|reachable again)/.test(String(l)));
 
     test('409 from /api/printer is OFFLINE and logs that the serial link is closed', async () => {
       axios.get.mockRejectedValue({ response: { status: 409 } });
@@ -155,6 +156,59 @@ describe('getStatus', () => {
       await octoprint.getStatus(printer);
       expect(logged()).toHaveLength(3);
       expect(logged()[2]).toMatch(/reachable again/);
+    });
+  });
+
+  describe('auto-reconnect on 409', () => {
+    let nowSpy;
+    let now;
+    beforeEach(() => {
+      jest.spyOn(console, 'log').mockImplementation(() => {});
+      jest.spyOn(console, 'warn').mockImplementation(() => {});
+      now = 1_000_000_000;
+      nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => now);
+      axios.post.mockResolvedValue({ status: 204 });
+    });
+    afterEach(() => { nowSpy.mockRestore(); console.log.mockRestore(); console.warn.mockRestore(); });
+
+    test('sends the connect command (command only) when /api/printer answers 409', async () => {
+      axios.get.mockRejectedValue({ response: { status: 409 } });
+      const result = await octoprint.getStatus({ ...fakePrinter, id: 910 });
+      expect(result.status).toBe('OFFLINE');
+      expect(axios.post).toHaveBeenCalledTimes(1);
+      expect(axios.post).toHaveBeenCalledWith(
+        'http://192.168.1.240:5000/api/connection',
+        { command: 'connect' },
+        expect.objectContaining({ headers: { 'X-Api-Key': 'test-key' } })
+      );
+    });
+
+    test('does not send connect for unreachable, timeout, or auth errors', async () => {
+      for (const [i, err] of [[911, { code: 'ECONNREFUSED' }], [912, { code: 'ECONNABORTED' }], [913, { response: { status: 403 } }]]) {
+        axios.get.mockRejectedValue(err);
+        await octoprint.getStatus({ ...fakePrinter, id: i });
+      }
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    test('waits out the cooldown between attempts, then tries again', async () => {
+      axios.get.mockRejectedValue({ response: { status: 409 } });
+      const printer = { ...fakePrinter, id: 914 };
+      await octoprint.getStatus(printer);
+      now += 15000;
+      await octoprint.getStatus(printer);
+      expect(axios.post).toHaveBeenCalledTimes(1);
+      now += 60000;
+      await octoprint.getStatus(printer);
+      expect(axios.post).toHaveBeenCalledTimes(2);
+    });
+
+    test('a failing connect command (e.g. 403) is swallowed and the status is still OFFLINE', async () => {
+      axios.get.mockRejectedValue({ response: { status: 409 } });
+      axios.post.mockRejectedValue({ response: { status: 403 } });
+      const result = await octoprint.getStatus({ ...fakePrinter, id: 915 });
+      expect(result.status).toBe('OFFLINE');
+      expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/connect command failed \(HTTP 403\)/));
     });
   });
 

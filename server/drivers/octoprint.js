@@ -52,6 +52,39 @@ function noteOnline(printer) {
   }
 }
 
+// ─── Auto-reconnect ─────────────────────────────────────────────────────────
+
+// When OctoPrint answers 409 (up, but its serial link to the printer is closed), ask it
+// to connect. Only `command` is sent, so OctoPrint uses its own saved port/baudrate
+// preference (or auto-detects) and leaves its autoconnect and save settings untouched.
+// Needs the CONNECTION permission on the API key; a 403 is logged and otherwise ignored.
+// Ref: https://github.com/OctoPrint/OctoPrint/blob/master/docs/api/connection.rst
+//
+// Minimum gap between connect attempts per printer. Must exceed the 15 s poll interval
+// and the time OctoPrint needs to open the serial port, so a powered-off printer is not
+// hit with a connect on every poll and an attempt in progress is not interrupted.
+const CONNECT_RETRY_MS = 60000;
+
+// printer.id -> timestamp (ms) of the last connect attempt
+const lastConnectAttempt = new Map();
+
+async function tryReconnect(printer, ip) {
+  const last = lastConnectAttempt.get(printer.id) || 0;
+  if (Date.now() - last < CONNECT_RETRY_MS) return;
+  lastConnectAttempt.set(printer.id, Date.now());
+
+  try {
+    await axios.post(`http://${ip}/api/connection`, { command: 'connect' }, {
+      headers: headers(printer),
+      timeout: 8000,
+    });
+    console.log(`[octoprint] ${printer.name}: serial connection was closed, sent connect command`);
+  } catch (err) {
+    const status = err?.response?.status;
+    console.warn(`[octoprint] ${printer.name}: connect command failed (${status ? `HTTP ${status}` : (err?.code || err?.message)})`);
+  }
+}
+
 // ─── Status ─────────────────────────────────────────────────────────────────
 
 // Returns { status, progress, timeRemaining, currentFile }
@@ -99,6 +132,11 @@ async function getStatus(printer) {
     return { status, progress, timeRemaining, currentFile };
   } catch (err) {
     noteOffline(printer, err);
+    // A rejected status request is only a 409 when OctoPrint itself answered; resolveHost
+    // never throws, so ip is rebuilt the same way here for the connect call.
+    if (err?.response?.status === 409) {
+      await tryReconnect(printer, await resolveHost(printer.ip));
+    }
     return { status: 'OFFLINE', progress: null, timeRemaining: null, currentFile: null };
   }
 }
