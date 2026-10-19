@@ -19,6 +19,13 @@ const fakePrinter = { id: 1, name: 'OctoPi_01', ip: '192.168.1.240:5000', model:
 
 const filesToClean = [];
 
+// Drains a Readable (the converted-file upload body) into one Buffer.
+async function streamToBuffer(stream) {
+  const parts = [];
+  for await (const chunk of stream) parts.push(Buffer.from(chunk));
+  return Buffer.concat(parts);
+}
+
 beforeAll(() => {
   if (!fs.existsSync(GCODE_DIR)) fs.mkdirSync(GCODE_DIR, { recursive: true });
 });
@@ -362,8 +369,11 @@ describe('uploadAndPrint', () => {
     await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
 
     const fileCall = appendSpy.mock.calls.find(([name]) => name === 'file');
-    expect(Buffer.isBuffer(fileCall[1])).toBe(true);
-    expect(fileCall[1].toString()).toContain('G28\nG1 X1\n');
+    // A converted file is streamed in small chunks so upload progress follows what the
+    // printer accepts; the declared length keeps Content-Length exact.
+    const sent = await streamToBuffer(fileCall[1]);
+    expect(sent.toString()).toContain('G28\nG1 X1\n');
+    expect(fileCall[2].knownLength).toBe(sent.length);
     expect(fileCall[2].filename).toBe(filename.replace(/\.bgcode$/, '.gcode'));
     appendSpy.mockRestore();
   });
@@ -393,56 +403,10 @@ describe('uploadAndPrint', () => {
     await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
     expect(reads()).toBe(2);
     const fileCall = appendSpy.mock.calls.find(([name]) => name === 'file');
-    expect(fileCall[1].toString()).toContain('Y1 Z1 E1');
+    expect((await streamToBuffer(fileCall[1])).toString()).toContain('Y1 Z1 E1');
 
     appendSpy.mockRestore();
     readSpy.mockRestore();
-  });
-
-  // Regression: axios's `timeout` is a wall-clock deadline for the whole request, and it
-  // was a flat 300000 ms, so a 34.9 MB converted file on a link slower than ~0.12 MB/s
-  // failed at exactly 5:00 on every attempt even while progressing, and never finished.
-  describe('upload timeout scales with the file size', () => {
-    function sparseGcode(name, bytes) {
-      const fullPath = path.join(GCODE_DIR, name);
-      fs.writeFileSync(fullPath, '');
-      fs.truncateSync(fullPath, bytes); // sparse: no real disk or memory use
-      filesToClean.push(fullPath);
-      return fullPath;
-    }
-    const timeoutFor = async (bytes) => {
-      const name = `octoprint_timeout_${bytes}_${Date.now()}.gcode`;
-      axios.post.mockClear();
-      axios.post.mockResolvedValueOnce({ data: { effectivePrint: true } });
-      jest.spyOn(console, 'log').mockImplementation(() => {});
-      await octoprint.uploadAndPrint(fakePrinter, sparseGcode(name, bytes), name);
-      console.log.mockRestore();
-      return axios.post.mock.calls[0][2].timeout;
-    };
-
-    test('a small file keeps the original 5 minute limit', async () => {
-      expect(await timeoutFor(1024 * 1024)).toBe(300000);
-    });
-
-    test('a 35 MB file gets enough time for a 30 KB/s link, well over 5 minutes', async () => {
-      const t = await timeoutFor(35 * 1024 * 1024);
-      expect(t).toBe(Math.ceil((35 * 1024 * 1024) / (30 * 1024)) * 1000); // 1,195,000 ms
-      expect(t).toBeGreaterThan(300000);
-    });
-
-    test('the limit is capped at 30 minutes', async () => {
-      expect(await timeoutFor(500 * 1024 * 1024)).toBe(30 * 60000);
-    });
-
-    test('a failed upload reports the file size and the rate it needed, not a throughput', async () => {
-      const name = `octoprint_failmsg_${Date.now()}.gcode`;
-      const full = sparseGcode(name, 35 * 1024 * 1024);
-      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-      axios.post.mockRejectedValueOnce(Object.assign(new Error('timeout of 1195000ms exceeded'), { code: 'ECONNABORTED' }));
-      await expect(octoprint.uploadAndPrint(fakePrinter, full, name)).rejects.toThrow(/timeout/);
-      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/upload failed after \d+s \(file is 35\.0 MB, the 1195s limit needs at least 0\.03 MB\/s\)/));
-      warn.mockRestore();
-    });
   });
 
   test('logs the upload size and duration on success and on failure', async () => {
@@ -457,7 +421,7 @@ describe('uploadAndPrint', () => {
 
     axios.post.mockRejectedValueOnce(Object.assign(new Error('timeout of 300000ms exceeded'), { code: 'ECONNABORTED' }));
     await expect(octoprint.uploadAndPrint(fakePrinter, fullPath, filename)).rejects.toThrow(/timeout/);
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/OctoPi_01: upload failed after \d+s \(file is \d+\.\d MB, the \d+s limit needs at least \d+\.\d\d MB\/s\)/));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/OctoPi_01: upload failed after \d+s, \d+\.\d of \d+\.\d MB accepted by the printer/));
 
     log.mockRestore();
     warn.mockRestore();
@@ -475,7 +439,7 @@ describe('uploadAndPrint', () => {
     await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
 
     const fileCall = appendSpy.mock.calls.find(([name]) => name === 'file');
-    expect(fileCall[1].toString()).toBe('G28\n');
+    expect((await streamToBuffer(fileCall[1])).toString()).toBe('G28\n');
     expect(fileCall[2].filename).toBe(filename.replace(/\.gcode\.3mf$/, '.gcode'));
     appendSpy.mockRestore();
   });

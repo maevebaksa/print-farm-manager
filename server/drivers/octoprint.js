@@ -10,6 +10,8 @@
 
 const axios = require('axios');
 const net = require('net');
+const http = require('http');
+const { Readable } = require('stream');
 const fs = require('fs');
 const FormData = require('form-data');
 const { resolveHost } = require('../mdns-resolve');
@@ -244,21 +246,28 @@ function convertedGcode(filename, gcodeFullPath) {
   return converted;
 }
 
-// axios enforces `timeout` as a wall-clock deadline for the WHOLE request (upload plus
-// OctoPrint's reply), not as an idle timer, so a fixed 5 minutes killed any upload that
-// could not finish in 5 minutes even while it was progressing. A 34.9 MB converted file
-// needs at least 0.12 MB/s to fit; on a slower link (a Pi Zero on weak Wi-Fi) every
-// attempt failed at 5:00 and the scheduler restarted it from zero, so it never finished.
-// The limit now grows with the file: it assumes the link sustains at least
-// UPLOAD_ASSUMED_MIN_RATE_BYTES_PER_S, never goes below the old 5 minutes for small
-// files, and is capped so a printer that is truly dead is still given up on.
-const UPLOAD_MIN_TIMEOUT_MS = 300000;
-const UPLOAD_MAX_TIMEOUT_MS = 30 * 60000;
-const UPLOAD_ASSUMED_MIN_RATE_BYTES_PER_S = 30 * 1024;
+// Upload time limits. axios enforces its `timeout` as a wall-clock deadline for the WHOLE
+// request (confirmed against a throttled local server), so one flat number cannot tell a
+// slow-but-working link from a stalled one: a flat 5 minutes killed healthy slow uploads,
+// and raising it to 20+ minutes just makes a stalled printer hang for 20+ minutes. The
+// upload is instead watched for progress and fails fast when it stops.
+//   stallMs:     no body bytes accepted by the printer for this long => stalled, give up
+//   replyWaitMs: the whole body is sent, then OctoPrint has this long to save the file,
+//                select it, start the print, and reply
+//   maxTotalMs:  hard cap on the whole request, however it is progressing
+// A mutable object (exported as _uploadLimits) so tests can shorten them.
+const uploadLimits = { stallMs: 60000, replyWaitMs: 300000, maxTotalMs: 10 * 60000 };
+const UPLOAD_WATCHDOG_TICK_MS = 1000;
+const UPLOAD_CHUNK_BYTES = 64 * 1024;
 
-function uploadTimeoutMs(bytes) {
-  const needed = Math.ceil(bytes / UPLOAD_ASSUMED_MIN_RATE_BYTES_PER_S) * 1000;
-  return Math.min(UPLOAD_MAX_TIMEOUT_MS, Math.max(UPLOAD_MIN_TIMEOUT_MS, needed));
+// Streams a Buffer in small chunks instead of handing the socket one huge write, so the
+// upload's progress (axios onUploadProgress) follows what the printer actually accepts.
+function chunkedStream(buf) {
+  const chunks = [];
+  for (let i = 0; i < buf.length; i += UPLOAD_CHUNK_BYTES) {
+    chunks.push(buf.subarray(i, i + UPLOAD_CHUNK_BYTES));
+  }
+  return Readable.from(chunks, { objectMode: false });
 }
 
 async function uploadAndPrint(printer, gcodeFullPath, filename) {
@@ -279,32 +288,77 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
       throw new Error(`Cannot print "${filename}" on ${printer.name}: OctoPrint only accepts .gcode, .bgcode (converted) or sliced .3mf (converted)`);
     }
     console.log(`[octoprint] ${printer.name}: converted "${filename}" to plain G-code "${converted.filename}" (${(converted.buffer.length / 1048576).toFixed(1)} MB)`);
-    upload = { body: converted.buffer, filename: converted.filename };
+    upload = { body: chunkedStream(converted.buffer), filename: converted.filename, length: converted.buffer.length };
   }
 
   const form = new FormData();
-  form.append('file', upload.body, { filename: upload.filename, contentType: 'application/octet-stream' });
+  form.append('file', upload.body, {
+    filename: upload.filename,
+    contentType: 'application/octet-stream',
+    ...(upload.length != null ? { knownLength: upload.length } : {}),
+  });
   form.append('select', 'true');
   form.append('print', 'true');
 
-  // Upload size and duration are logged on both success and failure: a slow printer or
-  // link (a Pi Zero on weak Wi-Fi can manage well under 1 MB/s) and a stalled one look
-  // identical from "timeout of 300000ms exceeded" alone, and the scheduler retries the
-  // whole upload, so the numbers are what tell an operator which one they have.
-  const uploadBytes = Buffer.isBuffer(upload.body) ? upload.body.length : fs.statSync(gcodeFullPath).size;
-  const uploadTimeout = uploadTimeoutMs(uploadBytes);
+  // Upload size, progress and duration are logged on both success and failure: a slow
+  // link and a stalled printer end in the same timeout error otherwise, and the
+  // scheduler retries the whole upload, so the numbers are what tell an operator which
+  // one they have.
+  const uploadBytes = upload.length ?? fs.statSync(gcodeFullPath).size;
+  const MB = 1048576;
   const uploadStart = Date.now();
+
+  // Real progress comes from the socket, not from axios. axios's onUploadProgress counts
+  // bytes pushed into Node's write buffer, and form-data ignores backpressure, so it
+  // reports 100% instantly however slowly the printer accepts data (verified against a
+  // throttled local server). The bytes the printer has actually accepted are the bytes
+  // written minus what libuv still has queued. _handle.writeQueueSize is the same figure
+  // net.Socket#bufferSize is built on; if a Node version lacks it, the watchdog has no
+  // progress signal and stays out of the way (the hard cap still applies).
+  let socket = null;
+  const agent = new http.Agent({ keepAlive: false });
+  const createConnection = agent.createConnection.bind(agent);
+  agent.createConnection = (opts, cb) => { socket = createConnection(opts, cb); return socket; };
+  const queuedBytes = () => socket?._handle?.writeQueueSize;
+  const writtenBytes = () => socket?.bytesWritten ?? 0;
+  const acceptedBytes = () => (queuedBytes() == null ? null : Math.max(0, writtenBytes() - queuedBytes()));
+
+  // Exact request body size (multipart framing included), as axios computes it for the
+  // Content-Length header.
+  const bodyLength = await new Promise((resolve) => form.getLength((err, len) => resolve(err ? uploadBytes : len)));
+
   const uploadStats = () => {
     const secs = Math.max(1, Math.round((Date.now() - uploadStart) / 1000));
-    return `${(uploadBytes / 1048576).toFixed(1)} MB in ${secs}s (${(uploadBytes / 1048576 / secs).toFixed(2)} MB/s)`;
+    return `${(uploadBytes / MB).toFixed(1)} MB in ${secs}s (${(uploadBytes / MB / secs).toFixed(2)} MB/s)`;
   };
-  // On failure the whole file was NOT necessarily sent, so report the file size and the
-  // rate it would have needed, not a throughput.
+  // On failure the whole file was not necessarily accepted, so say how far it got.
   const uploadFailureStats = () => {
     const secs = Math.max(1, Math.round((Date.now() - uploadStart) / 1000));
-    const needed = uploadBytes / 1048576 / (uploadTimeout / 1000);
-    return `${secs}s (file is ${(uploadBytes / 1048576).toFixed(1)} MB, the ${Math.round(uploadTimeout / 1000)}s limit needs at least ${needed.toFixed(2)} MB/s)`;
+    // lastAccepted is the watchdog's last reading: by the time a failure is reported the
+    // socket may already be destroyed and no longer readable.
+    const accepted = Math.min(Math.max(acceptedBytes() ?? lastAccepted, 0), uploadBytes) / MB;
+    return `${secs}s, ${accepted.toFixed(1)} of ${(uploadBytes / MB).toFixed(1)} MB accepted by the printer`;
   };
+
+  // Watchdog: fail fast when the upload stops moving instead of waiting out a long
+  // wall-clock limit. Before the body is fully drained into the connection, no change in
+  // accepted bytes means a stalled link or printer; after it, OctoPrint gets replyWaitMs
+  // to save the file, select it, start the print, and reply.
+  const controller = new AbortController();
+  let abortWhy = null; // 'stalled' | 'noreply' when the watchdog gives up
+  let lastAccepted = -1;
+  let lastProgressAt = uploadStart;
+  const watchdog = setInterval(() => {
+    const accepted = acceptedBytes();
+    if (accepted == null) return;
+    const now = Date.now();
+    if (accepted !== lastAccepted) { lastAccepted = accepted; lastProgressAt = now; }
+    const drained = writtenBytes() >= bodyLength && queuedBytes() === 0;
+    const idleMs = now - lastProgressAt;
+    if (!drained && idleMs > uploadLimits.stallMs) { abortWhy = 'stalled'; controller.abort(); }
+    else if (drained && idleMs > uploadLimits.replyWaitMs) { abortWhy = 'noreply'; controller.abort(); }
+  }, UPLOAD_WATCHDOG_TICK_MS);
+  if (watchdog.unref) watchdog.unref();
 
   let res;
   try {
@@ -313,13 +367,21 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
       form,
       {
         headers: { ...headers(printer), ...form.getHeaders() },
-        timeout: uploadTimeout,
+        timeout: uploadLimits.maxTotalMs,
+        signal: controller.signal,
+        httpAgent: agent,
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
       }
     );
   } catch (err) {
     console.warn(`[octoprint] ${printer.name}: upload failed after ${uploadFailureStats()}`);
+    if (abortWhy === 'stalled') {
+      throw new Error(`Upload to ${printer.name} stalled: no data accepted for ${uploadLimits.stallMs / 1000}s, ${uploadFailureStats().split(', ')[1]}`);
+    }
+    if (abortWhy === 'noreply') {
+      throw new Error(`Upload to ${printer.name} sent the whole file but OctoPrint did not reply within ${uploadLimits.replyWaitMs / 1000}s`);
+    }
     const status = err.response?.status;
     if (status === 409) {
       throw Object.assign(
@@ -334,6 +396,8 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
       ? ' (check the API key: its user needs the FILES_UPLOAD and PRINT permissions, plus FILES_DELETE to re-upload a file name that already exists)'
       : '';
     throw new Error(`OctoPrint rejected the upload to ${printer.name} (HTTP ${status}${detail})${hint}`, { cause: err });
+  } finally {
+    clearInterval(watchdog);
   }
 
   console.log(`[octoprint] ${printer.name}: upload finished, ${uploadStats()}`);
@@ -442,4 +506,5 @@ async function testConnection(printer) {
   }
 }
 
-module.exports = { getStatus, uploadAndPrint, cancelJob, checkIfPrinting, getCameraUrl, testConnection };
+// _uploadLimits is a test hook: tests shorten the upload watchdog limits through it.
+module.exports = { getStatus, uploadAndPrint, cancelJob, checkIfPrinting, getCameraUrl, testConnection, _uploadLimits: uploadLimits };
