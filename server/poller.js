@@ -12,6 +12,14 @@ const POLL_INTERVAL_MS = 15000;
 const LAG_CHECK_MS = 1000;
 const LAG_WARN_MS = 2000;
 
+// Consecutive OFFLINE results required before a printer that was reachable is reported
+// as OFFLINE. Printers on shared Wi-Fi or a busy network miss the occasional poll (the
+// ~8 s request timeout), and without this one miss flipped the Fleet view to OFFLINE for
+// a whole 15 s cycle and, for a printer with a job in progress, held it for operator
+// review. Must stay small: a printer that really dropped is shown with its last status
+// for up to (OFFLINE_CONFIRM_POLLS - 1) extra poll intervals, so 3 means about 30 s.
+const OFFLINE_CONFIRM_POLLS = 3;
+
 class PrinterPoller extends EventEmitter {
   constructor(db) {
     super();
@@ -19,6 +27,13 @@ class PrinterPoller extends EventEmitter {
     this.timer = null;
     this.lagTimer = null;
     this._lastLagCheck = 0;
+    // printer.id -> consecutive OFFLINE results so far (reset by any other result)
+    this._offlineMisses = new Map();
+    // printer ids that returned a non-OFFLINE status during THIS process lifetime. The
+    // debounce only applies to these: right after a restart the stored status says
+    // nothing about the printer, and a first OFFLINE (e.g. Bambu MQTT still connecting)
+    // must be reported as before, so cold-start behavior is unchanged.
+    this._seenOnline = new Set();
   }
 
   start() {
@@ -95,6 +110,22 @@ class PrinterPoller extends EventEmitter {
     newStatus = result.status;
     jobProgress = result.progress;
     jobTimeRemaining = result.timeRemaining;
+
+    // Absorb a transient miss: keep the stored status until OFFLINE has been seen
+    // OFFLINE_CONFIRM_POLLS times in a row. Returns early so the rest of this handler
+    // (status write, job progress, lane sync) never runs on the empty OFFLINE result.
+    if (newStatus === 'OFFLINE') {
+      if (previousStatus !== 'OFFLINE' && this._seenOnline.has(printer.id)) {
+        const misses = (this._offlineMisses.get(printer.id) || 0) + 1;
+        if (misses < OFFLINE_CONFIRM_POLLS) {
+          this._offlineMisses.set(printer.id, misses);
+          return;
+        }
+      }
+    } else {
+      this._offlineMisses.delete(printer.id);
+      this._seenOnline.add(printer.id);
+    }
 
     if (newStatus !== previousStatus) {
       // Only hold when there is a tracked active job to protect. This gates all three

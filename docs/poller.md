@@ -120,6 +120,12 @@ The scheduler's listener calls `scheduleForPrinter`, not a raw dispatch, so a pr
 
 The gate on "only when there is a tracked active job" prevents an already-resolved printer from being re-held by a later transition (e.g. a network blip causing `FINISHED` → `OFFLINE` → `FINISHED` after the operator already confirmed and cleared the hold).
 
+## OFFLINE debounce
+
+A printer that was reachable is reported `OFFLINE` only after `OFFLINE_CONFIRM_POLLS` (3) consecutive `OFFLINE` results from its driver, about 30 seconds. One or two missed polls keep the stored status, emit no `statusChange`, and write nothing (so a printing job's progress is not wiped). Any non-`OFFLINE` result resets the count. Why: printers on shared Wi-Fi miss the occasional poll, and a single miss used to flip Fleet to `OFFLINE` for a cycle and, for a printer with a job in progress, hold it ("Went offline with a job in progress") until an operator confirmed.
+
+The debounce only applies to a printer that has returned a non-`OFFLINE` status during the current server process. After a restart the first `OFFLINE` is still reported immediately, so cold-start behavior is unchanged (for example a Bambu printer whose MQTT connection is still being established). A printer that is already `OFFLINE` is not debounced again. The trade-off is that a printer that really drops keeps showing its last status for up to two extra poll intervals.
+
 ## Event-loop lag monitor
 
 The whole server runs on one thread, so a long synchronous task (for example decoding a large `.bgcode` for an OctoPrint upload) delays every poll response and can push every printer past its 8-second timeout at once, which looks like all printers going `OFFLINE` together. `start()` also runs a 1-second timer; when it fires more than 2 seconds late, the poller logs `[poller] server was blocked for ~Ns (a long synchronous task); printer polls during this window can time out and read OFFLINE`. If offline episodes line up with that line, the server froze; if they do not, the printers or the network dropped.

@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-10-22: one missed poll no longer marks a printer OFFLINE
+
+Real-world trigger: on a farm of Prusa Minis running OctoPrint, Fleet and the dashboard randomly showed several printers as OFFLINE for one cycle and then corrected themselves on the next refresh, and one printer was shown held with "Went offline with a job in progress. If it comes back printing, this clears automatically" with Job OK / Job Failed buttons although nothing was wrong with it. The server log showed groups of printers logging "did not answer in time" together and "reachable again" on the next poll. A single poll that exceeded the 8 second timeout was enough: `poller.js` wrote `OFFLINE`, and for a printer with an `uploading`/`printing` job `_handlePrinterOffline` held it and logged an `offline_with_job` event, which only clears automatically if the printer next reports PRINTING. The poller now reports `OFFLINE` only after 3 consecutive failed polls (`OFFLINE_CONFIRM_POLLS`, about 30 s) for a printer that has been seen online during the current process; a suppressed poll returns early, so it writes no status, no progress, and fires no events. After a restart the first `OFFLINE` is still reported immediately, so the cold-start behavior (including a Bambu printer's first poll being OFFLINE while MQTT connects) is unchanged. This hides the symptom, not the cause: why those printers miss polls is still unconfirmed, and the per-printer `[octoprint] ... OFFLINE:` log line still records every miss. A printer that truly drops is now shown with its last status for up to about 30 s longer. No `completed_qty` path touched; only when OFFLINE is reported changes. Hardware validation: not validated on hardware; mocked tests only.
+
+### Changes
+- `server/poller.js`: `OFFLINE_CONFIRM_POLLS`, `_offlineMisses`, `_seenOnline`; `_pollPrinter` absorbs transient OFFLINE results.
+- `server/tests/poller-offline-debounce.test.js`: new tests (blips absorbed, third miss reported, reset on success, printing printer not held or wiped, cold start unchanged, already-offline not re-debounced).
+- `docs/poller.md`: OFFLINE debounce section.
+
+---
+
 ## 2026-10-21: dispatch diagnostic checks file and job state; OctoPrint converts once; lag monitor
 
 Real-world trigger: a project with a priority override would not dispatch, and Sweep for Jobs did nothing, while "Why isn't this printing?" said "Ready to dispatch". The server log showed every OctoPrint printer logging `became dispatchable during a sweep, deferred to end of sweep` and none dispatching, while `mini1` kept failing a 34.9 MB `.bgcode` upload (`timeout of 300000ms exceeded`), and printers `mini3` to `mini8` went OFFLINE ("did not answer in time") and came back together, repeatedly. Three changes, none of which is a confirmed fix for those printers:
