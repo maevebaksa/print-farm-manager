@@ -2,6 +2,17 @@
 
 ---
 
+## 2026-10-28: OctoPrint upload time limit scales with the file size
+
+Real-world trigger: one printer (`mini1`) could never finish uploading a 34.9 MB converted `megamini1.bgcode`. Its upload failed with `timeout of 300000ms exceeded` on every attempt, the scheduler restarted it from zero each time, and the job sat as UPLOADING for the whole retry window and again after every re-dispatch. Cause: axios 1.16 enforces `timeout` as a wall-clock deadline for the whole request (confirmed by uploading 40 MB through a 3 MB/s throttled local server: a 5 s timeout aborted at exactly 5.0 s while data was flowing, a 30 s timeout completed in 13.0 s), and the OctoPrint driver sent a flat 300000 ms, so any upload that could not finish in 5 minutes was killed however healthy it was. A 34.9 MB file needs at least 0.12 MB/s to fit, which a Pi Zero on weak Wi-Fi may not sustain. The limit now grows with the file: it assumes the link sustains at least 30 KB/s, is never below the old 5 minutes, and is capped at 30 minutes (about 19.9 minutes for 34.9 MB). The failure log line no longer claims a throughput it cannot know: it reports the elapsed time, the file size, and the minimum rate the limit needed. A genuinely dead printer is now given up on later (up to 30 minutes per attempt for a very large file instead of 5), but it only occupies its own dispatch slot since the sliding-window change, and a host that refuses or cannot be reached still fails at once. The underlying link speed to `mini1` is unconfirmed: if it is below 30 KB/s the upload will still fail, and the failure line will say what rate was needed. No `completed_qty` path touched. Hardware validation: not validated on hardware; mocked tests plus a local throttled-server check only.
+
+### Changes
+- `server/drivers/octoprint.js`: `uploadTimeoutMs` and its constants; the upload uses it; failure log reworded.
+- `server/tests/octoprint-driver.test.js`: tests for the limit at small, 35 MB, and capped sizes, and for the failure message.
+- `docs/multi-brand.md`: documented.
+
+---
+
 ## 2026-10-27: staggered poll starts and OctoPrint offline diagnostics
 
 Real-world trigger: on a farm of Prusa Minis running OctoPrint, the server log kept showing `mini3` to `mini8` timing out together ("did not answer in time") for 30 to 60 seconds and then recovering together, while `mini1`, `mini2`, and `mini10` were never affected and the operator could reach the "offline" printers fine. After the OFFLINE debounce the dropouts were still real from the server's side (three failed polls in a row). The new `[poller] server was blocked for ~5s` line also showed that converting a 34.9 MB `.bgcode` freezes the server for about 5 seconds on that host, which on its own is too short to cause 8-second timeouts. The cause is still unconfirmed. Two changes to find out, neither a confirmed fix:

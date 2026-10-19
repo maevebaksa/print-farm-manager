@@ -244,6 +244,23 @@ function convertedGcode(filename, gcodeFullPath) {
   return converted;
 }
 
+// axios enforces `timeout` as a wall-clock deadline for the WHOLE request (upload plus
+// OctoPrint's reply), not as an idle timer, so a fixed 5 minutes killed any upload that
+// could not finish in 5 minutes even while it was progressing. A 34.9 MB converted file
+// needs at least 0.12 MB/s to fit; on a slower link (a Pi Zero on weak Wi-Fi) every
+// attempt failed at 5:00 and the scheduler restarted it from zero, so it never finished.
+// The limit now grows with the file: it assumes the link sustains at least
+// UPLOAD_ASSUMED_MIN_RATE_BYTES_PER_S, never goes below the old 5 minutes for small
+// files, and is capped so a printer that is truly dead is still given up on.
+const UPLOAD_MIN_TIMEOUT_MS = 300000;
+const UPLOAD_MAX_TIMEOUT_MS = 30 * 60000;
+const UPLOAD_ASSUMED_MIN_RATE_BYTES_PER_S = 30 * 1024;
+
+function uploadTimeoutMs(bytes) {
+  const needed = Math.ceil(bytes / UPLOAD_ASSUMED_MIN_RATE_BYTES_PER_S) * 1000;
+  return Math.min(UPLOAD_MAX_TIMEOUT_MS, Math.max(UPLOAD_MIN_TIMEOUT_MS, needed));
+}
+
 async function uploadAndPrint(printer, gcodeFullPath, filename) {
   const ip = await resolveHost(printer.ip);
   const lower = filename.toLowerCase();
@@ -275,10 +292,18 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
   // identical from "timeout of 300000ms exceeded" alone, and the scheduler retries the
   // whole upload, so the numbers are what tell an operator which one they have.
   const uploadBytes = Buffer.isBuffer(upload.body) ? upload.body.length : fs.statSync(gcodeFullPath).size;
+  const uploadTimeout = uploadTimeoutMs(uploadBytes);
   const uploadStart = Date.now();
   const uploadStats = () => {
     const secs = Math.max(1, Math.round((Date.now() - uploadStart) / 1000));
     return `${(uploadBytes / 1048576).toFixed(1)} MB in ${secs}s (${(uploadBytes / 1048576 / secs).toFixed(2)} MB/s)`;
+  };
+  // On failure the whole file was NOT necessarily sent, so report the file size and the
+  // rate it would have needed, not a throughput.
+  const uploadFailureStats = () => {
+    const secs = Math.max(1, Math.round((Date.now() - uploadStart) / 1000));
+    const needed = uploadBytes / 1048576 / (uploadTimeout / 1000);
+    return `${secs}s (file is ${(uploadBytes / 1048576).toFixed(1)} MB, the ${Math.round(uploadTimeout / 1000)}s limit needs at least ${needed.toFixed(2)} MB/s)`;
   };
 
   let res;
@@ -288,13 +313,13 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
       form,
       {
         headers: { ...headers(printer), ...form.getHeaders() },
-        timeout: 300000, // 5 minutes — large files on slow networks
+        timeout: uploadTimeout,
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
       }
     );
   } catch (err) {
-    console.warn(`[octoprint] ${printer.name}: upload failed after ${uploadStats()}`);
+    console.warn(`[octoprint] ${printer.name}: upload failed after ${uploadFailureStats()}`);
     const status = err.response?.status;
     if (status === 409) {
       throw Object.assign(
