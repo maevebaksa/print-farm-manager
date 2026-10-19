@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-10-26: Upload Failed can keep the printer in service
+
+Real-world trigger: a printer (`mini1`) whose large upload had stalled was stuck on the Fleet card "Upload failed, but printer shows job complete. Did the print succeed?" with two buttons, neither right: "Set Ready" (with the printer IDLE this credits a plate as if the print succeeded, though the upload never completed) and "Upload Failed", which always decommissioned the printer. The previous change added a keep-in-service choice to Bad Print and Job Failed but deliberately left this button alone. "Upload Failed" now opens the same dialog: a reason plus "Keep printer in service" (job failed, nothing credited or deducted, hold released, a dispatch sweep requested) or "Decommission printer" (the old behavior). The server route (`mark-job-failure` with `decommission: false`) is unchanged. Known and not changed here: the "Set Ready" button on this card credits `parts_per_plate` when the printer is IDLE or FINISHED, and IDLE alone does not show that the print happened; that touches `completed_qty` and needs a decision. Hardware validation: not applicable (UI only).
+
+### Changes
+- `client/src/pages/Fleet.jsx`: `uploadFailed` offers keep or decommission and sweeps after keep.
+- `docs/web-app.md`: documented.
+
+---
+
 ## 2026-10-25: Bad Print can keep the printer in service
 
 Real-world trigger: the Fleet "Bad Print" / "Job Failed" button always decommissioned the printer, so recording one failed plate (spaghetti on a Prusa Mini, bed cleared in a minute) meant recommissioning it by hand afterwards. `POST /api/printers/:id/mark-job-failure` now takes an optional `decommission` flag (default `true`, so every existing caller behaves as before). With the JSON boolean `false` the job is still marked `failed`, any credited quantity is still undone and the part reopened exactly as before, but the printer stays active and its hold is released, since the operator confirming the failure is the human sign-off the hold exists to wait for. The Fleet dialog now asks for the reason and offers "Keep printer in service" or "Decommission printer", and after keeping a printer it asks for a dispatch sweep because this router has no scheduler handle. Upload Failed and the Decommission dialog's "Print failed" choice are unchanged and still decommission. The decrement of `completed_qty` for a finished job is the existing path, unchanged; nothing new increments or decrements it. Hardware validation: not applicable (server route and UI only).

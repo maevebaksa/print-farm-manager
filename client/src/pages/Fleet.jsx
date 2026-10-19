@@ -751,23 +751,29 @@ export default function Fleet() {
   async function uploadFailed(printerId) {
     const printer = printers.find(p => p.id === printerId);
     const result = await confirm({
-      title: `Confirm Upload Failure — ${printer?.name}`,
-      message: 'This confirms the print never started. No completed quantity will be deducted. The printer will be decommissioned pending investigation.\n\nRecommission the printer manually when it is ready to run again.',
-      confirmLabel: 'Confirm Upload Failed',
+      title: `Confirm Upload Failure: ${printer?.name}`,
+      message: 'This confirms the print never started. No completed quantity is credited or deducted, and the job goes back in the queue.\n\nKeep in service releases the printer\'s hold so it takes the next job. Decommission takes it out of service until you recommission it.',
       prompt: 'Notes / reason',
       promptRequired: true,
-      danger: true,
+      actions: [
+        { label: 'Keep printer in service', value: 'keep', variant: 'primary' },
+        { label: 'Decommission printer', value: 'decommission', variant: 'danger' },
+      ],
     });
     if (!result) return;
-    const { text: reason } = result;
+    const { value: choice, text: reason } = result;
+    const keepInService = choice === 'keep';
     const res = await fetch(`/api/printers/${printerId}/mark-job-failure`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note: reason }),
+      body: JSON.stringify({ note: reason, decommission: !keepInService }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       showToast(`Failed to mark upload failure: ${body.error || res.status}`, 'error');
+    } else if (keepInService) {
+      // Same reason as badPrint: the server has no scheduler handle on this route.
+      fetch('/api/scheduler/dispatch', { method: 'POST' }).catch(() => {});
     }
     fetchPrinters();
   }
