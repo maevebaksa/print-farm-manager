@@ -3,17 +3,32 @@ const { getDriver } = require('./drivers');
 
 const POLL_INTERVAL_MS = 15000;
 
+// Event-loop lag monitor. Everything in this server shares one thread, so any long
+// synchronous job (decoding a large .bgcode, a big backup restore) delays every poll
+// response and can push all printers past their ~8 s request timeouts at once, which
+// shows up as every printer going OFFLINE together. A 1 s timer that fires more than
+// LAG_WARN_MS late proves the thread was blocked. Must stay well under the 8 s driver
+// timeout, so a block that could cause a false OFFLINE is always reported.
+const LAG_CHECK_MS = 1000;
+const LAG_WARN_MS = 2000;
+
 class PrinterPoller extends EventEmitter {
   constructor(db) {
     super();
     this.db = db;
     this.timer = null;
+    this.lagTimer = null;
+    this._lastLagCheck = 0;
   }
 
   start() {
     console.log(`[poller] Starting poll loop (interval: ${POLL_INTERVAL_MS}ms)`);
     this._tick();
     this.timer = setInterval(() => this._tick(), POLL_INTERVAL_MS);
+
+    this._lastLagCheck = Date.now();
+    this.lagTimer = setInterval(() => this._checkLag(Date.now()), LAG_CHECK_MS);
+    this.lagTimer.unref();
   }
 
   stop() {
@@ -21,6 +36,20 @@ class PrinterPoller extends EventEmitter {
       clearInterval(this.timer);
       this.timer = null;
     }
+    if (this.lagTimer) {
+      clearInterval(this.lagTimer);
+      this.lagTimer = null;
+    }
+  }
+
+  // Returns the measured lag in ms (0 if on time) and logs when it exceeds LAG_WARN_MS.
+  _checkLag(now) {
+    const lag = Math.max(0, now - this._lastLagCheck - LAG_CHECK_MS);
+    this._lastLagCheck = now;
+    if (lag > LAG_WARN_MS) {
+      console.warn(`[poller] server was blocked for ~${Math.round(lag / 1000)}s (a long synchronous task); printer polls during this window can time out and read OFFLINE`);
+    }
+    return lag;
   }
 
   async _tick() {

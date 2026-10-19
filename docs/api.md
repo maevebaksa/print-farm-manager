@@ -649,7 +649,7 @@ Diagnostic for the "Why isn't this printing?" button on the Projects page. Mirro
 }
 ```
 
-- `reasons`: populated when `dispatchable` is `false`: global blockers (project not active, part complete, no G-code, remaining qty already covered by in-progress jobs) followed by per-G-code availability problems (pending print approval, no printers of that model, group/material/color mismatch, all matching printers busy or held).
+- `reasons`: populated when `dispatchable` is `false`: global blockers (project not active, part complete, no G-code, remaining qty already covered by in-progress jobs) followed by per-G-code availability problems (pending print approval, the G-code file missing from the server's gcode folder, no printers of that model, group/material/color mismatch, all matching printers busy or held, or idle but still holding a stale `uploading`/`printing` job row).
 - `notes` — populated when `dispatchable` is `true`: advisory per-G-code items (e.g. one G-code can dispatch but another has no ready printers).
 
 The material/color check counts a printer as a match via its own `loaded_material`/`loaded_color`, or via any single one of its `printer_lanes` rows (a multi-lane Klipper printer synced from the klipper-filament-sync plugin): mirrors `server/scheduler.js`'s candidate query exactly, see `docs/database.md`'s `printer_lanes` entry.

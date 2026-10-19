@@ -2,6 +2,25 @@
 
 ---
 
+## 2026-10-21: dispatch diagnostic checks file and job state; OctoPrint converts once; lag monitor
+
+Real-world trigger: a project with a priority override would not dispatch, and Sweep for Jobs did nothing, while "Why isn't this printing?" said "Ready to dispatch". The server log showed every OctoPrint printer logging `became dispatchable during a sweep, deferred to end of sweep` and none dispatching, while `mini1` kept failing a 34.9 MB `.bgcode` upload (`timeout of 300000ms exceeded`), and printers `mini3` to `mini8` went OFFLINE ("did not answer in time") and came back together, repeatedly. Three changes, none of which is a confirmed fix for those printers:
+
+- `GET /api/parts/:id/dispatch-status` now mirrors two scheduler checks it was missing: the G-code file must exist in the gcode folder (the scheduler silently skips a part whose file is gone), and an idle printer that still has an `uploading`/`printing` job row is not ready (the scheduler fails a stale one and holds the printer). Before, the panel could say "Ready" while every sweep skipped the part.
+- The OctoPrint driver converted a `.bgcode`/`.3mf` on every upload attempt, and the scheduler retries each failed upload 3 times per sweep and again on later sweeps, so a large file was re-read and re-decoded on the single server thread each time. The converted result is now kept per file (keyed on mtime and size, the 2 most recent files) so it is converted once.
+- The poller now logs when the server thread was blocked for more than 2 seconds, so mass OFFLINE episodes can be attributed to a frozen server rather than the printers or network.
+
+Known and not changed here: a sweep stays "in progress" until every upload in its wave finishes, so one printer that keeps timing out on a large upload (up to 3 attempts of 300 s, repeated while the retry window is open) defers every other printer that becomes idle, and the manual sweep is deferred behind it too. That is a concurrency-design change and needs a decision. No `completed_qty` path touched. Hardware validation: not validated on hardware; mocked tests only.
+
+### Changes
+- `server/routes/parts.js`: `dispatch-status` checks G-code file existence and per-printer active job rows.
+- `server/drivers/octoprint.js`: `convertedGcode` conversion cache.
+- `server/poller.js`: event-loop lag monitor (`_checkLag`).
+- `server/tests/dispatch-status.test.js`, `octoprint-driver.test.js`, `poller-lanes.test.js`: regression tests.
+- `docs/api.md`, `docs/poller.md`: documented.
+
+---
+
 ## 2026-10-20: Set Ready no longer credits a cancelled job
 
 Real-world trigger: an operator cancelled a print (Cancel button, reason "print failed") and then clicked Set Ready on the printer, and a whole plate was added to the part's `completed_qty` even though nothing was printed. `POST /api/printers/:id/set-ready` looked up the printer's most recent `cancelled` job (no time limit, no check that it was cancelled in this session) and, when no finished or printing job existed, marked it `finished` and credited `confirmed_qty`, or the full `parts_per_plate` when none was sent. After an in-app cancel the printer returns to IDLE, so the Fleet confirm input is pre-filled with the full plate count (only a `STOPPED` printer defaults to 0), which made the credit look like operator intent. The same lookup would also credit a cancelled job from days ago whenever any held printer was released with no other job on it. Set Ready now only releases the hold for a cancelled job: nothing is credited and the job stays `cancelled`, whatever `confirmed_qty` is sent. A cancelled job newer than the last finished job still stops `confirmed_qty` being applied as a delta against the older finished job. Behavior removed on purpose: confirming a print stopped on the printer screen as actually good no longer adds parts via Set Ready. `completed_qty` paths for finished, printing, recently-failed and upload-stalled jobs are untouched, and set-ready-batch never credited anything. Hardware validation: not applicable (server logic, covered by tests).

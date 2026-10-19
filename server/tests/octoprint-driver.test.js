@@ -277,6 +277,37 @@ describe('uploadAndPrint', () => {
     appendSpy.mockRestore();
   });
 
+  // Regression: the scheduler retries a failed upload (3 attempts per sweep, then again
+  // on every later sweep), and each attempt re-read and re-decoded the whole file on the
+  // server's single thread, which a 35 MB .bgcode made very expensive.
+  test('converts a .bgcode only once across repeated upload attempts, and re-converts if the file changes', async () => {
+    const filename = `octoprint_cache_${Date.now()}.bgcode`;
+    const fullPath = path.join(GCODE_DIR, filename);
+    fs.writeFileSync(fullPath, buildBgcode([{ type: 1, data: Buffer.from('G28\nG1 X1\n') }]));
+    filesToClean.push(fullPath);
+    axios.post.mockResolvedValue({ data: { done: true, effectivePrint: true } });
+
+    const readSpy = jest.spyOn(fs, 'readFileSync');
+    const reads = () => readSpy.mock.calls.filter(([p]) => p === fullPath).length;
+
+    await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
+    await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
+    await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
+    expect(reads()).toBe(1);
+
+    // A re-uploaded file (new content, so new size/mtime) must not be served stale.
+    fs.writeFileSync(fullPath, buildBgcode([{ type: 1, data: Buffer.from('G28\nG1 X1 Y1 Z1 E1\n') }]));
+    const FormData = require('form-data');
+    const appendSpy = jest.spyOn(FormData.prototype, 'append');
+    await octoprint.uploadAndPrint(fakePrinter, fullPath, filename);
+    expect(reads()).toBe(2);
+    const fileCall = appendSpy.mock.calls.find(([name]) => name === 'file');
+    expect(fileCall[1].toString()).toContain('Y1 Z1 E1');
+
+    appendSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
   test('extracts the plate G-code from a sliced .3mf and uploads it', async () => {
     const filename = `octoprint_3mf_${Date.now()}.gcode.3mf`;
     const fullPath = path.join(GCODE_DIR, filename);

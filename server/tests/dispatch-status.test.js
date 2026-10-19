@@ -6,11 +6,24 @@
 const request  = require('supertest');
 const express  = require('express');
 const Database = require('better-sqlite3');
+const fs       = require('fs');
 
 let db;
 let app;
+let existsSpy;
+let gcodeFilesPresent;
+const path = require('path');
+const realExistsSync = fs.existsSync;
+const GCODE_DIR = path.join(__dirname, '..', 'gcode');
 
 beforeEach(() => {
+  // The endpoint checks the G-code file exists on disk (mirrors the scheduler). The
+  // seeded filepaths are fake, so existence is stubbed true except in the tests that
+  // are about a missing file.
+  // Only paths inside the gcode folder are stubbed; Jest and Babel use existsSync too.
+  gcodeFilesPresent = true;
+  existsSpy = jest.spyOn(fs, 'existsSync').mockImplementation((p) =>
+    String(p).startsWith(GCODE_DIR) ? gcodeFilesPresent : realExistsSync(p));
   db = new Database(':memory:');
   db.exec(`
     CREATE TABLE printers (
@@ -48,7 +61,8 @@ beforeEach(() => {
     );
     CREATE TABLE jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      part_id INTEGER NOT NULL, gcode_id INTEGER, status TEXT DEFAULT 'queued', parts_per_plate INTEGER NOT NULL
+      part_id INTEGER NOT NULL, gcode_id INTEGER, status TEXT DEFAULT 'queued', parts_per_plate INTEGER NOT NULL,
+      printer_id INTEGER
     );
     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE filament_colors (
@@ -66,6 +80,8 @@ beforeEach(() => {
   app.use(express.json());
   app.use('/api/parts', require('../routes/parts')(db));
 });
+
+afterEach(() => { existsSpy.mockRestore(); });
 
 const now = Date.now();
 
@@ -398,5 +414,37 @@ describe('GET /api/parts/:id/dispatch-status: per-uploader plate cap (mirrors sc
     const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
     expect(res.status).toBe(200);
     expect(res.body.notes.join(' ')).not.toMatch(/plate cap/);
+  });
+
+  // Regression: the panel said "Ready to dispatch" while the scheduler silently skipped
+  // the part, because _reserveCandidate drops a G-code whose file is gone from the gcode
+  // folder (only an operator notification) and the endpoint did not check for that.
+  test('is not dispatchable when the G-code file is missing on the server', async () => {
+    const projectId = seedProject();
+    const partId = seedPart(projectId);
+    seedGcode(partId);
+    seedPrinter();
+    gcodeFilesPresent = false;
+
+    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.body.dispatchable).toBe(false);
+    expect(res.body.reasons.join(' ')).toMatch(/G-code file is missing on the server/);
+  });
+
+  // Regression: _reserveJob never dispatches to a printer that still has an
+  // uploading/printing job row (it auto-fails a stale one and holds the printer), so an
+  // idle printer with such a row is not ready even though status and hold look fine.
+  test('an idle printer that still holds an active job is not counted as ready', async () => {
+    const projectId = seedProject();
+    const partId = seedPart(projectId);
+    const gcodeId = seedGcode(partId);
+    const otherPart = seedPart(projectId);
+    const printerId = seedPrinter();
+    db.prepare("INSERT INTO jobs (part_id, gcode_id, status, parts_per_plate, printer_id) VALUES (?, ?, 'uploading', 1, ?)")
+      .run(otherPart, gcodeId, printerId);
+
+    const res = await request(app).get(`/api/parts/${partId}/dispatch-status`);
+    expect(res.body.dispatchable).toBe(false);
+    expect(res.body.reasons.join(' ')).toMatch(/still holding an uploading\/printing job/);
   });
 });

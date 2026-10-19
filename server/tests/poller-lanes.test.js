@@ -112,3 +112,29 @@ describe('PrinterPoller: lane sync', () => {
     expect(db.prepare('SELECT COUNT(*) AS c FROM printer_lanes').get().c).toBe(0);
   });
 });
+
+// Event-loop lag monitor: a blocked server thread (a long synchronous task) makes every
+// printer poll time out together, so it must be reported rather than look like the
+// printers themselves dropping off the network.
+describe('PrinterPoller event-loop lag monitor', () => {
+  test('warns when the server thread was blocked well past the check interval', () => {
+    const poller = new PrinterPoller(makeDb());
+    poller._lastLagCheck = 1_000_000;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const lag = poller._checkLag(1_000_000 + 1000 + 9000); // timer fired 9 s late
+    expect(lag).toBe(9000);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/blocked for ~9s/));
+    warn.mockRestore();
+  });
+
+  test('stays silent for ordinary timer jitter', () => {
+    const poller = new PrinterPoller(makeDb());
+    poller._lastLagCheck = 1_000_000;
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(poller._checkLag(1_000_000 + 1000 + 150)).toBe(150);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});

@@ -110,6 +110,17 @@ module.exports = (db, scheduler = null) => {
         continue;
       }
 
+      // Mirrors the scheduler's file-existence check in _reserveCandidate: a G-code
+      // whose file is gone from the server's gcode folder (e.g. a redeploy that
+      // dropped the gcode volume) is skipped for dispatch, with only an operator
+      // notification. Without this the panel said "ready" while every sweep skipped
+      // the part. Keep in sync (see CLAUDE.md sync pairs).
+      const gcodeFilename = gc.filepath.split(/[\\/]/).pop();
+      if (!fs.existsSync(path.join(GCODE_DIR, gcodeFilename))) {
+        notes.push(`${gc.filename}: the G-code file is missing on the server, so the scheduler skips it. Re-upload it for this part`);
+        continue;
+      }
+
       const requiredMaterial = gc.required_material || part.project_material || null;
       const requiredColor    = gc.required_color    || part.project_color    || null;
       const allowedGroups    = gc.allowed_groups
@@ -202,14 +213,24 @@ module.exports = (db, scheduler = null) => {
 
       // Mirrors sweepIdlePrinters eligibility: unheld STOPPED printers are
       // dispatchable (Bambu latches the stopped state until the next print starts).
-      const ready = materialOk.filter(p =>
+      const readyByStatus = materialOk.filter(p =>
         (p.status === 'IDLE' || p.status === 'FINISHED' || p.status === 'STOPPED') && p.is_held === 0
       );
+      // Mirrors _reserveJob's active-job guard: a printer that still has an
+      // 'uploading'/'printing' job row is never given new work. If the printer is
+      // not actually printing, the next sweep auto-fails that stale job and HOLDS the
+      // printer instead, so it needs operator sign-off before it takes anything.
+      const hasActiveJob = db.prepare(
+        "SELECT 1 FROM jobs WHERE printer_id = ? AND status IN ('uploading', 'printing') LIMIT 1"
+      );
+      const ready = readyByStatus.filter(p => !hasActiveJob.get(p.id));
       if (ready.length === 0) {
         const held = materialOk.filter(p => p.is_held === 1).length;
+        const stuckJobs = readyByStatus.length;
         notes.push(
           `${gc.filename}: all ${materialOk.length} matching printer(s) are busy` +
-          (held > 0 ? ` (${held} awaiting operator sign-off)` : '')
+          (held > 0 ? ` (${held} awaiting operator sign-off)` : '') +
+          (stuckJobs > 0 ? ` (${stuckJobs} idle but still holding an uploading/printing job: check the Jobs page for a stale one; the next sweep will fail it and hold the printer)` : '')
         );
       } else {
         anyGcodeReady = true;

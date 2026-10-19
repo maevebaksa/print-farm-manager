@@ -161,6 +161,31 @@ async function getStatus(printer) {
 // Throws UPLOAD_CONFLICT if OctoPrint refuses because the same file is mid-print.
 const PLAIN_GCODE_EXTENSIONS = ['.gcode', '.gco', '.g'];
 
+// Converting a .bgcode/.3mf reads the whole file and decodes it synchronously on the
+// server's single thread, and the scheduler retries a failed upload up to 3 times per
+// sweep and again on every later sweep, so the same large file was being read and
+// decoded over and over. Keep the converted result per file, keyed on its mtime and
+// size so a re-uploaded file is never served stale. Each entry is the full plain
+// G-code (tens of MB), so only the most recent few are kept.
+const MAX_CONVERSION_CACHE_ENTRIES = 2;
+const conversionCache = new Map(); // gcodeFullPath -> { mtimeMs, size, converted }
+
+function convertedGcode(filename, gcodeFullPath) {
+  const stat = fs.statSync(gcodeFullPath);
+  const hit = conversionCache.get(gcodeFullPath);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.converted;
+
+  const converted = toPlainGcode(filename, fs.readFileSync(gcodeFullPath));
+  if (converted) {
+    conversionCache.delete(gcodeFullPath); // re-insert so the Map order stays oldest-first
+    conversionCache.set(gcodeFullPath, { mtimeMs: stat.mtimeMs, size: stat.size, converted });
+    while (conversionCache.size > MAX_CONVERSION_CACHE_ENTRIES) {
+      conversionCache.delete(conversionCache.keys().next().value);
+    }
+  }
+  return converted;
+}
+
 async function uploadAndPrint(printer, gcodeFullPath, filename) {
   const ip = await resolveHost(printer.ip);
   const lower = filename.toLowerCase();
@@ -171,7 +196,7 @@ async function uploadAndPrint(printer, gcodeFullPath, filename) {
   } else {
     let converted;
     try {
-      converted = toPlainGcode(filename, fs.readFileSync(gcodeFullPath));
+      converted = convertedGcode(filename, gcodeFullPath);
     } catch (err) {
       throw new Error(`Cannot print "${filename}" on ${printer.name}: ${err.message}`);
     }

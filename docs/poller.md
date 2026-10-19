@@ -120,6 +120,10 @@ The scheduler's listener calls `scheduleForPrinter`, not a raw dispatch, so a pr
 
 The gate on "only when there is a tracked active job" prevents an already-resolved printer from being re-held by a later transition (e.g. a network blip causing `FINISHED` → `OFFLINE` → `FINISHED` after the operator already confirmed and cleared the hold).
 
+## Event-loop lag monitor
+
+The whole server runs on one thread, so a long synchronous task (for example decoding a large `.bgcode` for an OctoPrint upload) delays every poll response and can push every printer past its 8-second timeout at once, which looks like all printers going `OFFLINE` together. `start()` also runs a 1-second timer; when it fires more than 2 seconds late, the poller logs `[poller] server was blocked for ~Ns (a long synchronous task); printer polls during this window can time out and read OFFLINE`. If offline episodes line up with that line, the server froze; if they do not, the printers or the network dropped.
+
 ## Timeout
 
 Each individual printer poll has an 8-second axios timeout. If the printer doesn't respond within 8 seconds, it's marked `OFFLINE`. The 15-second interval between ticks means there's always a 7-second buffer between when one tick's slowest poll finishes and the next tick begins — assuming ≤50 printers all timing out simultaneously (worst case: 8s).
