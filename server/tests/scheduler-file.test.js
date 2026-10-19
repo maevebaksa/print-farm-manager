@@ -360,6 +360,70 @@ describe('_dispatchToPrinter — upload failure recovery', () => {
 // re-transitions, since the upload itself is what's failing, not the printer's
 // reported status) would never get a second look after the first exhausted attempt.
 
+// Regression: a job cancelled from the Jobs page while its upload was retrying kept
+// being re-uploaded, and on success was overwritten back to 'printing'. The job row
+// shows as perpetually "uploading" until the retry window finally runs out.
+describe('_dispatchToPrinter: job cancelled while its upload is in progress', () => {
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => { jest.useRealTimers(); });
+
+  test('stops retrying and leaves the job cancelled', async () => {
+    const filename = `cancel_retry_${Date.now()}.bgcode`;
+    createTestFile(filename);
+    const db = makeDb(filename);
+    const scheduler = new JobScheduler(db, { on: () => {} });
+
+    // The first attempt fails, and the operator cancels the job during the backoff.
+    mockDriver.uploadAndPrint.mockImplementation(async () => {
+      db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE printer_id = 1").run(Date.now());
+      throw new Error('timeout of 300000ms exceeded');
+    });
+
+    const promise = scheduler._dispatchToPrinter(fakePrinter);
+    await jest.runAllTimersAsync();
+    const jobId = await promise;
+
+    expect(jobId).toBeNull();
+    expect(mockDriver.uploadAndPrint).toHaveBeenCalledTimes(1); // no further attempts
+    const job = db.prepare('SELECT status, upload_first_failed_at FROM jobs ORDER BY id DESC LIMIT 1').get();
+    expect(job.status).toBe('cancelled');
+    expect(job.upload_first_failed_at).toBeNull(); // not parked for a later retry either
+  });
+
+  test('a successful upload does not bring a cancelled job back to printing', async () => {
+    const filename = `cancel_success_${Date.now()}.bgcode`;
+    createTestFile(filename);
+    const db = makeDb(filename);
+    const scheduler = new JobScheduler(db, { on: () => {} });
+
+    mockDriver.uploadAndPrint.mockImplementation(async () => {
+      db.prepare("UPDATE jobs SET status = 'cancelled', finished_at = ? WHERE printer_id = 1").run(Date.now());
+    });
+
+    const promise = scheduler._dispatchToPrinter(fakePrinter);
+    await jest.runAllTimersAsync();
+    const jobId = await promise;
+
+    expect(jobId).toBeNull();
+    const job = db.prepare('SELECT status FROM jobs ORDER BY id DESC LIMIT 1').get();
+    expect(job.status).toBe('cancelled');
+  });
+
+  test('an untouched job still goes to printing as before', async () => {
+    const filename = `cancel_control_${Date.now()}.bgcode`;
+    createTestFile(filename);
+    const db = makeDb(filename);
+    const scheduler = new JobScheduler(db, { on: () => {} });
+
+    const promise = scheduler._dispatchToPrinter(fakePrinter);
+    await jest.runAllTimersAsync();
+    const jobId = await promise;
+
+    expect(jobId).not.toBeNull();
+    expect(db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId).status).toBe('printing');
+  });
+});
+
 describe('_retryPendingUploads', () => {
   test('re-sweeps a printer that has a job parked mid-retry-window', () => {
     const filename = `pending_${Date.now()}.bgcode`;

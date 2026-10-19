@@ -29,6 +29,7 @@ class JobScheduler extends EventEmitter {
     this.poller = poller;
     this._isSweeping = false;
     this._pendingPrinters = [];
+    this._sweepWake = null; // resolver for the sweep loop's sleep, see _notifySweep
     this._activeUploads = new Set(); // printer IDs with an upload currently in flight
     // Stamped in start(). Used to gate the failed-job recovery fallback so
     // that only jobs failed during the current process lifetime are eligible.
@@ -138,35 +139,52 @@ class JobScheduler extends EventEmitter {
     );
   }
 
+  // Sliding-window dispatch: keeps up to dispatch_batch_size uploads in flight, and the
+  // moment any one settles (printing, parked for retry, or held) its slot goes to the
+  // next waiting printer. It used to run in waves that waited for EVERY upload in the
+  // wave before starting anything else, so one printer with a slow or failing upload
+  // (a large file over weak Wi-Fi, retried for the whole retry window) deferred every
+  // other idle printer behind it, and a manual sweep too.
+  //
+  // _isSweeping stays true until every in-flight upload has settled, not just until
+  // the queue is empty. That is what stops a printer that goes idle elsewhere from
+  // starting a second, concurrent dispatch outside this window and pushing peak
+  // concurrency past dispatch_batch_size. Such a printer is deferred to
+  // _pendingPrinters and this loop is woken (_notifySweep) so it is picked up right
+  // away if a slot is free, instead of waiting for the slowest upload.
   async _sweepInBatches(printers) {
-    // If a sweep is already running, defer these printers to the end of it.
+    // If a sweep is already running, defer these printers into it.
     // This prevents concurrent sweeps when set-ready-batch is called mid-sweep,
     // and ensures newly-ready printers don't jump the queue.
     if (this._isSweeping) {
       this._pendingPrinters.push(...printers);
-      console.log(`[scheduler] Sweep in progress — ${printers.length} printer(s) deferred to end of current sweep`);
+      console.log(`[scheduler] Sweep in progress, ${printers.length} printer(s) deferred to the running sweep`);
+      this._notifySweep();
       return;
     }
 
     this._isSweeping = true;
     try {
-      let toDispatch = [...printers];
-      while (toDispatch.length > 0) {
+      const toDispatch = [...printers];
+      const inFlight = new Set(); // upload promises that have not settled yet
+
+      for (;;) {
+        const deferredCount = this._pendingPrinters.length;
+        toDispatch.push(...this._pendingPrinters.splice(0));
+        if (deferredCount > 0) {
+          console.log(`[scheduler] Picked up ${deferredCount} deferred printer(s)`);
+        }
+
         const setting = this.db.prepare("SELECT value FROM settings WHERE key = 'dispatch_batch_size'").get();
         const batchSize = setting ? Math.max(1, parseInt(setting.value, 10) || 10) : 10;
 
-        // Keep drawing from the queue, cheaply skipping any printer with no
-        // dispatchable candidate right now, until batchSize printers actually
-        // have a job reserved, or the queue runs out. _reserveJob is fully
-        // synchronous, so this scan never yields control mid-way: no new
-        // interleaving risk for the per-part ceiling check, which already
-        // relies on that same synchronous-reservation guarantee.
-        const activeJobIds = [];
-        const uploadPromises = [];
-        let consideredCount = 0;
-        while (activeJobIds.length < batchSize && toDispatch.length > 0) {
+        // Fill every free slot, cheaply skipping any printer with no dispatchable
+        // candidate right now (it does not consume a slot, so the loop reaches past it
+        // to find real work). _reserveJob is fully synchronous, so this scan never
+        // yields control mid-way: no new interleaving risk for the per-part ceiling
+        // check, which already relies on that same synchronous-reservation guarantee.
+        while (inFlight.size < batchSize && toDispatch.length > 0) {
           const printer = toDispatch.shift();
-          consideredCount++;
           let reservation;
           try {
             reservation = this._reserveJob(printer);
@@ -174,43 +192,39 @@ class JobScheduler extends EventEmitter {
             console.error(`[scheduler] Reservation error for ${printer.name}:`, err);
             reservation = null;
           }
-          if (reservation) {
-            activeJobIds.push(reservation.jobId);
-            uploadPromises.push(
-              this._executeUpload(printer, reservation).catch(err => {
-                console.error(`[scheduler] Sweep dispatch error for ${printer.name}:`, err);
-                return null;
-              })
-            );
-          }
+          if (!reservation) continue;
+
+          const upload = Promise.resolve()
+            .then(() => this._executeUpload(printer, reservation))
+            .catch(err => {
+              console.error(`[scheduler] Sweep dispatch error for ${printer.name}:`, err);
+              return null;
+            })
+            .then(() => { inFlight.delete(upload); });
+          inFlight.add(upload);
+          console.log(`[scheduler] ${printer.name} reserved, ${inFlight.size}/${batchSize} upload(s) in flight`);
         }
 
-        if (activeJobIds.length > 0) {
-          console.log(`[scheduler] Wave: ${activeJobIds.length}/${batchSize} printer(s) actually dispatching (considered ${consideredCount})`);
-          await this._waitForBatch(activeJobIds);
-        } else if (consideredCount > 0) {
-          console.log(`[scheduler] Wave: none of ${consideredCount} considered printer(s) had a dispatchable candidate`);
-        }
+        if (toDispatch.length === 0 && inFlight.size === 0) break;
 
-        // Make sure every upload this wave started has settled before starting
-        // the next wave, even if _waitForBatch's own poll already returned:
-        // this just guards against leaving a promise dangling.
-        await Promise.all(uploadPromises);
-
-        // Append, don't replace: toDispatch may still hold printers left over
-        // from this pass that didn't fit because the wave already hit
-        // batchSize. Unlike the old fixed-chunk loop (which always drained
-        // toDispatch fully before reaching this line), this wave can stop
-        // early, so reassigning here would silently drop and starve those
-        // leftover printers.
-        const deferredCount = this._pendingPrinters.length;
-        toDispatch.push(...this._pendingPrinters.splice(0));
-        if (deferredCount > 0) {
-          console.log(`[scheduler] Picked up ${deferredCount} deferred printer(s)`);
-        }
+        // Sleep until a slot frees up or a printer is deferred to this sweep.
+        const woken = new Promise(resolve => { this._sweepWake = resolve; });
+        await Promise.race([...inFlight, woken]);
       }
     } finally {
       this._isSweeping = false;
+      this._sweepWake = null;
+    }
+  }
+
+  // Wakes the sweep loop if it is sleeping, so a newly deferred printer is considered
+  // immediately. A no-op when the loop is busy filling slots (it re-reads
+  // _pendingPrinters at the top of every pass anyway).
+  _notifySweep() {
+    if (this._sweepWake) {
+      const wake = this._sweepWake;
+      this._sweepWake = null;
+      wake();
     }
   }
 
@@ -223,53 +237,13 @@ class JobScheduler extends EventEmitter {
   scheduleForPrinter(printer) {
     if (this._isSweeping) {
       this._pendingPrinters.push(printer);
-      console.log(`[scheduler] ${printer.name} became dispatchable during a sweep, deferred to end of sweep`);
+      console.log(`[scheduler] ${printer.name} became dispatchable during a sweep, deferred to the running sweep`);
+      this._notifySweep();
       return;
     }
     this._sweepInBatches([printer]).catch(err =>
       console.error(`[scheduler] Unhandled error dispatching to ${printer.name}:`, err)
     );
-  }
-
-  // Poll jobs table until all given job IDs are printing or terminal.
-  // A job left as 'uploading' with its printer held counts as terminal — the upload
-  // failed and operator confirmation is needed before anything changes. The batch
-  // must not block on it indefinitely.
-  // Gives up after 10 minutes — large files on slow networks can take several minutes to transfer.
-  //
-  // A job left as 'uploading', not held, with upload_first_failed_at set also counts
-  // as settled for THIS wave: it means _executeUpload already ran its attempts and
-  // deliberately parked the job for a later scheduler sweep (see the retry-window
-  // comment there and _retryPendingUploads). Without this, a wave would otherwise
-  // poll the full 10-minute timeout waiting for a state change that only a future,
-  // separate sweep can produce.
-  _waitForBatch(jobIds, pollIntervalMs = 3000, timeoutMs = 600000) {
-    return new Promise((resolve) => {
-      const start = Date.now();
-      const placeholders = jobIds.map(() => '?').join(',');
-
-      const check = () => {
-        const rows = this.db.prepare(`
-          SELECT j.status, j.upload_first_failed_at, p.is_held
-          FROM jobs j JOIN printers p ON p.id = j.printer_id
-          WHERE j.id IN (${placeholders})
-        `).all(...jobIds);
-
-        const allSettled = rows.every(r =>
-          r.status === 'printing' || r.status === 'failed' || r.status === 'cancelled' ||
-          (r.status === 'uploading' && r.is_held === 1) ||
-          (r.status === 'uploading' && r.is_held === 0 && r.upload_first_failed_at != null)
-        );
-
-        if (allSettled || Date.now() - start > timeoutMs) {
-          resolve();
-        } else {
-          setTimeout(check, pollIntervalMs);
-        }
-      };
-
-      check();
-    });
   }
 
   // ─── Dispatch ───────────────────────────────────────────────────────────────
@@ -708,9 +682,20 @@ class JobScheduler extends EventEmitter {
     const MAX_RETRIES = 2;
     let lastErr = null;
 
+    // An operator can cancel the job (Jobs page) or resolve it (Fleet: Upload Failed)
+    // while this loop is still retrying, e.g. an upload that keeps timing out. The job
+    // row is then no longer 'uploading'. Without these checks the loop kept re-uploading
+    // a cancelled job and, on success, overwrote its status back to 'printing'.
+    const jobStatus = () => this.db.prepare('SELECT status FROM jobs WHERE id = ?').get(jobId)?.status;
+    let abandoned = false;
+
     this._activeUploads.add(printer.id);
     try {
       for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+        if (attempt > 1 && jobStatus() !== 'uploading') {
+          abandoned = true;
+          break;
+        }
         try {
           await driver.uploadAndPrint(printer, gcodeFullPath, candidate.filename, { amsSlot: candidate.ams_slot });
           lastErr = null;
@@ -730,6 +715,16 @@ class JobScheduler extends EventEmitter {
       }
     } finally {
       this._activeUploads.delete(printer.id);
+    }
+
+    if (abandoned) {
+      console.warn(`[scheduler] ${printer.name} job ${jobId} was cancelled or resolved while its upload was retrying, upload abandoned`);
+      return null;
+    }
+
+    if (lastErr && jobStatus() !== 'uploading') {
+      console.warn(`[scheduler] ${printer.name} job ${jobId} was cancelled or resolved while its upload was failing, not retrying`);
+      return null;
     }
 
     if (lastErr) {
@@ -779,6 +774,19 @@ class JobScheduler extends EventEmitter {
         `Upload to ${printer.name} kept failing for ${windowMin} minutes, check the printer and confirm the outcome in Fleet.`
       );
       console.error(`[scheduler] ${printer.name} upload failed repeatedly for ${windowMin}min, held, job ${jobId} left as uploading for operator confirmation`);
+      return null;
+    }
+
+    // The upload went through. Only promote the job if it is still the one being
+    // uploaded: if the operator cancelled it meanwhile, do not bring it back to life.
+    // The file may already be on the printer and, for drivers that start the print in
+    // the same request (OctoPrint), the print may have started, so say so.
+    const finalStatus = jobStatus();
+    if (finalStatus !== 'uploading' && finalStatus !== 'printing') {
+      console.warn(
+        `[scheduler] ${printer.name} upload finished but job ${jobId} is ${finalStatus ?? 'gone'}, not marking it printing. ` +
+        `The printer may have started the print anyway: check it.`
+      );
       return null;
     }
 

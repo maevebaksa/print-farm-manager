@@ -1,4 +1,4 @@
-// Tests for the batch-dispatch wave loop: _sweepInBatches, scheduleForPrinter,
+// Tests for the sliding-window dispatch loop: _sweepInBatches, scheduleForPrinter,
 // and the fill-to-target-concurrency behavior they share.
 //
 // Dispatch is split into two phases (see scheduler.js's // ─── Dispatch ─── section):
@@ -33,7 +33,7 @@ const JobScheduler = require('../scheduler');
 
 function makeScheduler(batchSize = 10) {
   const db = new Database(':memory:');
-  // Minimal schema: most tests below stub _reserveJob/_executeUpload/_waitForBatch
+  // Minimal schema: most tests below stub _reserveJob/_executeUpload
   // so the DB doesn't need real printers/parts/gcodes/jobs tables.
   db.exec(`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
   db.prepare("INSERT INTO settings (key, value) VALUES ('dispatch_batch_size', ?)").run(String(batchSize));
@@ -54,7 +54,6 @@ describe('_sweepInBatches: sweep lock', () => {
       return { jobId: printer.id, printer };
     });
     scheduler._executeUpload = jest.fn().mockResolvedValue(null);
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     await scheduler._sweepInBatches([fakePrinter(1)]);
 
@@ -66,7 +65,6 @@ describe('_sweepInBatches: sweep lock', () => {
     const scheduler = makeScheduler();
     scheduler._reserveJob = jest.fn((printer) => ({ jobId: printer.id, printer }));
     scheduler._executeUpload = jest.fn().mockResolvedValue(null);
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     await scheduler._sweepInBatches([fakePrinter(1)]);
 
@@ -77,7 +75,6 @@ describe('_sweepInBatches: sweep lock', () => {
     const scheduler = makeScheduler();
     scheduler._reserveJob = jest.fn((printer) => ({ jobId: printer.id, printer }));
     scheduler._executeUpload = jest.fn().mockRejectedValue(new Error('boom'));
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     // Errors from individual uploads are caught inside _sweepInBatches
     await scheduler._sweepInBatches([fakePrinter(1)]);
@@ -89,7 +86,6 @@ describe('_sweepInBatches: sweep lock', () => {
     const scheduler = makeScheduler();
     scheduler._reserveJob = jest.fn(() => { throw new Error('boom'); });
     scheduler._executeUpload = jest.fn();
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     // A synchronous reservation error is treated like "no candidate": it must
     // not stall or crash the wave loop, and must not be handed to _executeUpload.
@@ -111,7 +107,6 @@ describe('_sweepInBatches: sweep lock', () => {
       if (printer.id === 1) return p1Gate.then(() => null);
       return Promise.resolve(null);
     });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     const sweepPromise = scheduler._sweepInBatches([fakePrinter(1)]);
 
@@ -138,7 +133,6 @@ describe('_sweepInBatches: sweep lock', () => {
       if (printer.id === 1) return p1Gate.then(() => null);
       return Promise.resolve(null);
     });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     const sweepPromise = scheduler._sweepInBatches([fakePrinter(1)]);
 
@@ -166,7 +160,6 @@ describe('_sweepInBatches: sweep lock', () => {
       if (printer.id === 1) return p1Gate.then(() => null);
       return Promise.resolve(null);
     });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     const sweepPromise = scheduler._sweepInBatches([fakePrinter(1)]);
 
@@ -191,7 +184,6 @@ describe('_sweepInBatches: sweep lock', () => {
       if (printer.id === 1) return p1Gate.then(() => null);
       return Promise.resolve(null);
     });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     const sweepPromise = scheduler._sweepInBatches([fakePrinter(1)]);
     scheduler._sweepInBatches([fakePrinter(2)]);
@@ -210,7 +202,6 @@ describe('scheduleForPrinter', () => {
     const scheduler = makeScheduler();
     scheduler._reserveJob = jest.fn((printer) => ({ jobId: printer.id, printer }));
     scheduler._executeUpload = jest.fn().mockResolvedValue(1);
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     scheduler.scheduleForPrinter(fakePrinter(1));
 
@@ -247,7 +238,6 @@ describe('scheduleForPrinter', () => {
       if (printer.id === 1) return p1Gate.then(() => null);
       return Promise.resolve(null);
     });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     const sweepPromise = scheduler._sweepInBatches([fakePrinter(1)]);
 
@@ -274,7 +264,6 @@ describe('scheduleForPrinter', () => {
       if (printer.id === 1) return p1Gate.then(() => null);
       return Promise.resolve(null);
     });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     const sweepPromise = scheduler._sweepInBatches([fakePrinter(1)]);
 
@@ -317,7 +306,6 @@ describe('start(): printerIdle defers to an in-progress sweep instead of bypassi
       if (printer.id === 1) return p1Gate.then(() => null);
       return Promise.resolve(null);
     });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     scheduler.start();
 
@@ -349,7 +337,6 @@ describe('start(): printerIdle defers to an in-progress sweep instead of bypassi
 
     scheduler._reserveJob = jest.fn((printer) => ({ jobId: printer.id, printer }));
     scheduler._executeUpload = jest.fn().mockResolvedValue(null);
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
     scheduler.start();
     poller.emit('printerIdle', { printer: fakePrinter(1) });
@@ -412,7 +399,6 @@ function makeConcurrencyHarness({ batchSize, candidateIds }) {
     });
   });
 
-  scheduler._waitForBatch = jest.fn().mockResolvedValue();
 
   return {
     scheduler,
@@ -438,10 +424,8 @@ describe('_sweepInBatches: fill-to-target concurrency', () => {
 
     // The wave reached all 8 printers, not just the first 5.
     expect(reservedOrder).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    // All 3 real candidates uploaded concurrently within that single wave.
+    // All 3 real candidates uploaded concurrently.
     expect(peak()).toBe(3);
-    // One wave: the queue emptied before the target was hit.
-    expect(scheduler._waitForBatch).toHaveBeenCalledTimes(1);
   });
 
   test('ample candidates: peak concurrency caps exactly at batchSize', async () => {
@@ -455,8 +439,6 @@ describe('_sweepInBatches: fill-to-target concurrency', () => {
     await scheduler._sweepInBatches(printers);
 
     expect(peak()).toBe(5);
-    // Two waves of 5, not one wave of 10.
-    expect(scheduler._waitForBatch).toHaveBeenCalledTimes(2);
   });
 
   test('dense candidates: never exceeds batchSize even at a smaller target', async () => {
@@ -472,7 +454,91 @@ describe('_sweepInBatches: fill-to-target concurrency', () => {
 
     expect(peak()).toBe(3);
     expect(executedOrder).toHaveLength(6);
-    expect(scheduler._waitForBatch).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── One slow upload must not hold up the rest ─────────────────────────────────
+// Real-farm bug: a printer whose upload kept timing out (a 35 MB file over weak
+// Wi-Fi, retried for the whole retry window) kept the sweep "in progress", so every
+// other printer that went idle was deferred behind it and nothing dispatched, and a
+// manual sweep was deferred too. Slots are now freed one upload at a time.
+describe('_sweepInBatches: a slow upload does not block other printers', () => {
+  // Harness: printer 1's upload hangs until released; every other upload settles
+  // right away. Returns what was started and when.
+  function makeSlowFirstHarness(batchSize) {
+    const scheduler = makeScheduler(batchSize);
+    let releaseP1;
+    const p1Gate = new Promise(r => { releaseP1 = r; });
+    const started = [];
+
+    scheduler._reserveJob = jest.fn((printer) => ({ jobId: printer.id, printer }));
+    scheduler._executeUpload = jest.fn((printer) => {
+      started.push(printer.id);
+      return printer.id === 1 ? p1Gate.then(() => null) : Promise.resolve(null);
+    });
+    return { scheduler, started, releaseP1: () => releaseP1() };
+  }
+
+  const tick = () => new Promise(r => setImmediate(r));
+
+  test('printers queued behind a hung upload still start while it is hung', async () => {
+    const { scheduler, started, releaseP1 } = makeSlowFirstHarness(2);
+
+    const sweep = scheduler._sweepInBatches([1, 2, 3, 4, 5].map(id => fakePrinter(id)));
+    await tick();
+
+    // Printer 1 occupies one of 2 slots; the other slot cycles through 2, 3, 4, 5.
+    expect(started).toEqual([1, 2, 3, 4, 5]);
+    expect(scheduler._isSweeping).toBe(true); // still sweeping: printer 1 has not settled
+
+    releaseP1();
+    await sweep;
+    expect(scheduler._isSweeping).toBe(false);
+  });
+
+  test('a printer that goes idle mid-sweep starts at once if a slot is free', async () => {
+    const { scheduler, started, releaseP1 } = makeSlowFirstHarness(10);
+
+    const sweep = scheduler._sweepInBatches([fakePrinter(1)]);
+    await tick();
+    expect(started).toEqual([1]);
+
+    scheduler.scheduleForPrinter(fakePrinter(2)); // deferred into the running sweep...
+    expect(scheduler._pendingPrinters).toHaveLength(1);
+    await tick();
+
+    // ...and picked up straight away, without waiting for printer 1's hung upload.
+    expect(started).toEqual([1, 2]);
+    expect(scheduler._pendingPrinters).toHaveLength(0);
+
+    releaseP1();
+    await sweep;
+  });
+
+  test('a deferred printer still waits for a slot when dispatch_batch_size uploads are in flight', async () => {
+    const scheduler = makeScheduler(1);
+    const started = [];
+    const gates = {};
+    scheduler._reserveJob = jest.fn((printer) => ({ jobId: printer.id, printer }));
+    scheduler._executeUpload = jest.fn((printer) => {
+      started.push(printer.id);
+      return new Promise(r => { gates[printer.id] = () => r(null); });
+    });
+
+    const sweep = scheduler._sweepInBatches([fakePrinter(1)]);
+    await tick();
+    scheduler.scheduleForPrinter(fakePrinter(2));
+    await tick();
+
+    // Concurrency cap is 1, so printer 2 must not start while printer 1 is uploading.
+    expect(started).toEqual([1]);
+
+    gates[1]();
+    await tick();
+    expect(started).toEqual([1, 2]);
+
+    gates[2]();
+    await sweep;
   });
 });
 
@@ -486,7 +552,7 @@ describe('_sweepInBatches: fill-to-target concurrency', () => {
 // reach P3 within that SAME wave so the full target of 2 is actually hit, while
 // the per-part ceiling still allows exactly 2 jobs total and holds nothing back
 // incorrectly for P4.
-describe('_sweepInBatches: ceiling interaction through the real wave loop', () => {
+describe('_sweepInBatches: ceiling interaction through the real dispatch loop', () => {
   const GCODE_DIR = path.join(__dirname, '..', 'gcode');
   const filesToClean = [];
 
@@ -594,21 +660,15 @@ describe('_sweepInBatches: ceiling interaction through the real wave loop', () =
     });
 
     const scheduler = new JobScheduler(db, { on: () => {} });
-    scheduler._waitForBatch = jest.fn().mockResolvedValue();
     const reserveSpy = jest.spyOn(scheduler, '_reserveJob');
 
     await scheduler._sweepInBatches(printerRows);
 
-    // All 4 printers were considered: the fix reached past P1 within the first
-    // wave, and reached P4 once the queue was drawn down to it in a second wave.
+    // All 4 printers were considered: the loop reached past P1 (no candidate) to
+    // fill the configured concurrency of 2 with P2 and P3, and then reached P4,
+    // which hits the ceiling and reserves nothing.
     expect(reserveSpy).toHaveBeenCalledTimes(4);
-
-    // The first (and only) wave with real work hit the full configured
-    // concurrency of 2 (P2 and P3), not 1. The second wave (P4 alone) hits the
-    // ceiling and reserves nothing, so it never calls _waitForBatch at all;
-    // there is nothing to wait for.
-    expect(scheduler._waitForBatch).toHaveBeenCalledTimes(1);
-    expect(scheduler._waitForBatch.mock.calls[0][0]).toHaveLength(2);
+    expect(mockDriver.uploadAndPrint).toHaveBeenCalledTimes(2);
 
     // Exactly 2 jobs exist for the part: the ceiling correctly stopped P4.
     const jobs = db.prepare('SELECT printer_id, status FROM jobs WHERE part_id = 1').all();

@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-10-24: one slow upload no longer blocks dispatch to every other printer
+
+Real-world trigger: a project would not dispatch and Sweep for Jobs did nothing. The log showed every idle printer logging "became dispatchable during a sweep, deferred to end of sweep" and none dispatching, while one printer (`mini1`) kept failing a 34.9 MB `.bgcode` upload with `timeout of 300000ms exceeded`; everything then dispatched at once when its retry window finally ran out. The Jobs page showed its job stuck as UPLOADING. Two causes, both fixed:
+
+- `_sweepInBatches` ran in waves and `await`ed every upload in the wave before starting any other printer, so one slow or failing upload (3 attempts of up to 300 s, then parked and retried again for the whole retry window) held `_isSweeping` and deferred every printer that went idle, manual sweeps included. It is now a sliding window: up to `dispatch_batch_size` uploads in flight, and the moment one finishes, is parked for retry, or is held, its slot goes to the next printer. `_isSweeping` still stays true until every in-flight upload has settled, so peak concurrency can never exceed `dispatch_batch_size` (the earlier "7 against a limit of 5" bug); a printer deferred mid-sweep wakes the loop and starts immediately if a slot is free. `_waitForBatch` is removed: it polled the database for the same condition the upload promises already express.
+- `_executeUpload` never noticed an operator cancelling or resolving the job while it retried, so a cancelled upload kept retrying and, if an attempt succeeded, overwrote the job back to `printing`. It now checks the job is still `uploading` before each retry, before parking it for a later retry, and before marking it `printing`. An attempt already in flight still runs to its own timeout, and a driver that starts the print in the upload request (OctoPrint) may have started it on the printer, so a warning tells the operator to check the printer.
+
+No `completed_qty` path touched. Hardware validation: not validated on hardware; mocked and in-memory tests only. The underlying reason `mini1`'s upload is slow or failing is still unconfirmed (the `[octoprint] ... upload finished/failed after X MB in Ns` log lines from the previous entry will show it).
+
+### Changes
+- `server/scheduler.js`: sliding-window `_sweepInBatches`, `_notifySweep`, `_sweepWake`; `scheduleForPrinter` wakes the loop; `_waitForBatch` removed; `_executeUpload` abandons a job that is no longer `uploading`.
+- `server/tests/scheduler-sweep.test.js`: wave-count assertions replaced by concurrency assertions; new tests that a hung upload does not block other printers, that a mid-sweep idle printer starts at once, and that the cap is still honored; dead `_waitForBatch` stubs removed.
+- `server/tests/scheduler-file.test.js`: tests for a job cancelled during retry, cancelled during a successful upload, and the unchanged normal path.
+- `docs/api.md`: `dispatch_batch_size` and `DELETE /api/jobs/:id` descriptions.
+
+---
+
 ## 2026-10-23: OctoPrint driver logs upload size and duration
 
 Real-world trigger: one printer (`mini1`) kept failing a 34.9 MB `.bgcode` upload with `timeout of 300000ms exceeded`, and because a sweep waits for every upload in its wave, that one slow upload deferred dispatch to every other idle printer. "Slow" and "stalled" both end in the same timeout message, so the operator could not tell which they had. The OctoPrint driver now logs `[octoprint] <name>: upload finished, X MB in Ns (Y MB/s)` on success and `upload failed after X MB in Ns (Y MB/s)` on failure. The reported size is the size actually sent: for a `.bgcode` or `.3mf` that is the converted plain G-code, which is larger than the stored file. No behavior change, no timeouts changed, no `completed_qty` path touched. Hardware validation: not validated on hardware; mocked tests only.
